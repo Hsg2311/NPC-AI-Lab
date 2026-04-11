@@ -125,6 +125,91 @@ Every transition is logged via `Logger::logTransition()`:
 
 ---
 
+## Coding Style
+
+### Naming
+
+| Element | Convention | Example |
+|---|---|---|
+| Class / Struct | `PascalCase` | `Actor`, `NpcConfig`, `DebugSnapshot` |
+| Member variable | `camelCase_` (trailing `_`) | `tickCount_`, `moveSpeed_`, `alive_` |
+| Local variable | `camelCase` | `dist`, `nearest`, `oldPen` |
+| Method / free function | `camelCase` | `update()`, `buildSnapshot()`, `npcStateStr()` |
+| Namespace | lowercase | `sim`, `viz` |
+| `enum class` value | `PascalCase` | `NpcState::Idle`, `NpcState::Chase` |
+| `static constexpr` (class) | `ALL_CAPS` | `TIMER_ID`, `CLIENT_W` |
+| Named ctor arg comment | `/*name=*/value` | `Room(/*roomId=*/1, /*dumpInterval=*/0)` |
+
+### File structure
+
+- **Headers** always start with `#pragma once`; no traditional include guards
+- `.hpp` holds public interface + inline trivial accessors only — no non-trivial logic
+- `.cpp` holds all implementations; own header is included first, then related headers, then STL headers
+- Forward declarations preferred over extra includes in `.hpp`
+
+### Section dividers
+
+Use the `─` (U+2500) box-drawing character followed by trailing dashes to a total width of ~75 chars:
+
+```cpp
+// ─── Section Name ──────────────────────────────────────────────────────────
+```
+
+Used in `.cpp` between logical function groups, and in `.hpp` inside class bodies to separate regions (State transition / Per-state update / Helpers / Data).
+
+### Bracing & layout
+
+- Opening brace on the same line (K&R) for functions, classes, and namespaces
+- Closing namespace brace always annotated: `} // namespace sim`
+- `case` labels indented one level from `switch`; simple one-liners kept on a single line:
+  ```cpp
+  case NpcState::Idle:   updateIdle  (dt, room); break;
+  case NpcState::Chase:  updateChase (dt, room); break;
+  ```
+- Scoped `{}` blocks used inside functions to limit lifetime of temporary GDI objects
+
+### Alignment
+
+- Align `=` in struct member default values (see `NpcConfig`)
+- Align corresponding variable names in paired declarations:
+  ```cpp
+  Player* nearest     = nullptr;
+  float   nearestDist = maxRange + 1.f;
+  ```
+- Align multi-line function parameter columns when parameters split across lines:
+  ```cpp
+  void drawNpc(HDC hdc, int w, int h,
+               const sim::DebugNpcEntry&  npc,
+               const sim::DebugSnapshot&  snap);
+  ```
+
+### C++ idioms
+
+- `= default` for trivial destructors; `= delete` to suppress unwanted ops
+- `override` on every virtual method override
+- `nullptr` — never `NULL` or `0` for pointers
+- `static_cast<>()` — never C-style casts
+- `constexpr` for compile-time constants; `static constexpr` inside classes
+- Default member initialization in class body: `bool alive_{ true }`, `uint32_t id_{ 0 }`
+- `{}` zero-initialization for structs: `WNDCLASSEXA wc = {};`
+- Structured bindings: `for (auto& [id, actor] : actors_)`
+- `auto*` for pointer type deduction from `dynamic_cast` / `reinterpret_cast`
+- Early returns (guard clauses) instead of deep nesting
+- Constructor initializer lists: base class first, then members one per line with leading `,`
+
+### String formatting
+
+- Prefer `std::snprintf` + stack `char buf[]` over `std::ostringstream` for simple format strings
+- `const char*` for short string literals and labels; `std::string` for names and passed-around data
+
+### Memory & resource management
+
+- `std::shared_ptr` for owned actors; raw `Actor*` / `Player*` for non-owning queries
+- Every inline GDI object (`HPEN`, `HBRUSH`, `HFONT`, `HBITMAP`) is explicitly `DeleteObject()`'d before the scope ends
+- Select → use → restore → delete pattern for GDI objects
+
+---
+
 ## mathUtil.hpp (legacy, independent)
 
 The original `NPCAI/mathUtil.hpp` (~3300 lines) is a C++20 header-only linear algebra
