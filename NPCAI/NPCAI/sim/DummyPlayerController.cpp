@@ -19,7 +19,7 @@ void DummyPlayerController::update(float dt, Room& room) {
         Actor* actor = room.findActorById(ctrl.playerId);
         if (!actor || !actor->isAlive()) continue;
 
-        auto* player = dynamic_cast<Player*>(actor);
+        auto player = dynamic_cast<Player*>(actor);
         if (!player) continue;
 
         const Vec3& target = ctrl.waypoints[ctrl.currentWaypoint];

@@ -1,4 +1,4 @@
-#include "Application.hpp"
+﻿#include "Application.hpp"
 #include "../sim/Player.hpp"
 #include "../sim/Npc.hpp"
 #include <memory>

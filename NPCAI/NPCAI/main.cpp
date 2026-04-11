@@ -1,4 +1,4 @@
-// main.cpp — NPC AI Simulator with 2D Visualization
+﻿// main.cpp — NPC AI Simulator with 2D Visualization
 //
 // Console subsystem is kept intentionally:
 //   - console window shows real-time state-transition logs from Logger

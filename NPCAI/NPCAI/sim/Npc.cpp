@@ -1,4 +1,4 @@
-#include "Npc.hpp"
+﻿#include "Npc.hpp"
 #include "Room.hpp"
 #include "Player.hpp"
 #include "Logger.hpp"
