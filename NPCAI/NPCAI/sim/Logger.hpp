@@ -17,7 +17,7 @@ public:
 
 private:
     Logger() = default;
-    uint32_t currentTick_ = 0;
+    uint32_t currentTick_{ 0 };
 };
 
 } // namespace sim

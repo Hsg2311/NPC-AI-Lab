@@ -39,19 +39,19 @@ private:
     void stepOneTick(HWND hwnd);
 
     // ── Data ────────────────────────────────────────────────────────────────
-    HINSTANCE          hInst_   = nullptr;
-    HWND               hwnd_    = nullptr;
-    bool               paused_  = false;
+    HINSTANCE hInst_{ nullptr };
+    HWND hwnd_{ nullptr };
+    bool paused_{ false };
 
-    sim::Room          room_;
-    sim::DebugSnapshot snapshot_;
-    Renderer           renderer_;
+    sim::Room room_;
+    sim::DebugSnapshot snapshot_{};
+    Renderer renderer_{};
 
-    static constexpr int   TIMER_ID       = 1;
-    static constexpr UINT  TIMER_MS       = 16;        // ~60 FPS
-    static constexpr float DT             = 1.f / 60.f;
-    static constexpr int   CLIENT_W       = 920;
-    static constexpr int   CLIENT_H       = 660;
+    static constexpr int TIMER_ID{ 1 };
+    static constexpr UINT TIMER_MS{ 16 };        // ~60 FPS
+    static constexpr float DT{ 1.f / 60.f };
+    static constexpr int CLIENT_W{ 920 };
+    static constexpr int CLIENT_H{ 660 };
 };
 
 } // namespace viz

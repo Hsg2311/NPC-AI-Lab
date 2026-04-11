@@ -35,11 +35,10 @@ void Renderer::drawCircleOutline(HDC hdc, POINT c, int r) {
     SelectObject(hdc, oldBrush);
 }
 
-void Renderer::drawFilledCircle(HDC hdc, POINT c, int r,
-                                  COLORREF fill, COLORREF outline) {
-    HPEN   pen   = CreatePen(PS_SOLID, 2, outline);
+void Renderer::drawFilledCircle(HDC hdc, POINT c, int r, COLORREF fill, COLORREF outline) {
+    HPEN pen = CreatePen(PS_SOLID, 2, outline);
     HBRUSH brush = CreateSolidBrush(fill);
-    HPEN   oldP  = static_cast<HPEN>  (SelectObject(hdc, pen));
+    HPEN oldP = static_cast<HPEN>  (SelectObject(hdc, pen));
     HBRUSH oldB  = static_cast<HBRUSH>(SelectObject(hdc, brush));
 
     Ellipse(hdc, c.x - r, c.y - r, c.x + r, c.y + r);
@@ -51,26 +50,31 @@ void Renderer::drawFilledCircle(HDC hdc, POINT c, int r,
 }
 
 void Renderer::drawArrow(HDC hdc, POINT from, POINT to, COLORREF col) {
-    HPEN pen    = CreatePen(PS_SOLID, 2, col);
+    HPEN pen = CreatePen(PS_SOLID, 2, col);
     HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, pen));
 
     MoveToEx(hdc, from.x, from.y, nullptr);
-    LineTo  (hdc, to.x,   to.y);
+    LineTo(hdc, to.x,   to.y);
 
     // Arrowhead
-    float dx  = static_cast<float>(to.x - from.x);
-    float dy  = static_cast<float>(to.y - from.y);
+    float dx = static_cast<float>(to.x - from.x);
+    float dy = static_cast<float>(to.y - from.y);
     float len = std::sqrtf(dx * dx + dy * dy);
     if (len > 0.5f) {
         float nx = dx / len;
         float ny = dy / len;
         float s  = 5.f;
         POINT L = { static_cast<LONG>(to.x - nx * s * 2 - ny * s),
-                    static_cast<LONG>(to.y - ny * s * 2 + nx * s) };
+                    static_cast<LONG>(to.y - ny * s * 2 + nx * s)
+        };
         POINT R = { static_cast<LONG>(to.x - nx * s * 2 + ny * s),
-                    static_cast<LONG>(to.y - ny * s * 2 - nx * s) };
-        MoveToEx(hdc, to.x, to.y, nullptr); LineTo(hdc, L.x, L.y);
-        MoveToEx(hdc, to.x, to.y, nullptr); LineTo(hdc, R.x, R.y);
+                    static_cast<LONG>(to.y - ny * s * 2 - nx * s)
+        };
+
+        MoveToEx(hdc, to.x, to.y, nullptr);
+        LineTo(hdc, L.x, L.y);
+        MoveToEx(hdc, to.x, to.y, nullptr);
+        LineTo(hdc, R.x, R.y);
     }
 
     SelectObject(hdc, oldPen);

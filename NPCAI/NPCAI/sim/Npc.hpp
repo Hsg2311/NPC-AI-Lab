@@ -43,42 +43,42 @@ class Npc : public Actor {
 public:
     Npc(const std::string& name, const Vec3& pos, const NpcConfig& cfg = {});
 
-    void        update(float dt, Room& room) override;
+    void update(float dt, Room& room) override;
     const char* typeName() const override { return "NPC"; }
-    std::string dump()     const override;
+    std::string dump() const override;
 
-    NpcState getState()          const { return state_; }
-    float    getDetectionRange() const { return detectionRange_; }
-    float    getAttackRange()    const { return attackRange_; }
-    uint32_t getTargetId()       const { return targetId_; }
+    NpcState getState() const { return state_; }
+    float getDetectionRange() const { return detectionRange_; }
+    float getAttackRange() const { return attackRange_; }
+    uint32_t getTargetId() const { return targetId_; }
 
 private:
     // ── State transition ───────────────────────────────────────────────────
     void transitionTo(NpcState newState, const std::string& reason = "");
 
     // ── Per-state update ───────────────────────────────────────────────────
-    void updateIdle  (float dt, Room& room);
-    void updateChase (float dt, Room& room);
+    void updateIdle(float dt, Room& room);
+    void updateChase(float dt, Room& room);
     void updateAttack(float dt, Room& room);
     void updateReturn(float dt, Room& room);
-    void updateDead  ();
+    void updateDead();
 
     // ── Helpers ────────────────────────────────────────────────────────────
     Actor* resolveTarget(Room& room) const;  // nullptr if dead/gone
 
     // ── Data ───────────────────────────────────────────────────────────────
-    NpcState state_          = NpcState::Idle;
-    Vec3     spawnPos_;
+    NpcState state_{ NpcState::Idle };
+    Vec3 spawnPos_;
 
-    uint32_t targetId_       = 0;     // 0 = no target
+    uint32_t targetId_{ 0 };     // 0 = no target
 
-    float    detectionRange_;
-    float    attackRange_;
-    float    chaseRange_;
-    float    moveSpeed_;
-    float    attackDamage_;
-    float    attackCooldown_;
-    float    attackTimer_    = 0.f;   // counts down to next attack
+    float detectionRange_;
+    float attackRange_;
+    float chaseRange_;
+    float moveSpeed_;
+    float attackDamage_;
+    float attackCooldown_;
+    float attackTimer_{ 0.f };   // counts down to next attack
 };
 
 } // namespace sim

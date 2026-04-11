@@ -23,7 +23,7 @@ public:
     void tick(float dt);
 
     // Queries (return raw non-owning pointers; Room owns lifetime)
-    Actor*  findActorById(uint32_t id) const;
+    Actor* findActorById(uint32_t id) const;
     Player* findNearestLivingPlayer(const Vec3& from, float maxRange) const;
 
     // Access controller to register player routes before simulation
@@ -39,11 +39,11 @@ public:
 
 private:
     uint32_t roomId_;
-    uint32_t tickCount_    = 0;
+    uint32_t tickCount_{ 0 };
     uint32_t dumpInterval_;
 
-    std::unordered_map<uint32_t, std::shared_ptr<Actor>> actors_;
-    DummyPlayerController dummyCtrl_;
+    std::unordered_map<uint32_t, std::shared_ptr<Actor>> actors_{};
+    DummyPlayerController dummyCtrl_{};
 };
 
 } // namespace sim

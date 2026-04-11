@@ -12,17 +12,17 @@ class Room; // forward declaration
 class DummyPlayerController {
 public:
     struct PlayerControl {
-        uint32_t         playerId        = 0;
+        uint32_t playerId = 0;
         std::vector<Vec3> waypoints;
-        int              currentWaypoint = 0;
-        bool             loop            = true;   // restart from waypoint[0] at end
+        int currentWaypoint = 0;
+        bool loop = true;   // restart from waypoint[0] at end
     };
 
     void addControl(uint32_t playerId, std::vector<Vec3> waypoints, bool loop = true);
     void update(float dt, Room& room);
 
 private:
-    std::vector<PlayerControl> controls_;
+    std::vector<PlayerControl> controls_{};
 };
 
 } // namespace sim
