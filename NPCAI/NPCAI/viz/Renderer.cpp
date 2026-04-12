@@ -6,7 +6,7 @@
 namespace viz {
 
 // ─── Color table ─────────────────────────────────────────────────────────────
-// NpcState int: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Return 5=Reposition 6=Dead
+// NpcState int: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Return 5=Reposition 6=Regroup 7=Dead
 
 COLORREF Renderer::npcStateColor(int state) {
     switch (state) {
@@ -16,7 +16,8 @@ COLORREF Renderer::npcStateColor(int state) {
         case 3: return RGB(160,  70,   0);  // AttackRecover – dark orange
         case 4: return RGB( 50, 200,  80);  // Return        – green
         case 5: return RGB(160,  60, 200);  // Reposition    – purple
-        case 6: return RGB( 40,  40,  40);  // Dead          – near-black
+        case 6: return RGB( 70, 160, 230);  // Regroup       – sky blue
+        case 7: return RGB( 40,  40,  40);  // Dead          – near-black
     }
     return RGB(255, 255, 255);
 }
@@ -302,8 +303,8 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
     // ── Label: name [state] ──────────────────────────────────────────────────
     {
         static const char* stateNames[] =
-            { "Idle","Chase","Windup","Recover","Return","Repos","Dead" };
-        const char* sname = (npc.state >= 0 && npc.state < 7)
+            { "Idle","Chase","Windup","Recover","Return","Repos","Regroup","Dead" };
+        const char* sname = (npc.state >= 0 && npc.state < 8)
             ? stateNames[npc.state] : "?";
         char label[80];
         if (npc.squadId >= 0)
@@ -394,7 +395,7 @@ void Renderer::drawHUD(HDC hdc, int w, int h,
         aggroY += 16;
     }
 
-    // State legend (bottom-left) — 7 entries
+    // State legend (bottom-left) — 8 entries
     struct LegendEntry { const char* name; COLORREF col; };
     static const LegendEntry legend[] = {
         { "Idle",    RGB(140, 140, 140) },
@@ -403,10 +404,11 @@ void Renderer::drawHUD(HDC hdc, int w, int h,
         { "Recover", RGB(160,  70,   0) },
         { "Return",  RGB( 50, 200,  80) },
         { "Repos",   RGB(160,  60, 200) },
+        { "Regroup", RGB( 70, 160, 230) },
         { "Dead",    RGB( 60,  60,  60) },
     };
 
-    int ly = h - 145;
+    int ly = h - 162;
     SetTextColor(hdc, RGB(160, 160, 160));
     TextOutA(hdc, 10, ly, "NPC States:", 11);
     ly += 18;

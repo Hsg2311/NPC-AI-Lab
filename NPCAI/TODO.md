@@ -342,3 +342,114 @@ fillWidth = floor(BAR_W × progress)    // BAR_W = 20 px
 [좌표 변환]   screenX    = W/2 + (worldX − centerX) × scale
 [진행도]      progress   = clamp(timer / totalTime, 0, 1)
 ```
+
+---
+
+## 갱신: 2026-04-13 — Squad AI 버그 수정 + Regroup 상태 추가
+
+### 문제 요약
+
+Squad 기반 NPC에서 두 가지 버그가 있었음:
+
+1. **follower bounce loop** — follower가 `squadTargetId_`로 Chase 진입 → 개인 leash 초과 →
+   Return → Home → Idle → squad override → Chase 무한 반복
+2. **squad 전체 멈춤** — 리더가 `maxChaseDistance_` 초과 Return 시 `selectTarget`이 리더 위치 기준
+   재탐색 → 플레이어 미감지 → `targetPlayerId_=0` → 전 멤버 target 소실 동시 발생
+
+---
+
+### 변경 1: `NpcState::Regroup` 추가 (`sim/Npc.hpp`, `sim/Npc.cpp`)
+
+Return을 "임시 이탈(Regroup)"과 "완전 귀환(Return)"으로 분리했다.
+
+- [o] enum에 `Regroup = 6` 추가 (`Dead`는 6 → 7로 시프트)
+- [o] `updateRegroup()` 구현
+  - `squadTargetId_ == 0` → `Return` (squad 교전 종료 시 완전 귀환)
+  - target이 `chaseRange_` 이내로 접근 → `targetId_ = squadTargetId_`, `Chase` 재개
+  - 그 외 → `chaseRange_` / `maxChaseDistance_` 무시하고 squad target 방향으로 이동
+- [o] `update()` switch에 `Regroup` case 추가
+- [o] `npcStateStr()`에 `"Regroup"` 추가
+
+**전이 조건 (수정):**
+
+```
+// 수정 전 — 항상 Return
+transitionTo(NpcState::Return, "...");
+
+// 수정 후 — squad 교전 중이면 Regroup, solo 또는 비교전이면 Return
+transitionTo(
+    (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
+    "...");
+```
+
+적용 함수: `updateChase` (3곳), `updateAttackWindup` (3곳), `updateAttackRecover` (2곳), `updateReposition` (2곳)
+
+- [o] `updateReturn()` 최상단에 squad 재교전 체크 추가
+  - `squadId_ != -1 && squadTargetId_ != 0` → 즉시 `Regroup` 전이
+
+---
+
+### 변경 2: Squad target memory (`sim/Squad.hpp`, `sim/Squad.cpp`)
+
+`selectTarget`이 매 틱 `detectionRange_`(10u)만 기준으로 탐색해 target이 자주 소멸됐음.
+히스테리시스를 추가해 target 유지 조건을 완화했다.
+
+- [o] `targetMemoryTimer_{ 0.f }` 멤버 추가
+- [o] `TARGET_MEMORY_DURATION = 4.0f` 상수 추가
+- [o] `selectTarget(Room&)` → `selectTarget(float dt, Room&)` 시그니처 변경
+- [o] `update()`에서 `selectTarget(dt, room)` 으로 dt 전달
+
+**selectTarget 로직 (재작성):**
+
+```
+기존 target 있음:
+  - 리더 기준 chaseRange(22u) 이내 → 유지, targetMemoryTimer_ = 4.0s 리셋
+  - chaseRange 초과 → 타이머 카운트다운
+    - 타이머 > 0 → 아직 target 유지
+    - 타이머 만료 → targetPlayerId_ = 0, 신규 탐색
+
+기존 target 없음:
+  - 기존과 동일: detectionRange(10u) 내 최근접 플레이어 선택
+  - 선택 시 targetMemoryTimer_ = TARGET_MEMORY_DURATION 세팅
+```
+
+핵심: **최초 획득**은 `detectionRange_`(10u), **유지**는 `chaseRange_`(22u) — 전형적인 aggro 히스테리시스 패턴.
+
+---
+
+### 변경 3: Renderer 상태 매핑 업데이트 (`viz/Renderer.cpp`)
+
+`Dead`의 int 값이 6 → 7로 바뀌어 색상/레이블이 어긋나던 문제 수정.
+
+- [o] `npcStateColor()` — case 6 = Regroup(하늘색 `RGB(70,160,230)`), case 7 = Dead(near-black)
+- [o] `stateNames[]` — `"Regroup"` 추가, 범위 체크 `< 7` → `< 8`
+- [o] legend 배열 — `"Regroup"` 항목 추가 (7항목 → 8항목)
+- [o] legend 시작 y — `h-145` → `h-162` (8항목 전부 표시되도록 조정)
+
+---
+
+### 수정 후 전체 상태 전이 요약
+
+```
+Idle   → Chase          : detectionRange 내 플레이어 감지 (score 기반)
+                          OR squadTargetId_ != 0 (squad override)
+Chase  → AttackWindup   : dist ≤ attackRange
+Chase  → Regroup        : (squad 교전 중) target 소멸 / dist > chaseRange / too far from home
+Chase  → Return         : (solo 또는 squad 비교전) target 소멸 / dist > chaseRange / too far from home
+AttackWindup → AttackRecover : windupTimer 완료 → 피해 발동
+AttackWindup → Chase         : dist > attackRange × 1.5 (타겟 이탈)
+AttackWindup → Regroup/Return: target 소멸 / too far from home  (squad 여부로 분기)
+AttackRecover → AttackWindup : 경직 완료, in range, 혼잡 없음
+AttackRecover → Chase        : 경직 완료, out of range, 혼잡 없음
+AttackRecover → Reposition   : 경직 완료, isOvercrowded()
+AttackRecover → Regroup/Return: target 소멸 / too far from home  (squad 여부로 분기)
+Reposition → AttackWindup    : 슬롯 도착, dist ≤ attackRange
+Reposition → Chase           : 슬롯 도착, dist > attackRange
+Reposition → Regroup/Return  : target 소멸 / too far from home  (squad 여부로 분기)
+Regroup → Chase              : squadTargetId_ 대상이 chaseRange_ 이내
+Regroup → Return             : squadTargetId_ == 0 (squad 교전 종료)
+Return  → Regroup            : updateReturn 진입 시 squadTargetId_ != 0 감지
+Return  → Chase              : detectionRange 내 플레이어 재감지 (canReAggroOnReturn=true)
+Return  → Idle               : dist to spawnPos < 0.3
+Dead    → (none)             : terminal
+```

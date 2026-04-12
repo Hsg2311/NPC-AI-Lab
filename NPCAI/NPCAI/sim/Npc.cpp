@@ -18,6 +18,7 @@ static const char* npcStateStr(NpcState s) {
         case NpcState::AttackRecover:  return "AttackRecover";
         case NpcState::Return:         return "Return";
         case NpcState::Reposition:     return "Reposition";
+        case NpcState::Regroup:        return "Regroup";
         case NpcState::Dead:           return "Dead";
     }
     return "?";
@@ -68,6 +69,7 @@ void Npc::update(float dt, Room& room) {
         case NpcState::AttackRecover:  updateAttackRecover(dt, room); break;
         case NpcState::Return:         updateReturn       (dt, room); break;
         case NpcState::Reposition:     updateReposition   (dt, room); break;
+        case NpcState::Regroup:        updateRegroup      (dt, room); break;
         case NpcState::Dead:           /* terminal */                  break;
     }
 }
@@ -138,19 +140,25 @@ void Npc::updateChase(float dt, Room& room) {
     Actor* target = resolveTarget(room);
     if (!target) {
         targetId_ = 0;
-        transitionTo(NpcState::Return, "target lost");
+        transitionTo(
+            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
+            "target lost");
         return;
     }
     if (isTooFarFromHome()) {
         targetId_ = 0;
-        transitionTo(NpcState::Return, "too far from home");
+        transitionTo(
+            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
+            "too far from home");
         return;
     }
 
     float dist = Vec3::distance(position_, target->getPosition());
     if (dist > chaseRange_) {
         targetId_ = 0;
-        transitionTo(NpcState::Return, "target beyond leash range");
+        transitionTo(
+            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
+            "target beyond leash range");
         return;
     }
     if (dist <= attackRange_) {
@@ -172,12 +180,16 @@ void Npc::updateAttackWindup(float dt, Room& room) {
     Actor* target = resolveTarget(room);
     if (!target) {
         targetId_ = 0;
-        transitionTo(NpcState::Return, "target lost during windup");
+        transitionTo(
+            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
+            "target lost during windup");
         return;
     }
     if (isTooFarFromHome()) {
         targetId_ = 0;
-        transitionTo(NpcState::Return, "too far from home");
+        transitionTo(
+            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
+            "too far from home");
         return;
     }
 
@@ -203,7 +215,9 @@ void Npc::updateAttackWindup(float dt, Room& room) {
 
         if (!target->isAlive()) {
             targetId_ = 0;
-            transitionTo(NpcState::Return, "target killed");
+            transitionTo(
+                (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
+                "target killed");
             return;
         }
         transitionTo(NpcState::AttackRecover, "windup complete");
@@ -216,12 +230,16 @@ void Npc::updateAttackRecover(float dt, Room& room) {
     Actor* target = resolveTarget(room);
     if (!target) {
         targetId_ = 0;
-        transitionTo(NpcState::Return, "target lost during recover");
+        transitionTo(
+            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
+            "target lost during recover");
         return;
     }
     if (isTooFarFromHome()) {
         targetId_ = 0;
-        transitionTo(NpcState::Return, "too far from home");
+        transitionTo(
+            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
+            "too far from home");
         return;
     }
 
@@ -250,6 +268,12 @@ void Npc::updateAttackRecover(float dt, Room& room) {
 
 // ---- Return ------------------------------------------------------------------
 void Npc::updateReturn(float dt, Room& room) {
+    // ── Squad re-engage: if squad is still fighting, regroup instead of going home
+    if (squadId_ != -1 && squadTargetId_ != 0) {
+        transitionTo(NpcState::Regroup, "squad re-engaged during return");
+        return;
+    }
+
     if (canReAggroOnReturn_) {
         // Re-aggro only within detectionRange (not the wider chaseRange)
         Player* candidate = selectBestTarget(room);
@@ -280,19 +304,54 @@ void Npc::updateReturn(float dt, Room& room) {
     position_ += moveDir * (moveSpeed_ * dt);
 }
 
+// ---- Regroup -----------------------------------------------------------------
+// Rally toward the squad's target; individual leash limits do not apply.
+// Exits: Chase (target back in chaseRange) | Return (squad disengaged)
+void Npc::updateRegroup(float dt, Room& room) {
+    // Squad disengaged entirely → full disengage
+    if (squadTargetId_ == 0) {
+        transitionTo(NpcState::Return, "squad disengaged during regroup");
+        return;
+    }
+
+    Actor* target = room.findActorById(squadTargetId_);
+    if (!target || !target->isAlive()) {
+        // Target dead — squad will clear squadTargetId_ next tick; wait here
+        return;
+    }
+
+    // Close enough to re-enter normal Chase
+    if (Vec3::distance(position_, target->getPosition()) <= chaseRange_) {
+        targetId_ = squadTargetId_;
+        transitionTo(NpcState::Chase, "regroup complete");
+        return;
+    }
+
+    // Move toward squad target — chaseRange/maxChaseDistance not enforced here
+    Vec3 dir     = (target->getPosition() - position_).normalized();
+    Vec3 sep     = calcSeparationForce(room);
+    Vec3 moveDir = (dir + sep * separationWeight_).normalized();
+    facing_   = moveDir;
+    position_ += moveDir * (moveSpeed_ * dt);
+}
+
 // ---- Reposition --------------------------------------------------------------
 void Npc::updateReposition(float dt, Room& room) {
     Actor* target = resolveTarget(room);
     if (!target) {
         targetId_ = 0;
         hasRepositionTarget_ = false;
-        transitionTo(NpcState::Return, "target lost during reposition");
+        transitionTo(
+            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
+            "target lost during reposition");
         return;
     }
     if (isTooFarFromHome()) {
         targetId_ = 0;
         hasRepositionTarget_ = false;
-        transitionTo(NpcState::Return, "too far from home");
+        transitionTo(
+            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
+            "too far from home");
         return;
     }
 

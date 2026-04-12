@@ -13,9 +13,10 @@ enum class NpcState {
     Chase,          // 1  pursuing target
     AttackWindup,   // 2  attack preparation (no movement)
     AttackRecover,  // 3  post-attack recovery
-    Return,         // 4  walking back to home
+    Return,         // 4  walking back to spawn (full disengage)
     Reposition,     // 5  moving to a better attack slot
-    Dead            // 6  terminal state
+    Regroup,        // 6  rally toward squad target (temporary disengage)
+    Dead            // 7  terminal state
 };
 
 // ---- Config ------------------------------------------------------------------
@@ -75,6 +76,7 @@ private:
     void updateAttackRecover(float dt, Room& room);
     void updateReturn       (float dt, Room& room);
     void updateReposition   (float dt, Room& room);
+    void updateRegroup      (float dt, Room& room);
     void updateDead         ();
 
     // ---- Helpers -------------------------------------------------------------

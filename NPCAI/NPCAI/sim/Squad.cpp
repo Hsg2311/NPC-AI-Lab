@@ -31,7 +31,7 @@ void Squad::update(float dt, Room& room) {
     if (status_ == SquadStatus::Panic)
         tickPanic(dt, room);
     else
-        selectTarget(room);
+        selectTarget(dt, room);
 }
 
 // ─── removeDeadMembers ────────────────────────────────────────────────────────
@@ -129,7 +129,7 @@ void Squad::disband(Room& room) {
 // ─── selectTarget ─────────────────────────────────────────────────────────────
 // Uses leader position as squad center — no average calculation.
 
-void Squad::selectTarget(Room& room) {
+void Squad::selectTarget(float dt, Room& room) {
     if (order_ != SquadOrderType::Attack) {
         targetPlayerId_ = 0;
         return;
@@ -141,20 +141,49 @@ void Squad::selectTarget(Room& room) {
         return;
     }
 
-    Vec3    leaderPos = leader->getPosition();
-    auto    players   = room.getLivingPlayers();
-    Player* best      = nullptr;
-    float   bestDist  = std::numeric_limits<float>::max();
+    Vec3  leaderPos   = leader->getPosition();
+    float detectRange = leader->getDetectionRange();
+    float chaseRange  = leader->getChaseRange();
+    auto  players     = room.getLivingPlayers();
+
+    // ── Hysteresis: keep existing target while it stays within chaseRange ─────
+    if (targetPlayerId_ != 0) {
+        bool stillReachable = false;
+        for (Player* p : players) {
+            if (p->getId() != targetPlayerId_) continue;
+            if (Vec3::distance(leaderPos, p->getPosition()) <= chaseRange) {
+                stillReachable     = true;
+                targetMemoryTimer_ = TARGET_MEMORY_DURATION;  // refresh
+            }
+            break;
+        }
+        if (stillReachable) return;  // nothing to do
+
+        // Target left chaseRange — count down memory before clearing
+        targetMemoryTimer_ -= dt;
+        if (targetMemoryTimer_ > 0.f) return;
+        targetPlayerId_ = 0;  // memory expired, fall through to acquire new
+    }
+
+    // ── Acquire new target (must enter within detectionRange) ─────────────────
+    Player* best     = nullptr;
+    float   bestDist = std::numeric_limits<float>::max();
 
     for (Player* p : players) {
         float d = Vec3::distance(leaderPos, p->getPosition());
-        if (d < bestDist) {
-            bestDist = d;
-            best     = p;
-        }
+        if (d > detectRange) continue;
+        if (d < bestDist) { bestDist = d; best = p; }
     }
 
-    targetPlayerId_ = best ? best->getId() : 0;
+    if (best) {
+        targetPlayerId_    = best->getId();
+        targetMemoryTimer_ = TARGET_MEMORY_DURATION;
+        char buf[80];
+        std::snprintf(buf, sizeof(buf),
+            "squad #%d acquired target=%s dist=%.1f",
+            squadId_, best->getName().c_str(), bestDist);
+        Logger::get().log("Squad", buf);
+    }
 }
 
 } // namespace sim

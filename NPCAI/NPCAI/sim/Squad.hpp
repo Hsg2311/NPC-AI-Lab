@@ -45,7 +45,7 @@ private:
     void tickPanic          (float dt, Room& room);
     void attemptRecovery    (Room& room);
     void disband            (Room& room);
-    void selectTarget       (Room& room);
+    void selectTarget       (float dt, Room& room);
 
     // ── Data ─────────────────────────────────────────────────────────────────
     int                  squadId_;
@@ -55,9 +55,11 @@ private:
     SquadOrderType       order_{ SquadOrderType::Attack };
     SquadStatus          status_{ SquadStatus::Normal };
     float                panicTimer_{ 0.f };
+    float                targetMemoryTimer_{ 0.f };  // countdown after target leaves chaseRange
 
     static constexpr float PANIC_DURATION         = 8.0f;
     static constexpr int   MIN_MEMBERS_TO_RECOVER = 2;
+    static constexpr float TARGET_MEMORY_DURATION = 4.0f;  // secs to hold target after leaving chaseRange
 };
 
 } // namespace sim
