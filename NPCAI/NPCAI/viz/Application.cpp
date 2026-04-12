@@ -38,7 +38,7 @@ bool Application::init(HINSTANCE hInst, int nCmdShow) {
     hwnd_ = CreateWindowExA(
         0,
         "NPCAISimViz",
-        "NPC AI Simulator  |  Space = Pause/Resume   S = Step   Esc = Quit",
+        "NPC AI Simulator  |  Arrows = Move   Space = Pause/Resume   S = Step   Esc = Quit",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
         rc.right - rc.left, rc.bottom - rc.top,
@@ -49,7 +49,10 @@ bool Application::init(HINSTANCE hInst, int nCmdShow) {
         return false;
     }
 
-    setupSimulation();
+    if (simMode_ == SimMode::HumanControl)
+        setupHumanSimulation();
+    else
+        setupSimulation();
 
     // Build initial snapshot so window isn't blank before first tick
     snapshot_        = room_.buildSnapshot();
@@ -141,9 +144,80 @@ void Application::setupSimulation() {
     printf("[Sim] Room ready: 2 players, 2 goblins (squad #1), 1 orc (solo)\n");
 }
 
+// ─── setupHumanSimulation ────────────────────────────────────────────────────
+
+void Application::setupHumanSimulation() {
+    using namespace sim;
+
+    // ── Player (human-controlled) ─────────────────────────────────────────────
+    auto p1 = std::make_shared<Player>("P1", Vec3{ 0.f, 0.f, 20.f }, 100.f, 20.f);
+    room_.addActor(p1);
+    controlledPlayer_ = p1.get();
+
+    // ── Goblins ───────────────────────────────────────────────────────────────
+    NpcConfig goblin;
+    goblin.maxHp              = 60.f;
+    goblin.moveSpeed          = 5.5f;
+    goblin.detectionRange     = 12.f;
+    goblin.attackRange        = 1.8f;
+    goblin.chaseRange         = 20.f;
+    goblin.maxChaseDistance   = 24.f;
+    goblin.attackDamage       = 8.f;
+    goblin.attackWindupTime   = 0.30f;
+    goblin.attackRecoverTime  = 0.60f;
+    goblin.separationRadius   = 3.5f;
+    goblin.separationWeight   = 0.7f;
+    goblin.canReAggroOnReturn = true;
+    goblin.repositionRadius   = 3.0f;
+    goblin.overlapThreshold   = 2;
+
+    // ── Orc ───────────────────────────────────────────────────────────────────
+    NpcConfig orc;
+    orc.maxHp              = 120.f;
+    orc.moveSpeed          = 3.0f;
+    orc.detectionRange     = 8.f;
+    orc.attackRange        = 3.0f;
+    orc.chaseRange         = 18.f;
+    orc.maxChaseDistance   = 22.f;
+    orc.attackDamage       = 22.f;
+    orc.attackWindupTime   = 0.60f;
+    orc.attackRecoverTime  = 1.40f;
+    orc.separationRadius   = 5.0f;
+    orc.separationWeight   = 0.5f;
+    orc.canReAggroOnReturn = false;
+    orc.repositionRadius   = 4.0f;
+    orc.overlapThreshold   = 1;
+
+    room_.spawnSquad("Goblin", {
+        Vec3{ 10.f, 0.f,  0.f },
+        Vec3{ 13.f, 0.f,  3.f }
+    }, goblin);
+
+    room_.addActor(std::make_shared<Npc>("Orc01", Vec3{ 28.f, 0.f, 0.f }, orc));
+
+    printf("[Sim] HumanControl mode: 1 player (human), 2 goblins (squad #1), 1 orc (solo)\n");
+}
+
 // ─── stepOneTick ─────────────────────────────────────────────────────────────
 
 void Application::stepOneTick(HWND hwnd) {
+    // ── HumanControl: 매 틱 전 방향키 입력 → moveTarget 갱신 ─────────────────
+    if (simMode_ == SimMode::HumanControl &&
+        controlledPlayer_ && controlledPlayer_->isAlive())
+    {
+        sim::Vec3 dir{};
+        if (keysHeld_[0]) dir.z -= 1.f;   // Up
+        if (keysHeld_[1]) dir.z += 1.f;   // Down
+        if (keysHeld_[2]) dir.x -= 1.f;   // Left
+        if (keysHeld_[3]) dir.x += 1.f;   // Right
+
+        sim::Vec3 pos = controlledPlayer_->getPosition();
+        if (dir.lengthSq() > 0.5f)
+            controlledPlayer_->setMoveTarget(pos + dir.normalized() * 100.f);
+        else
+            controlledPlayer_->setMoveTarget(pos);
+    }
+
     room_.tick(DT);
     snapshot_        = room_.buildSnapshot();
     snapshot_.paused = paused_;
@@ -225,6 +299,17 @@ LRESULT Application::handleMessage(HWND hwnd, UINT msg,
         else if (wParam == VK_ESCAPE) {
             PostQuitMessage(0);
         }
+        else if (wParam == VK_UP)    { keysHeld_[0] = true; }
+        else if (wParam == VK_DOWN)  { keysHeld_[1] = true; }
+        else if (wParam == VK_LEFT)  { keysHeld_[2] = true; }
+        else if (wParam == VK_RIGHT) { keysHeld_[3] = true; }
+        return 0;
+
+    case WM_KEYUP:
+        if      (wParam == VK_UP)    { keysHeld_[0] = false; }
+        else if (wParam == VK_DOWN)  { keysHeld_[1] = false; }
+        else if (wParam == VK_LEFT)  { keysHeld_[2] = false; }
+        else if (wParam == VK_RIGHT) { keysHeld_[3] = false; }
         return 0;
 
     // ── Prevent background erase (we fill ourselves) ──────────────────────
