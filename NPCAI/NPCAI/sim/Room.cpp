@@ -2,10 +2,12 @@
 #include "Actor.hpp"
 #include "Player.hpp"
 #include "Npc.hpp"
+#include "Squad.hpp"
 #include "Logger.hpp"
 #include <iostream>
 #include <iomanip>
 #include <vector>
+#include <algorithm>
 
 namespace sim {
 
@@ -22,9 +24,10 @@ void Room::addActor(std::shared_ptr<Actor> actor) {
 //   1. Sync logger tick counter
 //   2. DummyPlayerController  → assign move targets
 //   3. All living Players     → execute movement
-//   4. All NPCs               → AI decision + movement
-//   5. Increment tick counter
-//   6. Periodic snapshot dump
+//   4. updateSquads()         → target selection, panic, push squadTargetId to NPCs
+//   5. All NPCs               → AI decision + movement (reads squadTargetId)
+//   6. Increment tick counter
+//   7. Periodic snapshot dump
 
 void Room::tick(float dt) {
     Logger::get().setTick(tickCount_);
@@ -39,7 +42,10 @@ void Room::tick(float dt) {
         }
     }
 
-    // 3) Update NPCs
+    // 3) Update squads (decide targets, handle panic, push to NPCs)
+    updateSquads(dt);
+
+    // 4) Update NPCs
     for (auto& [id, actor] : actors_) {
         if (auto* npc = dynamic_cast<Npc*>(actor.get())) {
             npc->update(dt, *this);
@@ -58,6 +64,81 @@ void Room::tick(float dt) {
 Actor* Room::findActorById(uint32_t id) const {
     auto it = actors_.find(id);
     return (it != actors_.end()) ? it->second.get() : nullptr;
+}
+
+Npc* Room::findNpcById(uint32_t id) {
+    return dynamic_cast<Npc*>(findActorById(id));
+}
+
+// ─── Squad management ─────────────────────────────────────────────────────────
+
+Squad* Room::findSquadById(int id) {
+    for (Squad& sq : squads_) {
+        if (sq.getSquadId() == id) return &sq;
+    }
+    return nullptr;
+}
+
+int Room::createSquad() {
+    int id = nextSquadId_++;
+    squads_.emplace_back(id);
+    return id;
+}
+
+void Room::addNpcToSquad(int squadId, uint32_t npcId, bool asLeader) {
+    Squad* sq = findSquadById(squadId);
+    if (!sq) return;
+    sq->addMember(npcId, asLeader);
+    Npc* npc = findNpcById(npcId);
+    if (!npc) return;
+    npc->setSquadId(squadId);
+    if (asLeader) npc->setIsLeader(true);
+}
+
+void Room::spawnSquad(const std::string& namePrefix,
+                       const std::vector<Vec3>& positions,
+                       const NpcConfig& cfg) {
+    if (positions.empty()) return;
+
+    int sqId = createSquad();
+
+    for (std::size_t i = 0; i < positions.size(); ++i) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%s%02d",
+            namePrefix.c_str(), static_cast<int>(i + 1));
+
+        auto     npc   = std::make_shared<Npc>(buf, positions[i], cfg);
+        uint32_t npcId = npc->getId();   // capture before move
+        addActor(std::move(npc));
+        addNpcToSquad(sqId, npcId, /*asLeader=*/ i == 0);
+    }
+
+    Logger::get().log("Room",
+        "squad #" + std::to_string(sqId) + " '" + namePrefix
+        + "' members=" + std::to_string(positions.size()));
+}
+
+// ─── updateSquads ─────────────────────────────────────────────────────────────
+
+void Room::updateSquads(float dt) {
+    // Pass 1: each Squad updates internally (dead removal, panic, target selection)
+    for (Squad& sq : squads_)
+        sq.update(dt, *this);
+
+    // Pass 2: push squad target to every living member NPC
+    for (Squad& sq : squads_) {
+        uint32_t sqTarget = sq.getTargetPlayerId();   // 0 during Panic
+        for (uint32_t memberId : sq.getMembers()) {
+            if (Npc* npc = findNpcById(memberId))
+                npc->setSquadTarget(sqTarget);
+        }
+    }
+
+    // Pass 3: remove empty squads (disbanded or all members dead)
+    squads_.erase(
+        std::remove_if(squads_.begin(), squads_.end(),
+            [](const Squad& sq) { return sq.isEmpty(); }),
+        squads_.end());
 }
 
 Player* Room::findNearestLivingPlayer(const Vec3& from, float maxRange) const {
@@ -205,6 +286,8 @@ DebugSnapshot Room::buildSnapshot() const {
             e.hasRepositionTarget = npc->hasRepositionTarget();
             e.repositionX         = npc->getRepositionTargetPos().x;
             e.repositionZ         = npc->getRepositionTargetPos().z;
+            e.squadId             = npc->getSquadId();
+            e.isLeader            = npc->getIsLeader();
             snap.npcs.push_back(e);
         }
     }

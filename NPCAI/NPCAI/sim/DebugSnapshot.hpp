@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <vector>
 #include <string>
 #include <cstdint>
@@ -45,6 +45,9 @@ struct DebugNpcEntry {
     bool        hasRepositionTarget{ false };
     float       repositionX{ 0.f };
     float       repositionZ{ 0.f };
+    // ── Squad fields ──────────────────────────────────────────────────────
+    int  squadId{ -1 };     // -1 = not in squad
+    bool isLeader{ false };
 };
 
 struct DebugSnapshot {

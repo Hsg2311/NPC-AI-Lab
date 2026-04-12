@@ -1,4 +1,4 @@
-#include "Npc.hpp"
+﻿#include "Npc.hpp"
 #include "Room.hpp"
 #include "Player.hpp"
 #include "Logger.hpp"
@@ -85,6 +85,21 @@ void Npc::transitionTo(NpcState next, const char* reason) {
 // ---- Idle --------------------------------------------------------------------
 // Score-based target selection; only consider players within detectionRange.
 void Npc::updateIdle(float /*dt*/, Room& room) {
+    // ── Squad target override ─────────────────────────────────────────────────
+    // If the squad assigned a target, bypass detectionRange and enter Chase
+    // immediately. Squad-level AI has already decided; NPC just executes.
+    if (squadTargetId_ != 0) {
+        Actor* squadTarget = room.findActorById(squadTargetId_);
+        if (squadTarget && squadTarget->isAlive()) {
+            targetId_ = squadTargetId_;
+            char buf[80];
+            std::snprintf(buf, sizeof(buf), "squad-override target=%s",
+                squadTarget->getName().c_str());
+            transitionTo(NpcState::Chase, buf);
+            return;
+        }
+    }
+
     auto    players   = room.getLivingPlayers();
     Player* best      = nullptr;
     float   bestScore = -999.f;
@@ -322,8 +337,9 @@ float Npc::evaluateTargetScore(const Player* p, Room& room) const {
     if (dist > chaseRange_) return -1000.f;
 
     float score = (1.f - dist / chaseRange_) * 50.f;   // distance score (max 50)
-    if (p->getId() == targetId_) score += 20.f;          // current-target hysteresis
-    if (dist <= attackRange_)    score += 15.f;          // in attack range bonus
+    if (p->getId() == targetId_)      score += 20.f;    // current-target hysteresis
+    if (dist <= attackRange_)         score += 15.f;    // in attack range bonus
+    if (p->getId() == squadTargetId_) score += 40.f;    // squad target preference
 
     // Aggro distribution penalty (Chase/Windup/Recover/Reposition)
     int aggro = room.countNpcsTargeting(p->getId());

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "Actor.hpp"
 #include <string>
 
@@ -58,6 +58,13 @@ public:
     bool     hasRepositionTarget()    const { return hasRepositionTarget_; }
     Vec3     getRepositionTargetPos() const { return repositionTarget_; }
 
+    // ── Squad accessors ───────────────────────────────────────────────────
+    int      getSquadId()    const { return squadId_; }
+    bool     getIsLeader()   const { return isLeader_; }
+    void     setSquadId    (int id)         { squadId_    = id; }
+    void     setIsLeader   (bool v)         { isLeader_   = v; }
+    void     setSquadTarget(uint32_t tid)   { squadTargetId_ = tid; }
+
 private:
     // ---- State transition / Per-state update ---------------------------------
     void transitionTo(NpcState next, const char* reason);
@@ -107,6 +114,11 @@ private:
     // Reposition
     Vec3 repositionTarget_{ 0.f, 0.f, 0.f };
     bool hasRepositionTarget_{ false };
+
+    // ── Squad integration (set by Room::updateSquads before each NPC update) ─
+    int      squadId_{ -1 };        // -1 = not in squad
+    bool     isLeader_{ false };
+    uint32_t squadTargetId_{ 0 };   // 0 = no override
 
     static constexpr float TARGET_EVAL_INTERVAL = 0.5f;
 };

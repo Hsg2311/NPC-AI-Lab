@@ -246,6 +246,26 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
         drawFilledCircle(hdc, center, 9, bodyCol, outlineCol);
     }
 
+    // ── Leader diamond (yellow outline, 4-corner polygon) ───────────────────
+    if (npc.alive && npc.isLeader) {
+        const int D = 6;
+        POINT diamond[5] = {
+            { center.x,     center.y - D },   // top
+            { center.x + D, center.y     },   // right
+            { center.x,     center.y + D },   // bottom
+            { center.x - D, center.y     },   // left
+            { center.x,     center.y - D }    // close
+        };
+        HPEN   dpen  = CreatePen(PS_SOLID, 2, RGB(255, 220, 0));
+        HBRUSH dbrush = static_cast<HBRUSH>(GetStockObject(NULL_BRUSH));
+        HPEN   oldP  = static_cast<HPEN>  (SelectObject(hdc, dpen));
+        HBRUSH oldB  = static_cast<HBRUSH>(SelectObject(hdc, dbrush));
+        Polyline(hdc, diamond, 5);
+        SelectObject(hdc, oldP);
+        SelectObject(hdc, oldB);
+        DeleteObject(dpen);
+    }
+
     // ── Windup / Recover progress bar (20×4 px above body) ──────────────────
     if (npc.alive && (npc.state == 2 || npc.state == 3)) {
         float    progress = (npc.state == 2) ? npc.windupProgress : npc.recoverProgress;
@@ -286,7 +306,11 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
         const char* sname = (npc.state >= 0 && npc.state < 7)
             ? stateNames[npc.state] : "?";
         char label[80];
-        std::snprintf(label, sizeof(label), "%s [%s]", npc.name.c_str(), sname);
+        if (npc.squadId >= 0)
+            std::snprintf(label, sizeof(label), "%s [%s] S%d",
+                npc.name.c_str(), sname, npc.squadId);
+        else
+            std::snprintf(label, sizeof(label), "%s [%s]", npc.name.c_str(), sname);
 
         SetTextColor(hdc, npc.alive ? col : RGB(70, 70, 70));
         SetBkMode   (hdc, TRANSPARENT);

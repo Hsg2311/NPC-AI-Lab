@@ -1,14 +1,19 @@
 ﻿#pragma once
 #include "DummyPlayerController.hpp"
 #include "DebugSnapshot.hpp"
+#include "Squad.hpp"
 #include <unordered_map>
 #include <memory>
 #include <cstdint>
+#include <vector>
+#include <string>
 
 namespace sim {
 
 class Actor;
 class Player;
+class Npc;
+struct NpcConfig;
 
 class Room {
 public:
@@ -43,13 +48,27 @@ public:
                                 std::vector<Vec3>& out) const;
     int  countNpcsTargeting(uint32_t playerId) const;
 
+    // ── Squad management ─────────────────────────────────────────────────────
+    int    createSquad();
+    void   addNpcToSquad(int squadId, uint32_t npcId, bool asLeader = false);
+    void   spawnSquad(const std::string& namePrefix,
+                      const std::vector<Vec3>& positions,
+                      const NpcConfig& cfg);
+    Squad* findSquadById(int id);
+    Npc*   findNpcById(uint32_t id);
+
 private:
+    void updateSquads(float dt);
+
     uint32_t roomId_;
     uint32_t tickCount_{ 0 };
     uint32_t dumpInterval_;
 
     std::unordered_map<uint32_t, std::shared_ptr<Actor>> actors_{};
     DummyPlayerController dummyCtrl_{};
+
+    std::vector<Squad> squads_;
+    int                nextSquadId_{ 1 };
 };
 
 } // namespace sim

@@ -131,11 +131,14 @@ void Application::setupSimulation() {
     orc.repositionRadius   = 4.0f;   // must be >= separationRadius * 0.7 = 3.5
     orc.overlapThreshold   = 1;      // 혼자 공격
 
-    room_.addActor(std::make_shared<Npc>("Goblin01", Vec3{ 10.f, 0.f,  0.f }, goblin));
-    room_.addActor(std::make_shared<Npc>("Goblin02", Vec3{ 13.f, 0.f,  3.f }, goblin));
-    room_.addActor(std::make_shared<Npc>("Orc01",    Vec3{ 28.f, 0.f,  0.f }, orc));
+    room_.spawnSquad("Goblin", {
+        Vec3{ 10.f, 0.f,  0.f },
+        Vec3{ 13.f, 0.f,  3.f }
+    }, goblin);
 
-    printf("[Sim] Room ready: 2 players, 3 NPCs\n");
+    room_.addActor(std::make_shared<Npc>("Orc01", Vec3{ 28.f, 0.f, 0.f }, orc));
+
+    printf("[Sim] Room ready: 2 players, 2 goblins (squad #1), 1 orc (solo)\n");
 }
 
 // ─── stepOneTick ─────────────────────────────────────────────────────────────
