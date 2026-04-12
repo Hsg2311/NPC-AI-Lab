@@ -78,6 +78,51 @@ Player* Room::findNearestLivingPlayer(const Vec3& from, float maxRange) const {
     return nearest;
 }
 
+// ─── getLivingPlayers ────────────────────────────────────────────────────────
+
+std::vector<Player*> Room::getLivingPlayers() const {
+    std::vector<Player*> result;
+    for (const auto& [id, actor] : actors_) {
+        if (!actor->isAlive()) continue;
+        if (auto* p = dynamic_cast<Player*>(actor.get()))
+            result.push_back(p);
+    }
+    return result;
+}
+
+// ─── findNearbyNpcPositions ──────────────────────────────────────────────────
+
+void Room::findNearbyNpcPositions(const Vec3& from, float radius,
+                                   uint32_t excludeId,
+                                   std::vector<Vec3>& out) const {
+    for (const auto& [id, actor] : actors_) {
+        if (id == excludeId)                        continue;
+        if (!actor->isAlive())                      continue;
+        if (!dynamic_cast<Npc*>(actor.get()))       continue;
+        if (Vec3::distance(from, actor->getPosition()) < radius)
+            out.push_back(actor->getPosition());
+    }
+}
+
+// ─── countNpcsTargeting ──────────────────────────────────────────────────────
+// Chase / AttackWindup / AttackRecover / Reposition 상태의 NPC만 카운트
+
+int Room::countNpcsTargeting(uint32_t playerId) const {
+    int count = 0;
+    for (const auto& [id, actor] : actors_) {
+        auto* npc = dynamic_cast<Npc*>(actor.get());
+        if (!npc || !npc->isAlive())            continue;
+        if (npc->getTargetId() != playerId)     continue;
+        NpcState s = npc->getState();
+        if (s == NpcState::Chase         ||
+            s == NpcState::AttackWindup  ||
+            s == NpcState::AttackRecover ||
+            s == NpcState::Reposition)
+            ++count;
+    }
+    return count;
+}
+
 // ─── Snapshot dump ────────────────────────────────────────────────────────────
 
 void Room::dumpSnapshot() const {
@@ -126,32 +171,40 @@ DebugSnapshot Room::buildSnapshot() const {
 
         if (auto* p = dynamic_cast<const Player*>(actor.get())) {
             DebugPlayerEntry e;
-            e.id    = static_cast<int>(p->getId());
-            e.x     = pos.x;
-            e.z     = pos.z;
-            e.dirX  = facing.x;
-            e.dirZ  = facing.z;
-            e.name  = p->getName();
-            e.hp    = p->getHp();
-            e.maxHp = p->getMaxHp();
-            e.alive = p->isAlive();
+            e.id         = static_cast<int>(p->getId());
+            e.x          = pos.x;
+            e.z          = pos.z;
+            e.dirX       = facing.x;
+            e.dirZ       = facing.z;
+            e.name       = p->getName();
+            e.hp         = p->getHp();
+            e.maxHp      = p->getMaxHp();
+            e.alive      = p->isAlive();
+            e.aggroCount = countNpcsTargeting(p->getId());
             snap.players.push_back(e);
 
         } else if (auto* npc = dynamic_cast<const Npc*>(actor.get())) {
             DebugNpcEntry e;
-            e.id             = static_cast<int>(npc->getId());
-            e.x              = pos.x;
-            e.z              = pos.z;
-            e.dirX           = facing.x;
-            e.dirZ           = facing.z;
-            e.state          = static_cast<int>(npc->getState());
-            e.targetId       = static_cast<int>(npc->getTargetId());
-            e.name           = npc->getName();
-            e.hp             = npc->getHp();
-            e.maxHp          = npc->getMaxHp();
-            e.detectionRange = npc->getDetectionRange();
-            e.attackRange    = npc->getAttackRange();
-            e.alive          = npc->isAlive();
+            e.id                  = static_cast<int>(npc->getId());
+            e.x                   = pos.x;
+            e.z                   = pos.z;
+            e.dirX                = facing.x;
+            e.dirZ                = facing.z;
+            e.state               = static_cast<int>(npc->getState());
+            e.targetId            = static_cast<int>(npc->getTargetId());
+            e.name                = npc->getName();
+            e.hp                  = npc->getHp();
+            e.maxHp               = npc->getMaxHp();
+            e.detectionRange      = npc->getDetectionRange();
+            e.attackRange         = npc->getAttackRange();
+            e.alive               = npc->isAlive();
+            e.homeX               = npc->getSpawnPos().x;
+            e.homeZ               = npc->getSpawnPos().z;
+            e.windupProgress      = npc->getWindupProgress();
+            e.recoverProgress     = npc->getRecoverProgress();
+            e.hasRepositionTarget = npc->hasRepositionTarget();
+            e.repositionX         = npc->getRepositionTargetPos().x;
+            e.repositionZ         = npc->getRepositionTargetPos().z;
             snap.npcs.push_back(e);
         }
     }

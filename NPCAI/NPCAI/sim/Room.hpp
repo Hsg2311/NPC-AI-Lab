@@ -37,6 +37,12 @@ public:
     // Build a rendering-ready snapshot (AI logic ↔ renderer boundary)
     DebugSnapshot buildSnapshot() const;
 
+    // ── AI Query Helpers ────────────────────────────────────────────────────
+    std::vector<Player*> getLivingPlayers() const;
+    void findNearbyNpcPositions(const Vec3& from, float radius, uint32_t excludeId,
+                                std::vector<Vec3>& out) const;
+    int  countNpcsTargeting(uint32_t playerId) const;
+
 private:
     uint32_t roomId_;
     uint32_t tickCount_{ 0 };

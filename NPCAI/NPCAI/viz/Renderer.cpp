@@ -6,15 +6,17 @@
 namespace viz {
 
 // ─── Color table ─────────────────────────────────────────────────────────────
-// NpcState int: 0=Idle  1=Chase  2=Attack  3=Return  4=Dead
+// NpcState int: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Return 5=Reposition 6=Dead
 
 COLORREF Renderer::npcStateColor(int state) {
     switch (state) {
-        case 0: return RGB(140, 140, 140);  // Idle   – gray
-        case 1: return RGB(220,  50,  50);  // Chase  – red
-        case 2: return RGB(255, 165,   0);  // Attack – orange
-        case 3: return RGB( 50, 200,  80);  // Return – green
-        case 4: return RGB( 40,  40,  40);  // Dead   – black
+        case 0: return RGB(140, 140, 140);  // Idle          – gray
+        case 1: return RGB(220,  50,  50);  // Chase         – red
+        case 2: return RGB(255, 140,   0);  // AttackWindup  – orange
+        case 3: return RGB(160,  70,   0);  // AttackRecover – dark orange
+        case 4: return RGB( 50, 200,  80);  // Return        – green
+        case 5: return RGB(160,  60, 200);  // Reposition    – purple
+        case 6: return RGB( 40,  40,  40);  // Dead          – near-black
     }
     return RGB(255, 255, 255);
 }
@@ -36,9 +38,9 @@ void Renderer::drawCircleOutline(HDC hdc, POINT c, int r) {
 }
 
 void Renderer::drawFilledCircle(HDC hdc, POINT c, int r, COLORREF fill, COLORREF outline) {
-    HPEN pen = CreatePen(PS_SOLID, 2, outline);
+    HPEN   pen   = CreatePen(PS_SOLID, 2, outline);
     HBRUSH brush = CreateSolidBrush(fill);
-    HPEN oldP = static_cast<HPEN>  (SelectObject(hdc, pen));
+    HPEN   oldP  = static_cast<HPEN>  (SelectObject(hdc, pen));
     HBRUSH oldB  = static_cast<HBRUSH>(SelectObject(hdc, brush));
 
     Ellipse(hdc, c.x - r, c.y - r, c.x + r, c.y + r);
@@ -50,33 +52,37 @@ void Renderer::drawFilledCircle(HDC hdc, POINT c, int r, COLORREF fill, COLORREF
 }
 
 void Renderer::drawArrow(HDC hdc, POINT from, POINT to, COLORREF col) {
-    HPEN pen = CreatePen(PS_SOLID, 2, col);
+    HPEN pen    = CreatePen(PS_SOLID, 2, col);
     HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, pen));
 
     MoveToEx(hdc, from.x, from.y, nullptr);
-    LineTo(hdc, to.x,   to.y);
+    LineTo  (hdc, to.x,   to.y);
 
-    // Arrowhead
-    float dx = static_cast<float>(to.x - from.x);
-    float dy = static_cast<float>(to.y - from.y);
+    float dx  = static_cast<float>(to.x - from.x);
+    float dy  = static_cast<float>(to.y - from.y);
     float len = std::sqrtf(dx * dx + dy * dy);
     if (len > 0.5f) {
         float nx = dx / len;
         float ny = dy / len;
         float s  = 5.f;
         POINT L = { static_cast<LONG>(to.x - nx * s * 2 - ny * s),
-                    static_cast<LONG>(to.y - ny * s * 2 + nx * s)
-        };
+                    static_cast<LONG>(to.y - ny * s * 2 + nx * s) };
         POINT R = { static_cast<LONG>(to.x - nx * s * 2 + ny * s),
-                    static_cast<LONG>(to.y - ny * s * 2 - nx * s)
-        };
-
-        MoveToEx(hdc, to.x, to.y, nullptr);
-        LineTo(hdc, L.x, L.y);
-        MoveToEx(hdc, to.x, to.y, nullptr);
-        LineTo(hdc, R.x, R.y);
+                    static_cast<LONG>(to.y - ny * s * 2 - nx * s) };
+        MoveToEx(hdc, to.x, to.y, nullptr); LineTo(hdc, L.x, L.y);
+        MoveToEx(hdc, to.x, to.y, nullptr); LineTo(hdc, R.x, R.y);
     }
 
+    SelectObject(hdc, oldPen);
+    DeleteObject(pen);
+}
+
+void Renderer::drawHomeMarker(HDC hdc, POINT c, COLORREF col) {
+    int  s      = 5;
+    HPEN pen    = CreatePen(PS_SOLID, 1, col);
+    HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, pen));
+    MoveToEx(hdc, c.x - s, c.y - s, nullptr); LineTo(hdc, c.x + s, c.y + s);
+    MoveToEx(hdc, c.x + s, c.y - s, nullptr); LineTo(hdc, c.x - s, c.y + s);
     SelectObject(hdc, oldPen);
     DeleteObject(pen);
 }
@@ -93,32 +99,28 @@ void Renderer::drawBackground(HDC hdc, int w, int h) {
 // ─── drawGrid ────────────────────────────────────────────────────────────────
 
 void Renderer::drawGrid(HDC hdc, int w, int h) {
-    float halfW  = (w * 0.5f) / camera_.scale;
-    float halfH  = (h * 0.5f) / camera_.scale;
-    float xMin   = camera_.worldCenterX - halfW;
-    float xMax   = camera_.worldCenterX + halfW;
-    float zMin   = camera_.worldCenterZ - halfH;
-    float zMax   = camera_.worldCenterZ + halfH;
-    float step   = 5.f;
+    float halfW = (w * 0.5f) / camera_.scale;
+    float halfH = (h * 0.5f) / camera_.scale;
+    float xMin  = camera_.worldCenterX - halfW;
+    float xMax  = camera_.worldCenterX + halfW;
+    float zMin  = camera_.worldCenterZ - halfH;
+    float zMax  = camera_.worldCenterZ + halfH;
+    float step  = 5.f;
 
-    // Minor grid lines
     HPEN minorPen = CreatePen(PS_SOLID, 1, RGB(40, 42, 60));
     HPEN oldPen   = static_cast<HPEN>(SelectObject(hdc, minorPen));
 
     for (float x = std::floorf(xMin / step) * step; x <= xMax; x += step) {
         POINT a = worldToScreen(x, zMin, w, h);
         POINT b = worldToScreen(x, zMax, w, h);
-        MoveToEx(hdc, a.x, a.y, nullptr);
-        LineTo  (hdc, b.x, b.y);
+        MoveToEx(hdc, a.x, a.y, nullptr); LineTo(hdc, b.x, b.y);
     }
     for (float z = std::floorf(zMin / step) * step; z <= zMax; z += step) {
         POINT a = worldToScreen(xMin, z, w, h);
         POINT b = worldToScreen(xMax, z, w, h);
-        MoveToEx(hdc, a.x, a.y, nullptr);
-        LineTo  (hdc, b.x, b.y);
+        MoveToEx(hdc, a.x, a.y, nullptr); LineTo(hdc, b.x, b.y);
     }
 
-    // Axis lines (brighter)
     SelectObject(hdc, oldPen);
     DeleteObject(minorPen);
 
@@ -162,12 +164,29 @@ void Renderer::drawTargetLine(HDC hdc, int w, int h,
 void Renderer::drawNpc(HDC hdc, int w, int h,
                          const sim::DebugNpcEntry&  npc,
                          const sim::DebugSnapshot&  snap) {
-    POINT   center = worldToScreen(npc.x, npc.z, w, h);
-    COLORREF col   = npcStateColor(npc.state);
+    POINT    center = worldToScreen(npc.x,     npc.z,     w, h);
+    POINT    home   = worldToScreen(npc.homeX, npc.homeZ, w, h);
+    COLORREF col    = npcStateColor(npc.state);
 
-    // ── Detection range circle (thin, dim) ──────────────────────────────────
+    // ── Home marker (X) ─────────────────────────────────────────────────────
     {
-        int     detPx  = static_cast<int>(npc.detectionRange * camera_.scale);
+        COLORREF hcol = npc.alive ? RGB(70, 70, 100) : RGB(40, 40, 50);
+        drawHomeMarker(hdc, home, hcol);
+    }
+
+    // ── Return state: dotted line NPC → home ────────────────────────────────
+    if (npc.alive && npc.state == 4 /* Return */) {
+        HPEN pen    = CreatePen(PS_DOT, 1, RGB(50, 200, 80));
+        HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, pen));
+        MoveToEx(hdc, center.x, center.y, nullptr);
+        LineTo  (hdc, home.x,   home.y);
+        SelectObject(hdc, oldPen);
+        DeleteObject(pen);
+    }
+
+    // ── Detection range circle (dim) ────────────────────────────────────────
+    {
+        int      detPx  = static_cast<int>(npc.detectionRange * camera_.scale);
         COLORREF detCol = npc.alive
             ? RGB(GetRValue(col) / 3, GetGValue(col) / 3, GetBValue(col) / 3 + 20)
             : RGB(35, 35, 40);
@@ -179,7 +198,7 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
     }
 
     if (npc.alive) {
-        // ── Attack range circle (solid red, thin) ───────────────────────────
+        // ── Attack range circle (red) ────────────────────────────────────────
         {
             int  atkPx  = static_cast<int>(npc.attackRange * camera_.scale);
             HPEN pen    = CreatePen(PS_SOLID, 1, RGB(180, 40, 40));
@@ -189,8 +208,31 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
             DeleteObject(pen);
         }
 
-        // ── Target line ─────────────────────────────────────────────────────
+        // ── Target line (dotted yellow) ──────────────────────────────────────
         drawTargetLine(hdc, w, h, npc, snap);
+
+        // ── Reposition target: small purple circle + dotted line ─────────────
+        if (npc.hasRepositionTarget) {
+            POINT rpt = worldToScreen(npc.repositionX, npc.repositionZ, w, h);
+            {
+                int    r    = 5;
+                HPEN   pen  = CreatePen(PS_SOLID, 2, RGB(160, 60, 200));
+                HPEN   oldP = static_cast<HPEN>(SelectObject(hdc, pen));
+                HBRUSH oldB = static_cast<HBRUSH>(SelectObject(hdc, GetStockObject(NULL_BRUSH)));
+                Ellipse(hdc, rpt.x - r, rpt.y - r, rpt.x + r, rpt.y + r);
+                SelectObject(hdc, oldP);
+                SelectObject(hdc, oldB);
+                DeleteObject(pen);
+            }
+            {
+                HPEN dpen  = CreatePen(PS_DOT, 1, RGB(160, 60, 200));
+                HPEN oldDP = static_cast<HPEN>(SelectObject(hdc, dpen));
+                MoveToEx(hdc, center.x, center.y, nullptr);
+                LineTo  (hdc, rpt.x,    rpt.y);
+                SelectObject(hdc, oldDP);
+                DeleteObject(dpen);
+            }
+        }
     }
 
     // ── Body circle ─────────────────────────────────────────────────────────
@@ -204,6 +246,30 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
         drawFilledCircle(hdc, center, 9, bodyCol, outlineCol);
     }
 
+    // ── Windup / Recover progress bar (20×4 px above body) ──────────────────
+    if (npc.alive && (npc.state == 2 || npc.state == 3)) {
+        float    progress = (npc.state == 2) ? npc.windupProgress : npc.recoverProgress;
+        const int BAR_W   = 20;
+        const int BAR_H   = 4;
+        int bx = center.x - BAR_W / 2;
+        int by = center.y - 18;
+
+        {
+            RECT     bgR = { bx, by, bx + BAR_W, by + BAR_H };
+            HBRUSH   bg  = CreateSolidBrush(RGB(40, 40, 40));
+            FillRect(hdc, &bgR, bg);
+            DeleteObject(bg);
+        }
+        int fillW = static_cast<int>(BAR_W * progress);
+        if (fillW > 0) {
+            COLORREF fc  = (npc.state == 2) ? RGB(255, 160, 0) : RGB(100, 55, 0);
+            RECT     fR  = { bx, by, bx + fillW, by + BAR_H };
+            HBRUSH   fb  = CreateSolidBrush(fc);
+            FillRect(hdc, &fR, fb);
+            DeleteObject(fb);
+        }
+    }
+
     // ── Facing arrow ────────────────────────────────────────────────────────
     if (npc.alive && (std::fabsf(npc.dirX) + std::fabsf(npc.dirZ)) > 0.05f) {
         POINT tip = {
@@ -213,16 +279,19 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
         drawArrow(hdc, center, tip, col);
     }
 
-    // ── Label ───────────────────────────────────────────────────────────────
+    // ── Label: name [state] ──────────────────────────────────────────────────
     {
-        static const char* stateNames[] = { "Idle","Chase","Attack","Return","Dead" };
-        const char* sname = (npc.state >= 0 && npc.state < 5) ? stateNames[npc.state] : "?";
-        char label[64];
+        static const char* stateNames[] =
+            { "Idle","Chase","Windup","Recover","Return","Repos","Dead" };
+        const char* sname = (npc.state >= 0 && npc.state < 7)
+            ? stateNames[npc.state] : "?";
+        char label[80];
         std::snprintf(label, sizeof(label), "%s [%s]", npc.name.c_str(), sname);
 
         SetTextColor(hdc, npc.alive ? col : RGB(70, 70, 70));
         SetBkMode   (hdc, TRANSPARENT);
-        TextOutA    (hdc, center.x - 28, center.y + 12, label, static_cast<int>(std::strlen(label)));
+        TextOutA    (hdc, center.x - 28, center.y + 12,
+                     label, static_cast<int>(std::strlen(label)));
     }
 }
 
@@ -235,10 +304,9 @@ void Renderer::drawPlayer(HDC hdc, int w, int h,
     POINT center = worldToScreen(p.x, p.z, w, h);
 
     drawFilledCircle(hdc, center, 10,
-        RGB( 40,  90, 200),   // fill: blue
-        RGB(120, 180, 255));  // outline: light blue
+        RGB( 40,  90, 200),
+        RGB(120, 180, 255));
 
-    // Facing arrow
     if ((std::fabsf(p.dirX) + std::fabsf(p.dirZ)) > 0.05f) {
         POINT tip = {
             static_cast<LONG>(center.x + p.dirX * 18.f),
@@ -247,11 +315,19 @@ void Renderer::drawPlayer(HDC hdc, int w, int h,
         drawArrow(hdc, center, tip, RGB(180, 220, 255));
     }
 
-    // Name label
     SetTextColor(hdc, RGB(140, 200, 255));
     SetBkMode   (hdc, TRANSPARENT);
     TextOutA    (hdc, center.x - 10, center.y - 24,
                  p.name.c_str(), static_cast<int>(p.name.size()));
+
+    // ── Aggro count (빨간 텍스트로 플레이어 옆에 표시) ──────────────────────
+    if (p.aggroCount > 0) {
+        char aggroBuf[16];
+        std::snprintf(aggroBuf, sizeof(aggroBuf), "x%d", p.aggroCount);
+        SetTextColor(hdc, RGB(255, 80, 80));
+        TextOutA(hdc, center.x + 12, center.y - 8,
+                 aggroBuf, static_cast<int>(std::strlen(aggroBuf)));
+    }
 }
 
 // ─── drawHUD ─────────────────────────────────────────────────────────────────
@@ -263,7 +339,6 @@ void Renderer::drawHUD(HDC hdc, int w, int h,
         ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         DEFAULT_QUALITY, DEFAULT_PITCH | FF_MODERN, "Consolas");
     HFONT oldFont = static_cast<HFONT>(SelectObject(hdc, font));
-
     SetBkMode(hdc, TRANSPARENT);
 
     // Tick counter
@@ -284,17 +359,30 @@ void Renderer::drawHUD(HDC hdc, int w, int h,
         TextOutA(hdc, 10, 30, msg, static_cast<int>(std::strlen(msg)));
     }
 
-    // State legend (bottom-left)
+    // Player aggro summary
+    int aggroY = 55;
+    for (const auto& p : snap.players) {
+        if (!p.alive) continue;
+        char buf[48];
+        std::snprintf(buf, sizeof(buf), "%s aggro: %d", p.name.c_str(), p.aggroCount);
+        SetTextColor(hdc, RGB(140, 200, 255));
+        TextOutA(hdc, 10, aggroY, buf, static_cast<int>(std::strlen(buf)));
+        aggroY += 16;
+    }
+
+    // State legend (bottom-left) — 7 entries
     struct LegendEntry { const char* name; COLORREF col; };
     static const LegendEntry legend[] = {
-        { "Idle",   RGB(140, 140, 140) },
-        { "Chase",  RGB(220,  50,  50) },
-        { "Attack", RGB(255, 165,   0) },
-        { "Return", RGB( 50, 200,  80) },
-        { "Dead",   RGB( 60,  60,  60) },
+        { "Idle",    RGB(140, 140, 140) },
+        { "Chase",   RGB(220,  50,  50) },
+        { "Windup",  RGB(255, 140,   0) },
+        { "Recover", RGB(160,  70,   0) },
+        { "Return",  RGB( 50, 200,  80) },
+        { "Repos",   RGB(160,  60, 200) },
+        { "Dead",    RGB( 60,  60,  60) },
     };
 
-    int ly = h - 120;
+    int ly = h - 145;
     SetTextColor(hdc, RGB(160, 160, 160));
     TextOutA(hdc, 10, ly, "NPC States:", 11);
     ly += 18;
@@ -321,12 +409,9 @@ void Renderer::render(HDC hdc, int clientW, int clientH,
     drawBackground(hdc, clientW, clientH);
     drawGrid(hdc, clientW, clientH);
 
-    // NPCs first (behind players)
     for (const auto& npc : snapshot.npcs) {
         drawNpc(hdc, clientW, clientH, npc, snapshot);
     }
-
-    // Players on top
     for (const auto& p : snapshot.players) {
         drawPlayer(hdc, clientW, clientH, p);
     }

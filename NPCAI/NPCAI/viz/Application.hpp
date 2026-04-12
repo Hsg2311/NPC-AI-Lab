@@ -50,8 +50,8 @@ private:
     static constexpr int TIMER_ID{ 1 };
     static constexpr UINT TIMER_MS{ 16 };        // ~60 FPS
     static constexpr float DT{ 1.f / 60.f };
-    static constexpr int CLIENT_W{ 920 };
-    static constexpr int CLIENT_H{ 660 };
+    static constexpr int CLIENT_W{ 1280 };
+    static constexpr int CLIENT_H{ 800 };
 };
 
 } // namespace viz

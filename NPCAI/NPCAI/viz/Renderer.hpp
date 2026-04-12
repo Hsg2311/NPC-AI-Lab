@@ -41,6 +41,7 @@ private:
     void drawCircleOutline(HDC hdc, POINT center, int radiusPx);
     void drawFilledCircle(HDC hdc, POINT center, int radiusPx, COLORREF fill, COLORREF outline);
     void drawArrow(HDC hdc, POINT from, POINT to, COLORREF col);
+    void drawHomeMarker(HDC hdc, POINT center, COLORREF col);
 
     static COLORREF npcStateColor(int state);
 };

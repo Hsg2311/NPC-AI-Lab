@@ -78,8 +78,8 @@ void Application::setupSimulation() {
     using namespace sim;
 
     // ── Players ──────────────────────────────────────────────────────────────
-    auto p1 = std::make_shared<Player>("P1", Vec3{  0.f, 0.f,  0.f }, 100.f, 7.f);
-    auto p2 = std::make_shared<Player>("P2", Vec3{ 30.f, 0.f,  0.f }, 100.f, 7.f);
+    auto p1 = std::make_shared<Player>( "P1", Vec3{ 0.f, 0.f,  0.f }, 100.f, 10.f );
+    auto p2 = std::make_shared<Player>( "P2", Vec3{ 30.f, 0.f,  0.f }, 100.f, 10.f );
     room_.addActor(p1);
     room_.addActor(p2);
 
@@ -97,24 +97,39 @@ void Application::setupSimulation() {
         Vec3{ 38.f, 0.f, 0.f },
     }, /*loop=*/true);
 
-    // ── NPCs ─────────────────────────────────────────────────────────────────
+    // ── Goblins ──────────────────────────────────────────────────────────────
     NpcConfig goblin;
-    goblin.maxHp          = 60.f;
-    goblin.moveSpeed      = 5.5f;
-    goblin.detectionRange = 12.f;
-    goblin.attackRange    = 1.8f;
-    goblin.chaseRange     = 24.f;
-    goblin.attackDamage   = 8.f;
-    goblin.attackCooldown = 0.9f;
+    goblin.maxHp              = 60.f;
+    goblin.moveSpeed          = 5.5f;
+    goblin.detectionRange     = 12.f;
+    goblin.attackRange        = 1.8f;
+    goblin.chaseRange         = 20.f;
+    goblin.maxChaseDistance   = 24.f;
+    goblin.attackDamage       = 8.f;
+    goblin.attackWindupTime   = 0.30f;  // windup + recover ~= 0.9s (replaces attackCooldown)
+    goblin.attackRecoverTime  = 0.60f;
+    goblin.separationRadius   = 3.5f;
+    goblin.separationWeight   = 0.7f;
+    goblin.canReAggroOnReturn = true;
+    goblin.repositionRadius   = 3.0f;   // >= separationRadius * 0.7 = 2.45
+    goblin.overlapThreshold   = 2;
 
+    // ── Orc ──────────────────────────────────────────────────────────────────
     NpcConfig orc;
-    orc.maxHp          = 120.f;
-    orc.moveSpeed      = 3.0f;
-    orc.detectionRange = 8.f;
-    orc.attackRange    = 3.0f;
-    orc.chaseRange     = 18.f;
-    orc.attackDamage   = 22.f;
-    orc.attackCooldown = 2.0f;
+    orc.maxHp              = 120.f;
+    orc.moveSpeed          = 3.0f;
+    orc.detectionRange     = 8.f;
+    orc.attackRange        = 3.0f;
+    orc.chaseRange         = 18.f;
+    orc.maxChaseDistance   = 22.f;
+    orc.attackDamage       = 22.f;
+    orc.attackWindupTime   = 0.60f;  // windup + recover ~= 2.0s
+    orc.attackRecoverTime  = 1.40f;
+    orc.separationRadius   = 5.0f;
+    orc.separationWeight   = 0.5f;
+    orc.canReAggroOnReturn = false;  // 영역 수호형: Return 상태에서는 재어그로 없음
+    orc.repositionRadius   = 4.0f;   // must be >= separationRadius * 0.7 = 3.5
+    orc.overlapThreshold   = 1;      // 혼자 공격
 
     room_.addActor(std::make_shared<Npc>("Goblin01", Vec3{ 10.f, 0.f,  0.f }, goblin));
     room_.addActor(std::make_shared<Npc>("Goblin02", Vec3{ 13.f, 0.f,  3.f }, goblin));
