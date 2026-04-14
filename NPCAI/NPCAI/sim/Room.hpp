@@ -1,7 +1,8 @@
-﻿#pragma once
+#pragma once
 #include "DummyPlayerController.hpp"
 #include "DebugSnapshot.hpp"
 #include "Squad.hpp"
+#include "Platoon.hpp"
 #include <unordered_map>
 #include <memory>
 #include <cstdint>
@@ -28,7 +29,7 @@ public:
     void tick(float dt);
 
     // Queries (return raw non-owning pointers; Room owns lifetime)
-    Actor* findActorById(uint32_t id) const;
+    Actor*  findActorById(uint32_t id) const;
     Player* findNearestLivingPlayer(const Vec3& from, float maxRange) const;
 
     // Access controller to register player routes before simulation
@@ -42,7 +43,7 @@ public:
     // Build a rendering-ready snapshot (AI logic ↔ renderer boundary)
     DebugSnapshot buildSnapshot() const;
 
-    // ── AI Query Helpers ────────────────────────────────────────────────────
+    // ── AI Query Helpers ─────────────────────────────────────────────────────
     std::vector<Player*> getLivingPlayers() const;
     void findNearbyNpcPositions(const Vec3& from, float radius, uint32_t excludeId,
                                 std::vector<Vec3>& out) const;
@@ -57,8 +58,17 @@ public:
     Squad* findSquadById(int id);
     Npc*   findNpcById(uint32_t id);
 
+    // ── Platoon management ───────────────────────────────────────────────────
+    int      createPlatoon();
+    void     addSquadToPlatoon(int platoonId, int squadId);
+    void     spawnPlatoon(const std::string& namePrefix,
+                          const std::vector<std::vector<Vec3>>& squadPositions,
+                          const NpcConfig& cfg);
+    Platoon* findPlatoonById(int id);
+
 private:
-    void updateSquads(float dt);
+    void updatePlatoons(float dt);
+    void updateSquads  (float dt);
 
     uint32_t roomId_;
     uint32_t tickCount_{ 0 };
@@ -67,8 +77,10 @@ private:
     std::unordered_map<uint32_t, std::shared_ptr<Actor>> actors_{};
     DummyPlayerController dummyCtrl_{};
 
-    std::vector<Squad> squads_;
-    int                nextSquadId_{ 1 };
+    std::vector<Squad>   squads_;
+    std::vector<Platoon> platoons_;
+    int                  nextSquadId_  { 1 };
+    int                  nextPlatoonId_{ 1 };
 };
 
 } // namespace sim

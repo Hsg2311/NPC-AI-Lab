@@ -134,6 +134,7 @@
     <ClInclude Include="sim\Player.hpp" />
     <ClInclude Include="sim\Npc.hpp" />
     <ClInclude Include="sim\Squad.hpp" />
+    <ClInclude Include="sim\Platoon.hpp" />
     <ClInclude Include="sim\DummyPlayerController.hpp" />
     <ClInclude Include="sim\Room.hpp" />
     <ClInclude Include="sim\DebugSnapshot.hpp" />
@@ -147,6 +148,7 @@
     <ClCompile Include="sim\Player.cpp" />
     <ClCompile Include="sim\Npc.cpp" />
     <ClCompile Include="sim\Squad.cpp" />
+    <ClCompile Include="sim\Platoon.cpp" />
     <ClCompile Include="sim\DummyPlayerController.cpp" />
     <ClCompile Include="sim\Room.cpp" />
     <ClCompile Include="viz\Renderer.cpp" />

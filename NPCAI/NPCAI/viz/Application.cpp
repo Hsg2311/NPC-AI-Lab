@@ -117,31 +117,31 @@ void Application::setupSimulation() {
     goblin.repositionRadius   = 3.0f;   // >= separationRadius * 0.7 = 2.45
     goblin.overlapThreshold   = 2;
 
-    // ── Orc ──────────────────────────────────────────────────────────────────
-    NpcConfig orc;
-    orc.maxHp              = 120.f;
-    orc.moveSpeed          = 3.0f;
-    orc.detectionRange     = 8.f;
-    orc.attackRange        = 3.0f;
-    orc.chaseRange         = 18.f;
-    orc.maxChaseDistance   = 22.f;
-    orc.attackDamage       = 22.f;
-    orc.attackWindupTime   = 0.60f;  // windup + recover ~= 2.0s
-    orc.attackRecoverTime  = 1.40f;
-    orc.separationRadius   = 5.0f;
-    orc.separationWeight   = 0.5f;
-    orc.canReAggroOnReturn = false;  // 영역 수호형: Return 상태에서는 재어그로 없음
-    orc.repositionRadius   = 4.0f;   // must be >= separationRadius * 0.7 = 3.5
-    orc.overlapThreshold   = 1;      // 혼자 공격
+    // ── Orc (주석 처리 — Goblin AI 집중 테스트) ──────────────────────────────
+    // NpcConfig orc;
+    // orc.maxHp              = 120.f;
+    // orc.moveSpeed          = 3.0f;
+    // orc.detectionRange     = 8.f;
+    // orc.attackRange        = 3.0f;
+    // orc.chaseRange         = 18.f;
+    // orc.maxChaseDistance   = 22.f;
+    // orc.attackDamage       = 22.f;
+    // orc.attackWindupTime   = 0.60f;
+    // orc.attackRecoverTime  = 1.40f;
+    // orc.separationRadius   = 5.0f;
+    // orc.separationWeight   = 0.5f;
+    // orc.canReAggroOnReturn = false;
+    // orc.repositionRadius   = 4.0f;
+    // orc.overlapThreshold   = 1;
 
-    room_.spawnSquad("Goblin", {
-        Vec3{ 10.f, 0.f,  0.f },
-        Vec3{ 13.f, 0.f,  3.f }
+    room_.spawnPlatoon("Goblin", {
+        { Vec3{ 10.f, 0.f,  0.f },
+          Vec3{ 13.f, 0.f,  3.f } }
     }, goblin);
 
-    room_.addActor(std::make_shared<Npc>("Orc01", Vec3{ 28.f, 0.f, 0.f }, orc));
+    // room_.addActor(std::make_shared<Npc>("Orc01", Vec3{ 28.f, 0.f, 0.f }, orc));
 
-    printf("[Sim] Room ready: 2 players, 2 goblins (squad #1), 1 orc (solo)\n");
+    printf("[Sim] Room ready: 2 players, 2 goblins (platoon #0 / squad #0)\n");
 }
 
 // ─── setupHumanSimulation ────────────────────────────────────────────────────
@@ -171,31 +171,31 @@ void Application::setupHumanSimulation() {
     goblin.repositionRadius   = 3.0f;
     goblin.overlapThreshold   = 2;
 
-    // ── Orc ───────────────────────────────────────────────────────────────────
-    NpcConfig orc;
-    orc.maxHp              = 120.f;
-    orc.moveSpeed          = 3.0f;
-    orc.detectionRange     = 8.f;
-    orc.attackRange        = 3.0f;
-    orc.chaseRange         = 18.f;
-    orc.maxChaseDistance   = 22.f;
-    orc.attackDamage       = 22.f;
-    orc.attackWindupTime   = 0.60f;
-    orc.attackRecoverTime  = 1.40f;
-    orc.separationRadius   = 5.0f;
-    orc.separationWeight   = 0.5f;
-    orc.canReAggroOnReturn = false;
-    orc.repositionRadius   = 4.0f;
-    orc.overlapThreshold   = 1;
+    // ── Orc (주석 처리 — Goblin AI 집중 테스트) ──────────────────────────────
+    // NpcConfig orc;
+    // orc.maxHp              = 120.f;
+    // orc.moveSpeed          = 3.0f;
+    // orc.detectionRange     = 8.f;
+    // orc.attackRange        = 3.0f;
+    // orc.chaseRange         = 18.f;
+    // orc.maxChaseDistance   = 22.f;
+    // orc.attackDamage       = 22.f;
+    // orc.attackWindupTime   = 0.60f;
+    // orc.attackRecoverTime  = 1.40f;
+    // orc.separationRadius   = 5.0f;
+    // orc.separationWeight   = 0.5f;
+    // orc.canReAggroOnReturn = false;
+    // orc.repositionRadius   = 4.0f;
+    // orc.overlapThreshold   = 1;
 
-    room_.spawnSquad("Goblin", {
-        Vec3{ 10.f, 0.f,  0.f },
-        Vec3{ 13.f, 0.f,  3.f }
+    room_.spawnPlatoon("Goblin", {
+        { Vec3{ 10.f, 0.f,  0.f },
+          Vec3{ 13.f, 0.f,  3.f } }
     }, goblin);
 
-    room_.addActor(std::make_shared<Npc>("Orc01", Vec3{ 28.f, 0.f, 0.f }, orc));
+    // room_.addActor(std::make_shared<Npc>("Orc01", Vec3{ 28.f, 0.f, 0.f }, orc));
 
-    printf("[Sim] HumanControl mode: 1 player (human), 2 goblins (squad #1), 1 orc (solo)\n");
+    printf("[Sim] HumanControl mode: 1 player (human), 2 goblins (platoon #0 / squad #0)\n");
 }
 
 // ─── stepOneTick ─────────────────────────────────────────────────────────────

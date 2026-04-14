@@ -22,7 +22,8 @@ struct DebugPlayerEntry {
     int         aggroCount{ 0 };  // NPCs in Chase/Windup/Recover/Reposition targeting this player
 };
 
-// state: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Return 5=Reposition 6=Dead
+// state: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Return 5=Reposition
+//        6=Regroup 7=Confused 8=MoveToSlot 9=Retreat 10=Dead
 struct DebugNpcEntry {
     int         id{ 0 };
     float       x{ 0.f };

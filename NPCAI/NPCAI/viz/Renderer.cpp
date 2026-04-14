@@ -6,18 +6,22 @@
 namespace viz {
 
 // ─── Color table ─────────────────────────────────────────────────────────────
-// NpcState int: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Return 5=Reposition 6=Regroup 7=Dead
+// NpcState int: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Return
+//               5=Reposition 6=Regroup 7=Confused 8=MoveToSlot 9=Retreat 10=Dead
 
 COLORREF Renderer::npcStateColor(int state) {
     switch (state) {
-        case 0: return RGB(140, 140, 140);  // Idle          – gray
-        case 1: return RGB(220,  50,  50);  // Chase         – red
-        case 2: return RGB(255, 140,   0);  // AttackWindup  – orange
-        case 3: return RGB(160,  70,   0);  // AttackRecover – dark orange
-        case 4: return RGB( 50, 200,  80);  // Return        – green
-        case 5: return RGB(160,  60, 200);  // Reposition    – purple
-        case 6: return RGB( 70, 160, 230);  // Regroup       – sky blue
-        case 7: return RGB( 40,  40,  40);  // Dead          – near-black
+        case  0: return RGB(140, 140, 140);  // Idle          – gray
+        case  1: return RGB(220,  50,  50);  // Chase         – red
+        case  2: return RGB(255, 140,   0);  // AttackWindup  – orange
+        case  3: return RGB(160,  70,   0);  // AttackRecover – dark orange
+        case  4: return RGB( 50, 200,  80);  // Return        – green
+        case  5: return RGB(160,  60, 200);  // Reposition    – purple
+        case  6: return RGB( 70, 160, 230);  // Regroup       – sky blue
+        case  7: return RGB(255, 220,  80);  // Confused      – yellow
+        case  8: return RGB( 80, 200, 220);  // MoveToSlot    – cyan
+        case  9: return RGB(255,  80, 150);  // Retreat       – pink-red
+        case 10: return RGB( 40,  40,  40);  // Dead          – near-black
     }
     return RGB(255, 255, 255);
 }
@@ -302,9 +306,11 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
 
     // ── Label: name [state] ──────────────────────────────────────────────────
     {
-        static const char* stateNames[] =
-            { "Idle","Chase","Windup","Recover","Return","Repos","Regroup","Dead" };
-        const char* sname = (npc.state >= 0 && npc.state < 8)
+        static const char* stateNames[] = {
+            "Idle","Chase","Windup","Recover","Return",
+            "Repos","Regroup","Confused","Slot","Retreat","Dead"
+        };
+        const char* sname = (npc.state >= 0 && npc.state < 11)
             ? stateNames[npc.state] : "?";
         char label[80];
         if (npc.squadId >= 0)
@@ -395,20 +401,23 @@ void Renderer::drawHUD(HDC hdc, int w, int h,
         aggroY += 16;
     }
 
-    // State legend (bottom-left) — 8 entries
+    // State legend (bottom-left) — 11 entries
     struct LegendEntry { const char* name; COLORREF col; };
     static const LegendEntry legend[] = {
-        { "Idle",    RGB(140, 140, 140) },
-        { "Chase",   RGB(220,  50,  50) },
-        { "Windup",  RGB(255, 140,   0) },
-        { "Recover", RGB(160,  70,   0) },
-        { "Return",  RGB( 50, 200,  80) },
-        { "Repos",   RGB(160,  60, 200) },
-        { "Regroup", RGB( 70, 160, 230) },
-        { "Dead",    RGB( 60,  60,  60) },
+        { "Idle",     RGB(140, 140, 140) },
+        { "Chase",    RGB(220,  50,  50) },
+        { "Windup",   RGB(255, 140,   0) },
+        { "Recover",  RGB(160,  70,   0) },
+        { "Return",   RGB( 50, 200,  80) },
+        { "Repos",    RGB(160,  60, 200) },
+        { "Regroup",  RGB( 70, 160, 230) },
+        { "Confused", RGB(255, 220,  80) },
+        { "Slot",     RGB( 80, 200, 220) },
+        { "Retreat",  RGB(255,  80, 150) },
+        { "Dead",     RGB( 60,  60,  60) },
     };
 
-    int ly = h - 162;
+    int ly = h - 215;  // adjusted for 11 entries (was 162 for 8)
     SetTextColor(hdc, RGB(160, 160, 160));
     TextOutA(hdc, 10, ly, "NPC States:", 11);
     ly += 18;

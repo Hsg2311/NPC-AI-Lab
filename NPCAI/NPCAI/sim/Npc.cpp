@@ -1,4 +1,4 @@
-﻿#include "Npc.hpp"
+#include "Npc.hpp"
 #include "Room.hpp"
 #include "Player.hpp"
 #include "Logger.hpp"
@@ -9,7 +9,8 @@
 
 namespace sim {
 
-// ---- File-scope helpers ------------------------------------------------------
+// ─── File-scope helpers ───────────────────────────────────────────────────────
+
 static const char* npcStateStr(NpcState s) {
     switch (s) {
         case NpcState::Idle:           return "Idle";
@@ -19,12 +20,16 @@ static const char* npcStateStr(NpcState s) {
         case NpcState::Return:         return "Return";
         case NpcState::Reposition:     return "Reposition";
         case NpcState::Regroup:        return "Regroup";
+        case NpcState::Confused:       return "Confused";
+        case NpcState::MoveToSlot:     return "MoveToSlot";
+        case NpcState::Retreat:        return "Retreat";
         case NpcState::Dead:           return "Dead";
     }
     return "?";
 }
 
-// ---- Constructor -------------------------------------------------------------
+// ─── Constructor ──────────────────────────────────────────────────────────────
+
 Npc::Npc(const std::string& name, const Vec3& pos, const NpcConfig& cfg)
     : Actor(name, pos, cfg.maxHp)
     , spawnPos_(pos)
@@ -43,7 +48,8 @@ Npc::Npc(const std::string& name, const Vec3& pos, const NpcConfig& cfg)
     , overlapThreshold_(cfg.overlapThreshold)
 {}
 
-// ---- Accessors ---------------------------------------------------------------
+// ─── Accessors ────────────────────────────────────────────────────────────────
+
 float Npc::getWindupProgress() const {
     return (attackWindupTime_ > 0.f)
         ? std::min(1.f, windupTimer_ / attackWindupTime_)
@@ -56,52 +62,130 @@ float Npc::getRecoverProgress() const {
         : 0.f;
 }
 
-// ---- Main update dispatch ----------------------------------------------------
+// ─── applyCommand ─────────────────────────────────────────────────────────────
+// Called by Squad::update() BEFORE this NPC's own update() runs each tick.
+// Directly modifies state or sets parameters consumed by per-state updates.
+
+void Npc::applyCommand(const NpcCommand& cmd) {
+    switch (cmd.type) {
+
+        case NpcCommandType::EngageTarget:
+            squadTargetId_ = cmd.targetId;
+            if (cmd.targetId == 0) return;
+            // Interrupt only if not already in active combat with this target
+            if (targetId_ != cmd.targetId ||
+                (state_ != NpcState::Chase      &&
+                 state_ != NpcState::AttackWindup  &&
+                 state_ != NpcState::AttackRecover &&
+                 state_ != NpcState::Reposition)) {
+                targetId_ = cmd.targetId;
+                transitionTo(NpcState::Chase, "EngageTarget cmd");
+            }
+            break;
+
+        case NpcCommandType::HoldSlot:
+            squadTargetId_ = 0;
+            targetId_      = 0;
+            transitionTo(NpcState::Idle, "HoldSlot cmd");
+            break;
+
+        case NpcCommandType::Retreat:
+            retreatDestination_ = cmd.destination;
+            commandSpeedMult_   = cmd.speedMultiplier;
+            squadTargetId_      = 0;
+            targetId_           = 0;
+            transitionTo(NpcState::Retreat, "Retreat cmd");
+            break;
+
+        case NpcCommandType::Confused:
+            targetId_      = 0;
+            squadTargetId_ = 0;
+            confusedTimer_ = 0.f;
+            // Deterministic direction: golden-angle seed from NPC id
+            confusedDir_ = Vec3{
+                std::cosf(static_cast<float>(id_) * 1.618f),
+                0.f,
+                std::sinf(static_cast<float>(id_) * 1.618f)
+            };
+            transitionTo(NpcState::Confused, "leader died");
+            break;
+
+        case NpcCommandType::Idle:
+            squadTargetId_ = 0;
+            targetId_      = 0;
+            transitionTo(NpcState::Idle, "Idle cmd");
+            break;
+    }
+}
+
+// ─── buildReport ──────────────────────────────────────────────────────────────
+
+NpcReport Npc::buildReport() const {
+    NpcReport r;
+    r.npcId         = id_;
+    r.state         = static_cast<int>(state_);
+    r.position      = position_;
+    r.currentTarget = targetId_;
+    r.hpRatio       = (maxHp_ > 0.f) ? (hp_ / maxHp_) : 0.f;
+    r.alive         = alive_;
+    r.isLeader      = isLeader_;
+    return r;
+}
+
+// ─── Main update dispatch ─────────────────────────────────────────────────────
+
 void Npc::update(float dt, Room& room) {
     if (!alive_) {
         updateDead();
         return;
     }
     switch (state_) {
-        case NpcState::Idle:           updateIdle         (dt, room); break;
-        case NpcState::Chase:          updateChase        (dt, room); break;
-        case NpcState::AttackWindup:   updateAttackWindup (dt, room); break;
-        case NpcState::AttackRecover:  updateAttackRecover(dt, room); break;
-        case NpcState::Return:         updateReturn       (dt, room); break;
-        case NpcState::Reposition:     updateReposition   (dt, room); break;
-        case NpcState::Regroup:        updateRegroup      (dt, room); break;
-        case NpcState::Dead:           /* terminal */                  break;
+        case NpcState::Idle:           updateIdle          (dt, room); break;
+        case NpcState::Chase:          updateChase         (dt, room); break;
+        case NpcState::AttackWindup:   updateAttackWindup  (dt, room); break;
+        case NpcState::AttackRecover:  updateAttackRecover (dt, room); break;
+        case NpcState::Return:         updateReturn        (dt, room); break;
+        case NpcState::Reposition:     updateReposition    (dt, room); break;
+        case NpcState::Regroup:        updateRegroup       (dt, room); break;
+        case NpcState::Confused:       updateConfused      (dt, room); break;
+        case NpcState::MoveToSlot:     updateMoveToSlot    (dt, room); break;
+        case NpcState::Retreat:        updateRetreat       (dt, room); break;
+        case NpcState::Dead:           /* terminal */                   break;
     }
 }
 
-// ---- transitionTo ------------------------------------------------------------
+// ─── transitionTo ─────────────────────────────────────────────────────────────
+
 void Npc::transitionTo(NpcState next, const char* reason) {
     if (state_ == next) return;
     Logger::get().logTransition(name_, npcStateStr(state_), npcStateStr(next), reason);
-    // Reset entry timers
     if (next == NpcState::AttackWindup)  windupTimer_  = 0.f;
     if (next == NpcState::AttackRecover) recoverTimer_ = 0.f;
     state_ = next;
 }
 
-// ---- Idle --------------------------------------------------------------------
-// Score-based target selection; only consider players within detectionRange.
+// ─── Idle ─────────────────────────────────────────────────────────────────────
+// Squad members: wait for EngageTarget command — no autonomous aggro.
+// Standalone NPCs (squadId_ == -1): legacy score-based self-targeting.
+
 void Npc::updateIdle(float /*dt*/, Room& room) {
-    // ── Squad target override ─────────────────────────────────────────────────
-    // If the squad assigned a target, bypass detectionRange and enter Chase
-    // immediately. Squad-level AI has already decided; NPC just executes.
-    if (squadTargetId_ != 0) {
-        Actor* squadTarget = room.findActorById(squadTargetId_);
-        if (squadTarget && squadTarget->isAlive()) {
-            targetId_ = squadTargetId_;
-            char buf[80];
-            std::snprintf(buf, sizeof(buf), "squad-override target=%s",
-                squadTarget->getName().c_str());
-            transitionTo(NpcState::Chase, buf);
-            return;
+    // Squad member: EngageTarget command handled via applyCommand().
+    // Legacy squad-target override still supported for backward compat.
+    if (squadId_ != -1) {
+        if (squadTargetId_ != 0) {
+            Actor* t = room.findActorById(squadTargetId_);
+            if (t && t->isAlive()) {
+                targetId_ = squadTargetId_;
+                char buf[80];
+                std::snprintf(buf, sizeof(buf), "squad-override target=%s",
+                    t->getName().c_str());
+                transitionTo(NpcState::Chase, buf);
+            }
         }
+        return;  // squad member: no autonomous target selection
     }
 
+    // Standalone NPC: legacy self-targeting
     auto    players   = room.getLivingPlayers();
     Player* best      = nullptr;
     float   bestScore = -999.f;
@@ -121,44 +205,44 @@ void Npc::updateIdle(float /*dt*/, Room& room) {
     transitionTo(NpcState::Chase, buf);
 }
 
-// ---- Chase -------------------------------------------------------------------
-// Pursue + separation + periodic target re-evaluation.
+// ─── Chase ────────────────────────────────────────────────────────────────────
+
 void Npc::updateChase(float dt, Room& room) {
-    // Periodic target re-evaluation
     targetEvalTimer_ -= dt;
     if (targetEvalTimer_ <= 0.f) {
         targetEvalTimer_ = TARGET_EVAL_INTERVAL;
-        Player* newBest = selectBestTarget(room);
-        if (newBest && newBest->getId() != targetId_) {
-            char buf[64];
-            std::snprintf(buf, sizeof(buf), "retarget -> %s", newBest->getName().c_str());
-            Logger::get().log("NPC:" + name_, buf);
-            targetId_ = newBest->getId();
+        // Squad members keep assigned target; standalone NPCs re-evaluate
+        if (squadId_ == -1) {
+            Player* newBest = selectBestTarget(room);
+            if (newBest && newBest->getId() != targetId_) {
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "retarget -> %s", newBest->getName().c_str());
+                Logger::get().log("NPC:" + name_, buf);
+                targetId_ = newBest->getId();
+            }
         }
     }
 
     Actor* target = resolveTarget(room);
     if (!target) {
         targetId_ = 0;
-        transitionTo(
-            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
-            "target lost");
+        // Squad member: go Idle and wait for new command; standalone: Return
+        transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
+                     "target lost");
         return;
     }
     if (isTooFarFromHome()) {
         targetId_ = 0;
-        transitionTo(
-            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
-            "too far from home");
+        transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
+                     "too far from home");
         return;
     }
 
     float dist = Vec3::distance(position_, target->getPosition());
     if (dist > chaseRange_) {
         targetId_ = 0;
-        transitionTo(
-            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
-            "target beyond leash range");
+        transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
+                     "target beyond leash range");
         return;
     }
     if (dist <= attackRange_) {
@@ -166,7 +250,6 @@ void Npc::updateChase(float dt, Room& room) {
         return;
     }
 
-    // Chase direction + separation composite
     Vec3 chaseDir = (target->getPosition() - position_).normalized();
     Vec3 sepForce = calcSeparationForce(room);
     Vec3 moveDir  = (chaseDir + sepForce * separationWeight_).normalized();
@@ -174,22 +257,20 @@ void Npc::updateChase(float dt, Room& room) {
     position_ += moveDir * (moveSpeed_ * dt);
 }
 
-// ---- AttackWindup ------------------------------------------------------------
-// No position movement; separation adjusts facing only.
+// ─── AttackWindup ─────────────────────────────────────────────────────────────
+
 void Npc::updateAttackWindup(float dt, Room& room) {
     Actor* target = resolveTarget(room);
     if (!target) {
         targetId_ = 0;
-        transitionTo(
-            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
-            "target lost during windup");
+        transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
+                     "target lost during windup");
         return;
     }
     if (isTooFarFromHome()) {
         targetId_ = 0;
-        transitionTo(
-            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
-            "too far from home");
+        transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
+                     "too far from home");
         return;
     }
 
@@ -199,11 +280,9 @@ void Npc::updateAttackWindup(float dt, Room& room) {
         return;
     }
 
-    // Separation: update facing only, no position change
     Vec3 sep = calcSeparationForce(room);
-    if (sep.length() > 0.1f) {
+    if (sep.length() > 0.1f)
         facing_ = (facing_ + sep * 0.3f).normalized();
-    }
 
     windupTimer_ += dt;
     if (windupTimer_ >= attackWindupTime_) {
@@ -215,39 +294,34 @@ void Npc::updateAttackWindup(float dt, Room& room) {
 
         if (!target->isAlive()) {
             targetId_ = 0;
-            transitionTo(
-                (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
-                "target killed");
+            transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
+                         "target killed");
             return;
         }
         transitionTo(NpcState::AttackRecover, "windup complete");
     }
 }
 
-// ---- AttackRecover -----------------------------------------------------------
-// Weak separation drift allowed during recovery.
+// ─── AttackRecover ────────────────────────────────────────────────────────────
+
 void Npc::updateAttackRecover(float dt, Room& room) {
     Actor* target = resolveTarget(room);
     if (!target) {
         targetId_ = 0;
-        transitionTo(
-            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
-            "target lost during recover");
+        transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
+                     "target lost during recover");
         return;
     }
     if (isTooFarFromHome()) {
         targetId_ = 0;
-        transitionTo(
-            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
-            "too far from home");
+        transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
+                     "too far from home");
         return;
     }
 
-    // Gentle separation drift during recover
     Vec3 sep = calcSeparationForce(room);
-    if (sep.length() > 0.1f) {
+    if (sep.length() > 0.1f)
         position_ += sep * (separationWeight_ * 0.3f * moveSpeed_ * dt);
-    }
 
     recoverTimer_ += dt;
     if (recoverTimer_ >= attackRecoverTime_) {
@@ -258,24 +332,19 @@ void Npc::updateAttackRecover(float dt, Room& room) {
             return;
         }
         float dist = Vec3::distance(position_, target->getPosition());
-        if (dist <= attackRange_) {
+        if (dist <= attackRange_)
             transitionTo(NpcState::AttackWindup, "recover done, in range");
-        } else {
+        else
             transitionTo(NpcState::Chase, "recover done, out of range");
-        }
     }
 }
 
-// ---- Return ------------------------------------------------------------------
-void Npc::updateReturn(float dt, Room& room) {
-    // ── Squad re-engage: if squad is still fighting, regroup instead of going home
-    if (squadId_ != -1 && squadTargetId_ != 0) {
-        transitionTo(NpcState::Regroup, "squad re-engaged during return");
-        return;
-    }
+// ─── Return ───────────────────────────────────────────────────────────────────
+// Used by standalone NPCs (squadId_ == -1) heading back to spawn.
+// Squad members reach Idle instead (they wait for the next EngageTarget).
 
-    if (canReAggroOnReturn_) {
-        // Re-aggro only within detectionRange (not the wider chaseRange)
+void Npc::updateReturn(float dt, Room& room) {
+    if (canReAggroOnReturn_ && squadId_ == -1) {
         Player* candidate = selectBestTarget(room);
         if (candidate &&
             Vec3::distance(position_, candidate->getPosition()) <= detectionRange_) {
@@ -298,36 +367,29 @@ void Npc::updateReturn(float dt, Room& room) {
 
     Vec3 homeDir = (spawnPos_ - position_).normalized();
     Vec3 sep     = calcSeparationForce(room);
-    // Separation is weaker during return
     Vec3 moveDir = (homeDir + sep * (separationWeight_ * 0.25f)).normalized();
     facing_   = moveDir;
     position_ += moveDir * (moveSpeed_ * dt);
 }
 
-// ---- Regroup -----------------------------------------------------------------
-// Rally toward the squad's target; individual leash limits do not apply.
-// Exits: Chase (target back in chaseRange) | Return (squad disengaged)
+// ─── Regroup ──────────────────────────────────────────────────────────────────
+// Legacy: standalone NPC rally behavior. Squad NPCs use Idle instead.
+
 void Npc::updateRegroup(float dt, Room& room) {
-    // Squad disengaged entirely → full disengage
     if (squadTargetId_ == 0) {
         transitionTo(NpcState::Return, "squad disengaged during regroup");
         return;
     }
 
     Actor* target = room.findActorById(squadTargetId_);
-    if (!target || !target->isAlive()) {
-        // Target dead — squad will clear squadTargetId_ next tick; wait here
-        return;
-    }
+    if (!target || !target->isAlive()) return;
 
-    // Close enough to re-enter normal Chase
     if (Vec3::distance(position_, target->getPosition()) <= chaseRange_) {
         targetId_ = squadTargetId_;
         transitionTo(NpcState::Chase, "regroup complete");
         return;
     }
 
-    // Move toward squad target — chaseRange/maxChaseDistance not enforced here
     Vec3 dir     = (target->getPosition() - position_).normalized();
     Vec3 sep     = calcSeparationForce(room);
     Vec3 moveDir = (dir + sep * separationWeight_).normalized();
@@ -335,23 +397,22 @@ void Npc::updateRegroup(float dt, Room& room) {
     position_ += moveDir * (moveSpeed_ * dt);
 }
 
-// ---- Reposition --------------------------------------------------------------
+// ─── Reposition ───────────────────────────────────────────────────────────────
+
 void Npc::updateReposition(float dt, Room& room) {
     Actor* target = resolveTarget(room);
     if (!target) {
         targetId_ = 0;
         hasRepositionTarget_ = false;
-        transitionTo(
-            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
-            "target lost during reposition");
+        transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
+                     "target lost during reposition");
         return;
     }
     if (isTooFarFromHome()) {
         targetId_ = 0;
         hasRepositionTarget_ = false;
-        transitionTo(
-            (squadId_ != -1 && squadTargetId_ != 0) ? NpcState::Regroup : NpcState::Return,
-            "too far from home");
+        transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
+                     "too far from home");
         return;
     }
 
@@ -359,11 +420,10 @@ void Npc::updateReposition(float dt, Room& room) {
     if (distToSlot < 0.4f) {
         hasRepositionTarget_ = false;
         float distToTarget = Vec3::distance(position_, target->getPosition());
-        if (distToTarget <= attackRange_) {
+        if (distToTarget <= attackRange_)
             transitionTo(NpcState::AttackWindup, "reposition done, in range");
-        } else {
+        else
             transitionTo(NpcState::Chase, "reposition done, chasing");
-        }
         return;
     }
 
@@ -374,15 +434,77 @@ void Npc::updateReposition(float dt, Room& room) {
     position_ += moveDir * (moveSpeed_ * dt);
 }
 
-// ---- Dead --------------------------------------------------------------------
-void Npc::updateDead() {
-    if (state_ != NpcState::Dead) {
-        transitionTo(NpcState::Dead, "hp reached 0");
-    }
-    // Respawn timer logic goes here in v3
+// ─── Confused ─────────────────────────────────────────────────────────────────
+// Triggered by NpcCommand::Confused (Squad leader death).
+// Randomly wanders for CONFUSION_DURATION, then transitions to Idle.
+
+void Npc::updateConfused(float dt, Room& /*room*/) {
+    confusedTimer_ += dt;
+
+    // Oscillate direction slowly — "two-step" pattern makes it look frantic
+    float angle = std::sinf(confusedTimer_ * 2.5f) * 0.9f;
+    float ca = std::cosf(angle);
+    float sa = std::sinf(angle);
+    Vec3 dir = {
+        ca * confusedDir_.x - sa * confusedDir_.z,
+        0.f,
+        sa * confusedDir_.x + ca * confusedDir_.z
+    };
+
+    position_ += dir * (moveSpeed_ * 0.5f * dt);
+    facing_    = dir;
+
+    if (confusedTimer_ >= CONFUSION_DURATION)
+        transitionTo(NpcState::Idle, "confusion ended");
 }
 
-// ---- resolveTarget -----------------------------------------------------------
+// ─── MoveToSlot ───────────────────────────────────────────────────────────────
+// Move to assigned formation slot position (future formation use).
+
+void Npc::updateMoveToSlot(float dt, Room& room) {
+    float distToSlot = Vec3::distance(position_, slotDestination_);
+    if (distToSlot < 0.5f) {
+        transitionTo(NpcState::Idle, "slot reached");
+        return;
+    }
+
+    Vec3 dir     = (slotDestination_ - position_).normalized();
+    Vec3 sep     = calcSeparationForce(room);
+    Vec3 moveDir = (dir + sep * separationWeight_).normalized();
+    float speed  = moveSpeed_ * commandSpeedMult_;
+    facing_   = moveDir;
+    position_ += moveDir * (speed * dt);
+}
+
+// ─── Retreat ──────────────────────────────────────────────────────────────────
+// Command-driven retreat toward retreatDestination_.
+// Used by Broken squads (slow speed) and Platoon Retreat orders (full speed).
+
+void Npc::updateRetreat(float dt, Room& room) {
+    float dist = Vec3::distance(position_, retreatDestination_);
+    if (dist < 0.3f) {
+        position_ = retreatDestination_;
+        transitionTo(NpcState::Idle, "retreat destination reached");
+        return;
+    }
+
+    Vec3 dir     = (retreatDestination_ - position_).normalized();
+    Vec3 sep     = calcSeparationForce(room);
+    Vec3 moveDir = (dir + sep * (separationWeight_ * 0.25f)).normalized();
+    float speed  = moveSpeed_ * commandSpeedMult_;
+    facing_   = moveDir;
+    position_ += moveDir * (speed * dt);
+}
+
+// ─── Dead ─────────────────────────────────────────────────────────────────────
+
+void Npc::updateDead() {
+    if (state_ != NpcState::Dead)
+        transitionTo(NpcState::Dead, "hp reached 0");
+}
+
+// ─── resolveTarget ────────────────────────────────────────────────────────────
+
 Actor* Npc::resolveTarget(Room& room) const {
     if (targetId_ == 0) return nullptr;
     Actor* a = room.findActorById(targetId_);
@@ -390,25 +512,26 @@ Actor* Npc::resolveTarget(Room& room) const {
     return a;
 }
 
-// ---- evaluateTargetScore -----------------------------------------------------
+// ─── evaluateTargetScore ──────────────────────────────────────────────────────
+
 float Npc::evaluateTargetScore(const Player* p, Room& room) const {
     float dist = Vec3::distance(position_, p->getPosition());
     if (dist > chaseRange_) return -1000.f;
 
-    float score = (1.f - dist / chaseRange_) * 50.f;   // distance score (max 50)
-    if (p->getId() == targetId_)      score += 20.f;    // current-target hysteresis
-    if (dist <= attackRange_)         score += 15.f;    // in attack range bonus
-    if (p->getId() == squadTargetId_) score += 40.f;    // squad target preference
+    float score = (1.f - dist / chaseRange_) * 50.f;
+    if (p->getId() == targetId_)      score += 20.f;
+    if (dist <= attackRange_)         score += 15.f;
+    if (p->getId() == squadTargetId_) score += 40.f;
 
-    // Aggro distribution penalty (Chase/Windup/Recover/Reposition)
     int aggro = room.countNpcsTargeting(p->getId());
-    if (p->getId() == targetId_ && aggro > 0) --aggro;  // exclude self
+    if (p->getId() == targetId_ && aggro > 0) --aggro;
     score -= static_cast<float>(aggro) * 8.f;
 
     return score;
 }
 
-// ---- selectBestTarget --------------------------------------------------------
+// ─── selectBestTarget ─────────────────────────────────────────────────────────
+
 Player* Npc::selectBestTarget(Room& room) const {
     auto    players   = room.getLivingPlayers();
     Player* best      = nullptr;
@@ -420,7 +543,8 @@ Player* Npc::selectBestTarget(Room& room) const {
     return best;
 }
 
-// ---- calcSeparationForce -----------------------------------------------------
+// ─── calcSeparationForce ──────────────────────────────────────────────────────
+
 Vec3 Npc::calcSeparationForce(Room& room) const {
     std::vector<Vec3> nearby;
     room.findNearbyNpcPositions(position_, separationRadius_, id_, nearby);
@@ -430,7 +554,6 @@ Vec3 Npc::calcSeparationForce(Room& room) const {
         Vec3  away = position_ - op;
         float d    = away.length();
         if (d < 1e-4f) {
-            // Perfect overlap: deterministic push using id-based angle
             float a = static_cast<float>(id_) * 1.2f;
             force += Vec3{ std::cosf(a), 0.f, std::sinf(a) };
             continue;
@@ -441,8 +564,8 @@ Vec3 Npc::calcSeparationForce(Room& room) const {
     return force;
 }
 
-// ---- calcRepositionTarget ----------------------------------------------------
-// Golden angle (~137.5 deg) distributes IDs evenly around the target.
+// ─── calcRepositionTarget ────────────────────────────────────────────────────
+
 Vec3 Npc::calcRepositionTarget(const Vec3& targetPos) const {
     float angle  = static_cast<float>(id_) * 2.399963f;
     float radius = repositionRadius_;
@@ -453,19 +576,22 @@ Vec3 Npc::calcRepositionTarget(const Vec3& targetPos) const {
     };
 }
 
-// ---- isTooFarFromHome --------------------------------------------------------
+// ─── isTooFarFromHome ────────────────────────────────────────────────────────
+
 bool Npc::isTooFarFromHome() const {
     return Vec3::distance(position_, spawnPos_) > maxChaseDistance_;
 }
 
-// ---- isOvercrowded -----------------------------------------------------------
+// ─── isOvercrowded ────────────────────────────────────────────────────────────
+
 bool Npc::isOvercrowded(Room& room) const {
     std::vector<Vec3> nearby;
     room.findNearbyNpcPositions(position_, separationRadius_ * 0.7f, id_, nearby);
     return static_cast<int>(nearby.size()) >= overlapThreshold_;
 }
 
-// ---- dump --------------------------------------------------------------------
+// ─── dump ─────────────────────────────────────────────────────────────────────
+
 std::string Npc::dump() const {
     char buf[256];
     std::snprintf(buf, sizeof(buf),

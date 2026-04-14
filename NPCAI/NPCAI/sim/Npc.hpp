@@ -1,5 +1,6 @@
-﻿#pragma once
+#pragma once
 #include "Actor.hpp"
+#include "Squad.hpp"   // NpcCommand, NpcReport
 #include <string>
 
 namespace sim {
@@ -7,37 +8,41 @@ namespace sim {
 class Room;
 class Player;
 
-// ---- NPC State ---------------------------------------------------------------
+// ─── NpcState ────────────────────────────────────────────────────────────────
+// int values used by Renderer (state color table) and DebugSnapshot.
 enum class NpcState {
-    Idle,           // 0  waiting, scanning detectionRange
-    Chase,          // 1  pursuing target
-    AttackWindup,   // 2  attack preparation (no movement)
-    AttackRecover,  // 3  post-attack recovery
-    Return,         // 4  walking back to spawn (full disengage)
-    Reposition,     // 5  moving to a better attack slot
-    Regroup,        // 6  rally toward squad target (temporary disengage)
-    Dead            // 7  terminal state
+    Idle,           // 0   waiting; squad members await EngageTarget command
+    Chase,          // 1   pursuing target
+    AttackWindup,   // 2   attack preparation (no movement)
+    AttackRecover,  // 3   post-attack cooldown
+    Return,         // 4   walking back to spawn (standalone NPCs)
+    Reposition,     // 5   moving to a better attack slot
+    Regroup,        // 6   rally toward squad target (legacy; standalone NPCs)
+    Confused,       // 7   disoriented after leader death (NpcCommand::Confused)
+    MoveToSlot,     // 8   moving to formation slot position (future formation use)
+    Retreat,        // 9   command-driven retreat to destination
+    Dead            // 10  terminal state
 };
 
-// ---- Config ------------------------------------------------------------------
+// ─── NpcConfig ───────────────────────────────────────────────────────────────
 struct NpcConfig {
     float maxHp              = 80.f;
     float moveSpeed          = 4.f;
-    float detectionRange     = 10.f;  // Idle aggro radius
+    float detectionRange     = 10.f;  // aggro radius (Idle / Broken squad scan)
     float attackRange        = 2.f;   // melee reach
     float chaseRange         = 22.f;  // leash: give up if target farther than this
-    float maxChaseDistance   = 26.f;  // return if farther than this from home
+    float maxChaseDistance   = 26.f;  // Return if farther than this from home
     float attackDamage       = 10.f;
     float attackWindupTime   = 0.4f;  // seconds before hit lands
     float attackRecoverTime  = 0.6f;  // seconds before next windup
-    float separationRadius   = 4.f;   // push away other NPCs within this radius
-    float separationWeight   = 0.6f;  // separation force strength relative to chase
-    bool  canReAggroOnReturn = true;  // re-aggro players while returning home
-    float repositionRadius   = 3.0f;  // orbit radius for reposition slot (>= separationRadius * 0.7)
-    int   overlapThreshold   = 2;     // trigger Reposition if this many NPCs are too close
+    float separationRadius   = 4.f;   // push away NPCs within this radius
+    float separationWeight   = 0.6f;  // separation force relative to chase force
+    bool  canReAggroOnReturn = true;  // standalone NPCs only: re-aggro while returning
+    float repositionRadius   = 3.0f;  // orbit radius for reposition slot
+    int   overlapThreshold   = 2;     // trigger Reposition if this many NPCs too close
 };
 
-// ---- Npc Class ---------------------------------------------------------------
+// ─── Npc ─────────────────────────────────────────────────────────────────────
 class Npc : public Actor {
 public:
     Npc(const std::string& name, const Vec3& pos, const NpcConfig& cfg = {});
@@ -46,7 +51,7 @@ public:
     const char* typeName() const override { return "NPC"; }
     std::string dump() const override;
 
-    // ---- Accessors -----------------------------------------------------------
+    // ── Accessors ─────────────────────────────────────────────────────────────
     NpcState getState()            const { return state_; }
     uint32_t getTargetId()         const { return targetId_; }
     float    getDetectionRange()   const { return detectionRange_; }
@@ -59,15 +64,19 @@ public:
     bool     hasRepositionTarget()    const { return hasRepositionTarget_; }
     Vec3     getRepositionTargetPos() const { return repositionTarget_; }
 
-    // ── Squad accessors ───────────────────────────────────────────────────
+    // ── Squad integration ─────────────────────────────────────────────────────
     int      getSquadId()    const { return squadId_; }
     bool     getIsLeader()   const { return isLeader_; }
-    void     setSquadId    (int id)         { squadId_    = id; }
-    void     setIsLeader   (bool v)         { isLeader_   = v; }
-    void     setSquadTarget(uint32_t tid)   { squadTargetId_ = tid; }
+    void     setSquadId  (int id)       { squadId_  = id; }
+    void     setIsLeader (bool v)       { isLeader_ = v; }
+    void     setSquadTarget(uint32_t t) { squadTargetId_ = t; }  // legacy compat
+
+    // Command interface (Squad → NPC)
+    void      applyCommand(const NpcCommand& cmd);
+    NpcReport buildReport() const;
 
 private:
-    // ---- State transition / Per-state update ---------------------------------
+    // ── State transition / Per-state update ───────────────────────────────────
     void transitionTo(NpcState next, const char* reason);
 
     void updateIdle         (float dt, Room& room);
@@ -77,9 +86,12 @@ private:
     void updateReturn       (float dt, Room& room);
     void updateReposition   (float dt, Room& room);
     void updateRegroup      (float dt, Room& room);
+    void updateConfused     (float dt, Room& room);
+    void updateMoveToSlot   (float dt, Room& room);
+    void updateRetreat      (float dt, Room& room);
     void updateDead         ();
 
-    // ---- Helpers -------------------------------------------------------------
+    // ── Helpers ───────────────────────────────────────────────────────────────
     Actor*  resolveTarget        (Room& room) const;
     Player* selectBestTarget     (Room& room) const;
     float   evaluateTargetScore  (const Player* p, Room& room) const;
@@ -88,7 +100,7 @@ private:
     bool    isTooFarFromHome     () const;
     bool    isOvercrowded        (Room& room) const;
 
-    // ---- Data ----------------------------------------------------------------
+    // ── Data ──────────────────────────────────────────────────────────────────
     NpcState state_{ NpcState::Idle };
     Vec3     spawnPos_;
     uint32_t targetId_{ 0 };
@@ -117,12 +129,20 @@ private:
     Vec3 repositionTarget_{ 0.f, 0.f, 0.f };
     bool hasRepositionTarget_{ false };
 
-    // ── Squad integration (set by Room::updateSquads before each NPC update) ─
-    int      squadId_{ -1 };        // -1 = not in squad
+    // ── Squad fields ──────────────────────────────────────────────────────────
+    int      squadId_{ -1 };        // -1 = standalone (uses legacy self-target)
     bool     isLeader_{ false };
-    uint32_t squadTargetId_{ 0 };   // 0 = no override
+    uint32_t squadTargetId_{ 0 };   // legacy: squad target override
+
+    // ── Command-driven fields (squad members only) ────────────────────────────
+    Vec3  retreatDestination_{ 0.f, 0.f, 0.f };
+    Vec3  slotDestination_   { 0.f, 0.f, 0.f };
+    float commandSpeedMult_  { 1.f };   // speed multiplier from NpcCommand
+    float confusedTimer_     { 0.f };
+    Vec3  confusedDir_       { 1.f, 0.f, 0.f };
 
     static constexpr float TARGET_EVAL_INTERVAL = 0.5f;
+    static constexpr float CONFUSION_DURATION   = 3.0f;
 };
 
 } // namespace sim
