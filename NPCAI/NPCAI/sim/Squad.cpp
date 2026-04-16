@@ -364,7 +364,8 @@ void Squad::pushCommandsToMembers(Room& room) {
         if (canEngage) {
             cmd.type     = NpcCommandType::EngageTarget;
             cmd.targetId = targetPlayerId_;
-        } else {
+        } 
+        else {
             cmd.type = NpcCommandType::HoldSlot;
         }
         npc->applyCommand(cmd);
