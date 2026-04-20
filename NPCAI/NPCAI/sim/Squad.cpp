@@ -61,14 +61,9 @@ void Squad::update(float dt, Room& room) {
     // Apply pending Platoon order to internal order
     if (hasPlatoonOrder_) {
         order_ = platoonOrderType_;
-        if (platoonTargetOverride_ != 0) {
-            // Reset memory timer when Platoon assigns a different target so
-            // selectTarget() will immediately validate range (chaseRange check),
-            // instead of coasting on the previous target's timer.
-            if (platoonTargetOverride_ != targetPlayerId_)
-                targetMemoryTimer_ = 0.f;
-            targetPlayerId_ = platoonTargetOverride_;
-        }
+        // Store Platoon's desired target as a hint only.
+        // selectTarget() will adopt it only once the player enters detectionRange.
+        platoonSuggestedTargetId_ = platoonTargetOverride_;
         if (platoonOrderType_ == SquadOrderType::Retreat) {
             // Relay retreat destination to all members immediately
             for (uint32_t id : members_) {
@@ -326,6 +321,7 @@ void Squad::selectTarget(float dt, Room& room) {
     for (Player* p : players) {
         float d = Vec3::distance(leaderPos, p->getPosition());
         if (d > detectRange) continue;
+        if (p->getId() == platoonSuggestedTargetId_) { best = p; break; } // suggestion wins
         if (d < bestDist) { bestDist = d; best = p; }
     }
 

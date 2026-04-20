@@ -111,3 +111,76 @@ if (order_ == SquadOrderType::Attack && targetPlayerId_ != 0) {
 - 수정 2: 타겟이 범위 밖일 때 EngageTarget 자체를 차단 (근본 방어)
 
 ---
+
+## [3] Squad NPC가 detectionRange 밖의 플레이어를 즉시 추적하는 문제
+
+**증상:**
+Platoon이 `Attack` 오더를 내리면 Squad NPC들이 리더의 **detectionRange(10.0f)** 바깥에
+있는 플레이어도 곧바로 Chase 상태로 전환됨. 플레이어가 감지 범위 밖에서 접근할 때
+감지 이벤트 없이 즉시 추적이 시작되었다.
+
+### 원인 분석
+
+`Squad::update()`에서 Platoon override를 적용할 때 `targetPlayerId_`를 직접 덮어썼다.
+
+```cpp
+// Squad.cpp (수정 전)
+if (platoonTargetOverride_ != 0) {
+    if (platoonTargetOverride_ != targetPlayerId_)
+        targetMemoryTimer_ = 0.f;
+    targetPlayerId_ = platoonTargetOverride_;  // ← 거리 확인 없이 바로 세팅
+}
+```
+
+이 상태에서 `selectTarget()`이 호출되면 `targetPlayerId_ != 0`이므로
+hysteresis 분기로 진입하여 **chaseRange(22.0f)** 만 확인한다.
+결과적으로 detectionRange(10.0f) 바깥에 있는 플레이어도 chaseRange 안에만 있으면
+NPC가 즉시 추적을 시작했다.
+
+```
+Platoon::selectPrimaryTarget()  ← 거리 제한 없이 플레이어 선택
+  → issueOrderToAll(Attack, targetId)
+  → Squad::setPlatoonOrder(Attack, targetId)
+
+Squad::update()
+  → targetPlayerId_ = platoonTargetOverride_  ← detectionRange 검증 없이 세팅
+  → selectTarget()
+      targetPlayerId_ != 0 → hysteresis 분기 진입
+      chaseRange(22) 확인만 → detectionRange(10) 밖이어도 통과
+  → pushCommandsToMembers() → EngageTarget 발송
+
+Npc::applyCommand(EngageTarget) → Idle → Chase  ← 감지 없이 추적 시작
+```
+
+### 수정
+
+`targetPlayerId_`를 직접 쓰지 않고 `platoonSuggestedTargetId_`에 hint로만 저장한 뒤,
+`selectTarget()`의 신규 타겟 획득 루프에서 **detectionRange 통과 후** 채택하도록 변경.
+
+**Squad.hpp** — 멤버 추가:
+```cpp
+uint32_t platoonSuggestedTargetId_{ 0 };  // hint; adopted only after detectionRange
+```
+
+**Squad.cpp** `update()` — 직접 세팅 제거:
+```cpp
+// 수정 후
+platoonSuggestedTargetId_ = platoonTargetOverride_;
+```
+
+**Squad.cpp** `selectTarget()` — 신규 획득 루프에서 hint 우선 반영:
+```cpp
+for (Player* p : players) {
+    float d = Vec3::distance(leaderPos, p->getPosition());
+    if (d > detectRange) continue;                                     // detectionRange 검증
+    if (p->getId() == platoonSuggestedTargetId_) { best = p; break; } // platoon 추천 우선
+    if (d < bestDist) { bestDist = d; best = p; }
+}
+```
+
+- Platoon 추천 플레이어가 detectionRange 안에 있으면 즉시 선택
+- 없으면 기존 동작대로 가장 가까운 플레이어 선택
+- 어떤 경우든 detectionRange를 넘어선 플레이어는 절대 선택 안 됨
+- 감지 후에는 기존 hysteresis(chaseRange) 동작 그대로 유지
+
+---

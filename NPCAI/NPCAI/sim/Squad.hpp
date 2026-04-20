@@ -119,7 +119,8 @@ private:
 
     // Pending Platoon directive (set via setPlatoonOrder, consumed in update)
     SquadOrderType         platoonOrderType_{ SquadOrderType::Hold };
-    uint32_t               platoonTargetOverride_{ 0 };  // 0 = squad picks own
+    uint32_t               platoonTargetOverride_{ 0 };   // 0 = squad picks own
+    uint32_t               platoonSuggestedTargetId_{ 0 }; // hint; adopted only after detectionRange
     Vec3                   platoonDestination_{};
     bool                   hasPlatoonOrder_{ false };
 
