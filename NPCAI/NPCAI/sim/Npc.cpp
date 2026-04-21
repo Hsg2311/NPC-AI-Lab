@@ -68,7 +68,6 @@ float Npc::getRecoverProgress() const {
 
 void Npc::applyCommand(const NpcCommand& cmd) {
     switch (cmd.type) {
-
         case NpcCommandType::EngageTarget:
             squadTargetId_ = cmd.targetId;
             if (cmd.targetId == 0) return;
@@ -233,6 +232,7 @@ void Npc::updateChase(float dt, Room& room) {
     }
     if (isTooFarFromHome()) {
         targetId_ = 0;
+        leashBreak_ = true;
         transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
                      "too far from home");
         return;
@@ -269,6 +269,7 @@ void Npc::updateAttackWindup(float dt, Room& room) {
     }
     if (isTooFarFromHome()) {
         targetId_ = 0;
+        leashBreak_ = true;
         transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
                      "too far from home");
         return;
@@ -314,6 +315,7 @@ void Npc::updateAttackRecover(float dt, Room& room) {
     }
     if (isTooFarFromHome()) {
         targetId_ = 0;
+        leashBreak_ = true;
         transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
                      "too far from home");
         return;
@@ -344,7 +346,7 @@ void Npc::updateAttackRecover(float dt, Room& room) {
 // Squad members reach Idle instead (they wait for the next EngageTarget).
 
 void Npc::updateReturn(float dt, Room& room) {
-    if (canReAggroOnReturn_ && squadId_ == -1) {
+    if (canReAggroOnReturn_ && squadId_ == -1 && !leashBreak_) {
         Player* candidate = selectBestTarget(room);
         if (candidate &&
             Vec3::distance(position_, candidate->getPosition()) <= detectionRange_) {
@@ -360,7 +362,8 @@ void Npc::updateReturn(float dt, Room& room) {
 
     float distToHome = Vec3::distance(position_, spawnPos_);
     if (distToHome < 0.3f) {
-        position_ = spawnPos_;
+        position_   = spawnPos_;
+        leashBreak_ = false;
         transitionTo(NpcState::Idle, "reached home");
         return;
     }
@@ -411,6 +414,7 @@ void Npc::updateReposition(float dt, Room& room) {
     if (isTooFarFromHome()) {
         targetId_ = 0;
         hasRepositionTarget_ = false;
+        leashBreak_ = true;
         transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
                      "too far from home");
         return;

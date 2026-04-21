@@ -138,6 +138,8 @@
     <ClInclude Include="sim\DummyPlayerController.hpp" />
     <ClInclude Include="sim\Room.hpp" />
     <ClInclude Include="sim\DebugSnapshot.hpp" />
+    <ClInclude Include="sim\Scenario.hpp" />
+    <ClInclude Include="sim\ScenarioSoloNpc.hpp" />
     <ClInclude Include="viz\Renderer.hpp" />
     <ClInclude Include="viz\Application.hpp" />
   </ItemGroup>
@@ -151,6 +153,7 @@
     <ClCompile Include="sim\Platoon.cpp" />
     <ClCompile Include="sim\DummyPlayerController.cpp" />
     <ClCompile Include="sim\Room.cpp" />
+    <ClCompile Include="sim\ScenarioSoloNpc.cpp" />
     <ClCompile Include="viz\Renderer.cpp" />
     <ClCompile Include="viz\Application.cpp" />
   </ItemGroup>

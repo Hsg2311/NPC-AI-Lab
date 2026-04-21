@@ -133,16 +133,6 @@
 - [ ] **로그 오버레이** — 최근 N개 상태 전이 로그를 창 오른쪽에 표시 (Logger 출력 미러링)
 - [ ] **시뮬레이션 속도 조절** — `+` / `-` 키로 tick rate 배율 변경 (×0.5 / ×1 / ×2 / ×4)
 
-### [v4] Squad AI
-
-- [ ] `sim/Squad.hpp/.cpp` — Squad: 멤버 NPC 목록 + Commander 포인터
-- [ ] `sim/Commander.hpp/.cpp` — Npc 파생; 매 tick 멤버에게 `assignTarget()` / `assignFormationPos()` 발행
-- [ ] `sim/Formation.hpp` — 오프셋 배열 정의 (`Triangle`, `Line`, `Wedge`)
-- [ ] `Flank` 행동 — target-commander 벡터 수직 방향을 flanker에 할당
-- [ ] `Room::tick()` 수정 — Squad::update() → 개별 NPC update() 순서 보장
-- [ ] `DebugSnapshot` 확장 — `DebugSquadEntry` 추가 (formation hull 렌더링용)
-- [ ] Renderer 확장 — Squad 외곽선(볼록 hull) 및 formation 오프셋 점 표시
-
 ### [v4] 이벤트 / 로그 개선
 
 - [ ] `EventBus` 또는 콜백 훅 — 상태 전이, 데미지 이벤트를 외부에서 구독 가능하게
@@ -159,18 +149,21 @@ NPCAI/
     Logger.hpp / Logger.cpp
     Actor.hpp / Actor.cpp
     Player.hpp / Player.cpp
-    Npc.hpp / Npc.cpp                  ← v3: 7-state, separation, home, score target, reposition
+    Npc.hpp / Npc.cpp                  ← v3: 10-state, separation, home, score target, reposition
+    Squad.hpp / Squad.cpp              ← v4: target memory, Confused/Broken status, NpcCommand dispatch
+    Platoon.hpp / Platoon.cpp          ← v4: 전술 조율, retreat efficiency threshold
     DummyPlayerController.hpp / .cpp
-    Room.hpp / Room.cpp                ← v3: getLivingPlayers, findNearbyNpcPositions, countNpcsTargeting
-    DebugSnapshot.hpp                  ← v3: aggroCount, homeX/Z, windupProgress, recoverProgress, reposition fields
+    Room.hpp / Room.cpp                ← v3+: getLivingPlayers, spawnSquad, spawnPlatoon
+    DebugSnapshot.hpp
+    Scenario.hpp                       ← v5: 시나리오 추상 베이스 클래스
+    ScenarioSoloNpc.hpp / .cpp         ← v5: 독립 NPC 시나리오 (스쿼드/플래툰 없음)
   viz/
-    Renderer.hpp / Renderer.cpp        ← v3: home marker, return line, reposition dot, progress bar, 7-color legend
-    Application.hpp / Application.cpp  ← v3: Goblin/Orc NpcConfig 프리셋
+    Renderer.hpp / Renderer.cpp        ← v3: home marker, return line, reposition dot, progress bar, 8-color legend
+    Application.hpp / Application.cpp  ← v5: Scenario 시스템으로 교체
   mathUtil.hpp               (기존 DirectXMath 수학 라이브러리, 독립 유지)
   main.cpp
   NPCAI.vcxproj
   CLAUDE.md
-  TODO.md
 ```
 
 ---
@@ -452,4 +445,47 @@ Return  → Regroup            : updateReturn 진입 시 squadTargetId_ != 0 감
 Return  → Chase              : detectionRange 내 플레이어 재감지 (canReAggroOnReturn=true)
 Return  → Idle               : dist to spawnPos < 0.3
 Dead    → (none)             : terminal
+```
+
+---
+
+## 갱신: 2026-04-21 — Scenario 클래스 시스템 도입
+
+### 배경
+
+`Application::setupHumanSimulation()` / `setupSimulation()`에 시뮬레이션 구성이 하드코딩되어
+상황별로 바꾸기 불편했다. Scenario 추상 클래스를 도입해 원하는 시나리오를 갈아끼울 수 있게 했다.
+
+### 변경 내용
+
+#### 신규: `sim/Scenario.hpp`
+
+- [o] `setup(Room&)` 순수 가상 메서드
+- [o] `controlledPlayer()` 접근자 — 시나리오가 생성한 플레이어 포인터를 Application으로 전달
+
+#### 신규: `sim/ScenarioSoloNpc.hpp/.cpp`
+
+- [o] 스쿼드/플래툰 없이 독립 NPC만 배치 (squadId == -1)
+- [o] Player 1명 (인간 조작, `(0, 0, 20)`)
+- [o] Goblin 3마리: `(10,0,5)`, `(15,0,-3)`, `(8,0,-8)`
+- [o] Orc 2마리: `(25,0,0)`, `(28,0,8)`
+
+#### 수정: `viz/Application.hpp/.cpp`
+
+- [o] `SimMode` 열거형 및 `setupSimulation()` / `setupHumanSimulation()` 제거
+- [o] `std::unique_ptr<sim::Scenario> scenario_` 멤버 추가
+- [o] `init()` 에서 `ScenarioSoloNpc` 생성 후 `setup(room_)` 호출
+- [o] `stepOneTick()` 의 `simMode_` 분기 제거 — `controlledPlayer_ != nullptr` 체크로 단순화
+
+### 새 시나리오 추가 방법
+
+```cpp
+// 1. Scenario 상속 클래스 작성
+class ScenarioMySetup : public sim::Scenario {
+public:
+    void setup(sim::Room& room) override { /* ... */ }
+};
+
+// 2. Application::init() 한 줄 교체
+scenario_ = std::make_unique<ScenarioMySetup>();
 ```

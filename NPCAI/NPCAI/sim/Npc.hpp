@@ -130,6 +130,8 @@ private:
     bool hasRepositionTarget_{ false };
 
     // ── Squad fields ──────────────────────────────────────────────────────────
+    bool leashBreak_{ false };     // set when Return is triggered by leash violation; blocks re-aggro until home
+
     int      squadId_{ -1 };        // -1 = standalone (uses legacy self-target)
     bool     isLeader_{ false };
     uint32_t squadTargetId_{ 0 };   // legacy: squad target override

@@ -184,3 +184,67 @@ for (Player* p : players) {
 - 감지 후에는 기존 hysteresis(chaseRange) 동작 그대로 유지
 
 ---
+
+## [4] 독립 NPC가 Chase↔Return 무한 루프에 빠지는 버그
+
+**증상:**
+```
+[T:0333][NPC:Goblin01] Chase -> Return  (too far from home)
+[T:0334][NPC:Goblin01] Return -> Chase  (re-aggro on P1 dist=5.3)
+[T:0335][NPC:Goblin01] Chase -> Return  (too far from home)
+[T:0336][NPC:Goblin01] Return -> Chase  (re-aggro on P1 dist=5.3)
+```
+
+### 원인 분석
+
+`updateReturn()`의 re-aggro 조건이 Return에 진입한 **이유**를 구분하지 않았다.
+
+두 가지 경우가 존재한다:
+- **타겟 소멸로 Return 진입** → 복귀 중 플레이어가 접근하면 re-aggro가 자연스러움
+- **leash 위반으로 Return 진입** → 완전히 귀환할 때까지 re-aggro를 차단해야 함
+
+leash 위반 시 NPC는 `maxChaseDistance_`(24) 경계 바로 밖에 있는데, Return 1틱 만에
+0.09 유닛 이동해 경계 안으로 들어오면 re-aggro → Chase → 플레이어 방향으로 이동
+→ 다시 경계 밖 → Return을 매 틱 반복한다.
+
+첫 번째 수정 시도(`&& !isTooFarFromHome()`)가 효과 없었던 이유도 이 때문이다.
+`maxChaseDistance_` 자체가 Chase→Return 임계값이므로 바운스 폭이 한 틱 이동량(~0.09)에 불과해
+히스테리시스 역할을 할 수 없다.
+
+### 수정
+
+Return 진입 원인을 `leashBreak_` 플래그로 명시적으로 기록한다.
+
+**`sim/Npc.hpp`** — 멤버 추가:
+```cpp
+bool leashBreak_{ false };  // set when Return is triggered by leash violation; blocks re-aggro until home
+```
+
+**`sim/Npc.cpp`** — "too far from home" → Return 전이 4곳 (`updateChase`, `updateAttackWindup`,
+`updateAttackRecover`, `updateReposition`) 모두 플래그 세팅:
+```cpp
+if (isTooFarFromHome()) {
+    targetId_ = 0;
+    leashBreak_ = true;   // ← 추가
+    transitionTo(...NpcState::Return, "too far from home");
+    return;
+}
+```
+
+**`sim/Npc.cpp`** `updateReturn()` — re-aggro 조건 교체 및 귀환 완료 시 해제:
+```cpp
+// re-aggro 조건: leashBreak_ 중에는 차단
+if (canReAggroOnReturn_ && squadId_ == -1 && !leashBreak_) { ... }
+
+// 귀환 완료 시 플래그 해제
+if (distToHome < 0.3f) {
+    position_   = spawnPos_;
+    leashBreak_ = false;   // ← 추가
+    transitionTo(NpcState::Idle, "reached home");
+}
+```
+
+leash 위반으로 Return에 진입하면 실제로 home에 도달(`distToHome < 0.3`)해야만
+`leashBreak_`이 해제되어 이후 re-aggro가 허용된다.
+
+---

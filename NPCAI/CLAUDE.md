@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working with this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Build Commands
 
@@ -26,14 +26,14 @@ There are no automated tests and no lint tooling configured.
 **NPCAI** is a **standalone NPC AI simulator + 2D visual debug viewer** for validating
 server-side Room AI without a game client.
 
-- `sim/` — pure AI/simulation logic (no Windows headers, no rendering)
-- `viz/` — WinAPI + GDI 2D visualization (depends on sim/, not the other way)
-- `mathUtil.hpp` — original DirectXMath-based math library (kept, not used by sim/)
+- `NPCAI/sim/` — pure AI/simulation logic (no Windows headers, no rendering)
+- `NPCAI/viz/` — WinAPI + GDI 2D visualization (depends on sim/, not the other way)
+- `NPCAI/mathUtil.hpp` — original DirectXMath-based math library (kept, not used by sim/)
 
-**Entry point:** `main.cpp` — launches a console window (Logger output) and a WinAPI
+**Entry point:** `NPCAI/main.cpp` — launches a console window (Logger output) and a WinAPI
 window (2D visualizer) side by side.
 
-**Keys:** `Space` = pause/resume · `S` = step one tick (while paused) · `Esc` = quit
+**Keys:** `Arrows` = move player (HumanControl mode) · `Space` = pause/resume · `S` = step one tick (while paused) · `Esc` = quit
 
 ---
 
@@ -45,7 +45,9 @@ sim/                        (no #include <windows.h>)
   Logger.hpp / .cpp         Singleton console logger  [T:tick][CAT] format
   Actor.hpp / .cpp          Abstract base: id, name, position, facing, hp
   Player.hpp / .cpp         Actor subclass; waypoint-driven movement
-  Npc.hpp / .cpp            Actor subclass; 5-state AI machine
+  Npc.hpp / .cpp            Actor subclass; 11-state AI machine
+  Squad.hpp / .cpp          Mid-tier coordinator; owns NpcCommand dispatch + target selection
+  Platoon.hpp / .cpp        Top-tier commander; issues SquadOrderType to Squads each tick
   DummyPlayerController     Per-player cyclic waypoint routes
   Room.hpp / .cpp           Simulation container; tick loop; buildSnapshot()
   DebugSnapshot.hpp         Plain-data boundary struct (sim → viz handoff)
@@ -53,6 +55,11 @@ sim/                        (no #include <windows.h>)
 viz/
   Renderer.hpp / .cpp       GDI double-buffered 2D renderer (XZ plane)
   Application.hpp / .cpp    WinAPI window, WM_TIMER loop, key handling
+```
+
+**Command hierarchy:**
+```
+Platoon  ──(SquadOrderType)──▶  Squad  ──(NpcCommand)──▶  Npc
 ```
 
 **Separation rule:** `sim/` code must never include `viz/` headers.
@@ -65,63 +72,151 @@ viz/
 ### Room::tick(float dt) — update order
 1. `Logger::get().setTick(tickCount_)`
 2. `dummyCtrl_.update(dt)` — assign waypoint targets to players
-3. All living **Players** → `update(dt, room)` — execute movement
-4. All **NPCs** → `update(dt, room)` — AI decision + movement
-5. `tickCount_++`
-6. If `tickCount_ % dumpInterval_ == 0` → `dumpSnapshot()` (console table)
+3. All living **Players** → `update(dt, room)`
+4. `updatePlatoons(dt)` — Platoons evaluate tactics, issue `SquadOrderType` to Squads
+5. `updateSquads(dt)` — Squads select targets, push `NpcCommand` to each member NPC
+6. All **NPCs** → `update(dt, room)` — consume commands + run FSM
+7. `tickCount_++`
+8. If `tickCount_ % dumpInterval_ == 0` → `dumpSnapshot()`
 
 ### Room::buildSnapshot() — renderer handoff
 Iterates `actors_`, casts to `Player*` / `Npc*`, fills `DebugSnapshot`.
 Called every frame by `Application` after `tick()`.
 
 ### Actor::facing_
-Updated by `Player::update()` and `Npc::updateChase()` / `Npc::updateReturn()`
-whenever the actor moves. Used for the direction arrow in the renderer.
+Updated whenever an actor moves. Used for the direction arrow in the renderer.
+
+### Spawn helpers
+- `Room::spawnSquad(namePrefix, positions, cfg)` — creates a Squad and one NPC per position; first NPC is leader
+- `Room::spawnPlatoon(namePrefix, squadPositions, cfg)` — creates a Platoon with one Squad per inner vector
 
 ---
 
 ## NPC State Machine
 
+**State int values** are used by `Renderer` (color table) and `DebugSnapshot` — do not reorder.
+
 ```
-Idle   → Chase   : nearest living Player within detectionRange
-Chase  → Attack  : distance to target ≤ attackRange
-Chase  → Return  : target dead/gone OR dist > chaseRange
-Attack → Chase   : dist > attackRange × 1.5  (gap opened)
-Attack → Return  : target dead/gone
-Return → Chase   : new Player enters detectionRange during return
-Return → Idle    : reached spawnPos (threshold 0.3 units)
-Dead   → (none)  : terminal; respawn timer hook goes in updateDead()
+ 0  Idle          waiting; squad members await EngageTarget command
+ 1  Chase         pursuing target (separation forces applied)
+ 2  AttackWindup  pre-attack phase (no movement, windupTimer_)
+ 3  AttackRecover post-attack cooldown (light separation drift, recoverTimer_)
+ 4  Return        walking back to spawnPos (standalone NPCs)
+ 5  Reposition    orbiting to a less crowded attack slot (golden-angle placement)
+ 6  Regroup       squad-member detour: move toward squad target without leash limits
+ 7  Confused      disoriented after leader death; wanders for CONFUSION_DURATION (3s)
+ 8  MoveToSlot    formation slot movement (infrastructure present, not yet wired)
+ 9  Retreat       command-driven retreat to destination
+10  Dead          terminal state
 ```
 
-Every transition is logged via `Logger::logTransition()`:
-`[T:0042][NPC:Goblin01] Chase -> Attack  (in attack range)`
+**Autonomous FSM transitions:**
+```
+Idle   → Chase          : player within detectionRange (score-based selection)
+                          OR squadTargetId_ != 0 (squad override)
+Chase  → AttackWindup   : dist ≤ attackRange
+Chase  → Regroup        : squad active + target gone/leash exceeded/too far from home
+Chase  → Return         : standalone (squadId_==-1) target gone/leash exceeded/too far from home
+AttackWindup → AttackRecover : windupTimer complete → damage applied
+AttackWindup → Chase         : dist > attackRange × 1.5
+AttackWindup → Regroup/Return: target gone / too far from home
+AttackRecover → AttackWindup : timer done, in range, not overcrowded
+AttackRecover → Chase        : timer done, out of range, not overcrowded
+AttackRecover → Reposition   : timer done, isOvercrowded()
+AttackRecover → Regroup/Return: target gone / too far from home
+Reposition → AttackWindup    : arrived at slot, dist ≤ attackRange
+Reposition → Chase           : arrived at slot, dist > attackRange
+Reposition → Regroup/Return  : target gone / too far from home
+Regroup    → Chase           : squad target within chaseRange_
+Regroup    → Return          : squadTargetId_ == 0 (squad combat ended)
+Return     → Regroup         : squadTargetId_ != 0 detected on entry
+Return     → Chase           : player within detectionRange (canReAggroOnReturn=true only)
+Return     → Idle            : dist to spawnPos < 0.3
+Dead       → (none)          : terminal
+```
+
+**Command-driven transitions (Squad → NPC via `NpcCommand`):**
+```
+any state → Chase/Idle    : NpcCommandType::EngageTarget / Idle
+any state → Confused      : NpcCommandType::Confused (issued on leader death)
+any state → Retreat       : NpcCommandType::Retreat (destination stored)
+Confused  → Idle          : CONFUSION_DURATION (3.0s) elapsed
+Retreat   → Idle          : arrived at retreatDestination_
+```
+
+Standalone NPCs (`squadId_ == -1`) never receive `NpcCommand` — they self-target using score-based selection and never enter Regroup or Confused states.
+
+Every transition is logged: `[T:0042][NPC:Goblin01] Chase -> AttackWindup  (in attack range)`
+
+---
+
+## Squad Details
+
+**Status lifecycle:**
+```
+Normal → Confused : leader NPC dies
+Confused → Broken : leader dies again while in Confused state
+```
+
+**Squad::update() sub-step order (fixed each tick):**
+1. `removeDeadMembers` — prune dead NPC ids
+2. `checkLeaderValidity` — detect leader death, enter Confused
+3. `updateConfused` / `updateBroken` — manage status timers
+4. `selectTarget(dt, room)` — aggro hysteresis: acquire within `detectionRange`, retain within `chaseRange` for up to `TARGET_MEMORY_DURATION` (4s)
+5. `pushCommandsToMembers` — dispatch `NpcCommand` to each live NPC
+
+Squad disbands automatically when alive member count falls below `MIN_MEMBERS_TO_DISBAND` (2).
+`Broken` status silently ignores `Attack`/`Hold` orders from Platoon; only `Retreat` is accepted.
+
+---
+
+## Platoon Details
+
+Platoon has no physical NPC — it is a pure tactical coordinator with no death condition.
+Removed from `Room::platoons_` only when all of its Squads have disbanded.
+
+**`evaluateTactics()` each tick:**
+- Aggregates `combatEfficiency` (= aliveRatio × avgHpRatio) across all Squad reports
+- If overall efficiency < `RETREAT_EFFICIENCY_THRESHOLD` (0.25) → issues `SquadOrderType::Retreat` to all Squads
+- Primary target changes are rate-limited by `TARGET_CHANGE_COOLDOWN` (1.0s)
+- Target selection uses `selectPrimaryTarget()` — picks the living player visible to any Squad
 
 ---
 
 ## viz/ Module Details
 
 ### Renderer
-- `Camera` struct: `worldCenterX/Z` (world point at screen center), `scale` (px/unit)
-- Default: center=(20,0), scale=12 → fits scenario world (-5…40 X, -15…15 Z) in 920×660
+- `Camera` struct: `worldCenterX/Z`, `scale` (px/unit)
+- Default: center=(20,0), scale=12 → fits scenario world in 1280×800
 - Double-buffered: `CreateCompatibleDC` → draw → `BitBlt` → `DeleteDC`
 - **Always** `DeleteObject` every `HPEN` / `HBRUSH` created inline
 - `#define NOMINMAX` before `<windows.h>` — prevents `min`/`max` macro conflicts
+- 8-color state legend: Idle(grey) / Chase(red) / Windup(orange) / Recover(dark orange) / Return(green) / Reposition(purple) / Regroup(sky-blue) / Dead(near-black)
 
 ### Application
-- `WM_TIMER` (16 ms) drives `room_.tick(DT)` → `buildSnapshot()` → `InvalidateRect`
+- `WM_TIMER` (16 ms, ~60 FPS) drives `room_.tick(DT)` → `buildSnapshot()` → `InvalidateRect`
 - `WM_PAINT` triggers double-buffered `renderer_.render()`
-- `GWLP_USERDATA` stores `Application*`; set at `WM_NCCREATE` time (before `WM_CREATE`)
-- `hwnd_` is stored at `WM_NCCREATE` so all subsequent handlers can use it safely
+- `GWLP_USERDATA` stores `Application*`; set at `WM_NCCREATE` (before `WM_CREATE`)
+- `hwnd_` stored at `WM_NCCREATE` so all subsequent handlers can use it safely
+
+**Simulation modes** (`SimMode` enum, default `HumanControl`):
+- `AutoWaypoint` — both P1 and P2 follow scripted cyclic waypoints; set up via `setupSimulation()`
+- `HumanControl` — P1 controlled via arrow keys, P2 auto-routed; set up via `setupHumanSimulation()`
+
+**NPC presets** (configured in `setupSimulation` / `setupHumanSimulation`):
+- **Goblin** — speed 5.5, detectionRange 12, windup 0.3s / recover 0.6s, separationRadius 3.5, canReAggro=true
+- **Orc** — speed 3.0, detectionRange 8, attackRange 3.0, windup 0.6s / recover 1.4s, separationRadius 5.0, canReAggro=false
 
 ---
 
 ## Key Design Constraints
 
-- **No ECS, no Behavior Tree, no GOAP** in v1
+- **No ECS, no Behavior Tree, no GOAP**
 - **No external libraries** — STL + WinAPI/GDI only
 - **No DirectXMath in sim/** — use `sim::Vec3` (simple POD, no alignment requirements)
 - **No pseudo-code** — all code must compile as-is
 - `sim/` types must remain usable without a WinAPI environment (server portability)
+- Squad is the **sole issuer** of `NpcCommand` — NPCs in a Squad never self-command
 
 ---
 

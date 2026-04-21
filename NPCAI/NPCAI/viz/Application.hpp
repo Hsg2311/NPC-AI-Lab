@@ -2,7 +2,9 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <memory>
 #include "../sim/Room.hpp"
+#include "../sim/Scenario.hpp"
 #include "Renderer.hpp"
 
 namespace viz {
@@ -17,14 +19,10 @@ namespace viz {
 //     double-buffer render via Renderer
 //
 // Keys:
-//   Arrows – move player (HumanControl mode only)
+//   Arrows – move player
 //   Space  – toggle pause / resume
 //   S      – step one tick (pause must be active)
 //   Esc    – quit
-//
-// simMode_:
-//   AutoWaypoint  – original P1/P2 auto-waypoint simulation
-//   HumanControl  – 1 human-controlled player + same NPC layout
 
 class Application {
 public:
@@ -40,27 +38,22 @@ private:
     LRESULT handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
     // ── Simulation helpers ──────────────────────────────────────────────────
-    void setupSimulation();           // AutoWaypoint: P1/P2 + NPC (기존)
-    void setupHumanSimulation();      // HumanControl: P1(human) + same NPCs
     void stepOneTick(HWND hwnd);
-
-    // ── Simulation mode ─────────────────────────────────────────────────────
-    enum class SimMode { AutoWaypoint, HumanControl };
 
     // ── Data ────────────────────────────────────────────────────────────────
     HINSTANCE hInst_{ nullptr };
     HWND hwnd_{ nullptr };
     bool paused_{ false };
 
-    sim::Room room_;
+    sim::Room     room_;
     sim::DebugSnapshot snapshot_{};
-    Renderer renderer_{};
+    Renderer      renderer_{};
 
-    SimMode      simMode_{ SimMode::HumanControl };
-    // ── Player control (HumanControl 모드 전용) ─────────────────────────────
+    std::unique_ptr<sim::Scenario> scenario_;
+
     // keysHeld_: 0=Up  1=Down  2=Left  3=Right
     bool         keysHeld_[4]{};
-    sim::Player* controlledPlayer_{ nullptr };   // non-owning
+    sim::Player* controlledPlayer_{ nullptr };   // non-owning, set by scenario
 
     static constexpr int TIMER_ID{ 1 };
     static constexpr UINT TIMER_MS{ 16 };        // ~60 FPS

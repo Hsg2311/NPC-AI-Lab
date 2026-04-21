@@ -1,7 +1,5 @@
 ﻿#include "Application.hpp"
-#include "../sim/Player.hpp"
-#include "../sim/Npc.hpp"
-#include <memory>
+#include "../sim/ScenarioSoloNpc.hpp"
 #include <cstdio>
 
 namespace viz {
@@ -49,10 +47,9 @@ bool Application::init(HINSTANCE hInst, int nCmdShow) {
         return false;
     }
 
-    if (simMode_ == SimMode::HumanControl)
-        setupHumanSimulation();
-    else
-        setupSimulation();
+    scenario_ = std::make_unique<sim::ScenarioSoloNpc>();
+    scenario_->setup(room_);
+    controlledPlayer_ = scenario_->controlledPlayer();
 
     // Build initial snapshot so window isn't blank before first tick
     snapshot_        = room_.buildSnapshot();
@@ -75,135 +72,11 @@ void Application::run() {
     }
 }
 
-// ─── setupSimulation ─────────────────────────────────────────────────────────
-
-void Application::setupSimulation() {
-    using namespace sim;
-
-    // ── Players ──────────────────────────────────────────────────────────────
-    auto p1 = std::make_shared<Player>( "P1", Vec3{ 0.f, 0.f,  0.f }, 100.f, 10.f );
-    auto p2 = std::make_shared<Player>( "P2", Vec3{ 30.f, 0.f,  0.f }, 100.f, 10.f );
-    room_.addActor(p1);
-    room_.addActor(p2);
-
-    // P1 patrols a rectangle through the goblin camp
-    room_.getDummyController().addControl(p1->getId(), {
-        Vec3{  5.f, 0.f,  6.f },
-        Vec3{ 16.f, 0.f,  6.f },
-        Vec3{ 16.f, 0.f, -6.f },
-        Vec3{  5.f, 0.f, -6.f },
-    }, /*loop=*/true);
-
-    // P2 walks back-and-forth past the Orc post
-    room_.getDummyController().addControl(p2->getId(), {
-        Vec3{ 22.f, 0.f, 0.f },
-        Vec3{ 38.f, 0.f, 0.f },
-    }, /*loop=*/true);
-
-    // ── Goblins ──────────────────────────────────────────────────────────────
-    NpcConfig goblin;
-    goblin.maxHp              = 60.f;
-    goblin.moveSpeed          = 5.5f;
-    goblin.detectionRange     = 12.f;
-    goblin.attackRange        = 1.8f;
-    goblin.chaseRange         = 20.f;
-    goblin.maxChaseDistance   = 24.f;
-    goblin.attackDamage       = 8.f;
-    goblin.attackWindupTime   = 0.30f;  // windup + recover ~= 0.9s (replaces attackCooldown)
-    goblin.attackRecoverTime  = 0.60f;
-    goblin.separationRadius   = 3.5f;
-    goblin.separationWeight   = 0.7f;
-    goblin.canReAggroOnReturn = true;
-    goblin.repositionRadius   = 3.0f;   // >= separationRadius * 0.7 = 2.45
-    goblin.overlapThreshold   = 2;
-
-    // ── Orc (주석 처리 — Goblin AI 집중 테스트) ──────────────────────────────
-    // NpcConfig orc;
-    // orc.maxHp              = 120.f;
-    // orc.moveSpeed          = 3.0f;
-    // orc.detectionRange     = 8.f;
-    // orc.attackRange        = 3.0f;
-    // orc.chaseRange         = 18.f;
-    // orc.maxChaseDistance   = 22.f;
-    // orc.attackDamage       = 22.f;
-    // orc.attackWindupTime   = 0.60f;
-    // orc.attackRecoverTime  = 1.40f;
-    // orc.separationRadius   = 5.0f;
-    // orc.separationWeight   = 0.5f;
-    // orc.canReAggroOnReturn = false;
-    // orc.repositionRadius   = 4.0f;
-    // orc.overlapThreshold   = 1;
-
-    room_.spawnPlatoon("Goblin", {
-        { Vec3{ 10.f, 0.f,  0.f },
-          Vec3{ 13.f, 0.f,  3.f } }
-    }, goblin);
-
-    // room_.addActor(std::make_shared<Npc>("Orc01", Vec3{ 28.f, 0.f, 0.f }, orc));
-
-    printf("[Sim] Room ready: 2 players, 2 goblins (platoon #0 / squad #0)\n");
-}
-
-// ─── setupHumanSimulation ────────────────────────────────────────────────────
-
-void Application::setupHumanSimulation() {
-    using namespace sim;
-
-    // ── Player (human-controlled) ─────────────────────────────────────────────
-    auto p1 = std::make_shared<Player>("P1", Vec3{ 0.f, 0.f, 20.f }, 100.f, 20.f);
-    room_.addActor(p1);
-    controlledPlayer_ = p1.get();
-
-    // ── Goblins ───────────────────────────────────────────────────────────────
-    NpcConfig goblin;
-    goblin.maxHp              = 60.f;
-    goblin.moveSpeed          = 5.5f;
-    goblin.detectionRange     = 12.f;
-    goblin.attackRange        = 1.8f;
-    goblin.chaseRange         = 20.f;
-    goblin.maxChaseDistance   = 24.f;
-    goblin.attackDamage       = 8.f;
-    goblin.attackWindupTime   = 0.30f;
-    goblin.attackRecoverTime  = 0.60f;
-    goblin.separationRadius   = 3.5f;
-    goblin.separationWeight   = 0.7f;
-    goblin.canReAggroOnReturn = true;
-    goblin.repositionRadius   = 3.0f;
-    goblin.overlapThreshold   = 2;
-
-    // ── Orc (주석 처리 — Goblin AI 집중 테스트) ──────────────────────────────
-    // NpcConfig orc;
-    // orc.maxHp              = 120.f;
-    // orc.moveSpeed          = 3.0f;
-    // orc.detectionRange     = 8.f;
-    // orc.attackRange        = 3.0f;
-    // orc.chaseRange         = 18.f;
-    // orc.maxChaseDistance   = 22.f;
-    // orc.attackDamage       = 22.f;
-    // orc.attackWindupTime   = 0.60f;
-    // orc.attackRecoverTime  = 1.40f;
-    // orc.separationRadius   = 5.0f;
-    // orc.separationWeight   = 0.5f;
-    // orc.canReAggroOnReturn = false;
-    // orc.repositionRadius   = 4.0f;
-    // orc.overlapThreshold   = 1;
-
-    room_.spawnPlatoon("Goblin", {
-        { Vec3{ 10.f, 0.f,  0.f },
-          Vec3{ 13.f, 0.f,  3.f } }
-    }, goblin);
-
-    // room_.addActor(std::make_shared<Npc>("Orc01", Vec3{ 28.f, 0.f, 0.f }, orc));
-
-    printf("[Sim] HumanControl mode: 1 player (human), 2 goblins (platoon #0 / squad #0)\n");
-}
-
 // ─── stepOneTick ─────────────────────────────────────────────────────────────
 
 void Application::stepOneTick(HWND hwnd) {
-    // ── HumanControl: 매 틱 전 방향키 입력 → moveTarget 갱신 ─────────────────
-    if (simMode_ == SimMode::HumanControl &&
-        controlledPlayer_ && controlledPlayer_->isAlive())
+    // ── 방향키 입력 → moveTarget 갱신 ───────────────────────────────────────
+    if (controlledPlayer_ && controlledPlayer_->isAlive())
     {
         sim::Vec3 dir{};
         if (keysHeld_[0]) dir.z -= 1.f;   // Up
