@@ -248,3 +248,29 @@ leash 위반으로 Return에 진입하면 실제로 home에 도달(`distToHome <
 `leashBreak_`이 해제되어 이후 re-aggro가 허용된다.
 
 ---
+
+## [5] AttackWindup 취소가 회피 메커니즘 의도와 반대로 동작하는 문제
+
+**발견:** AttackWindup 중 플레이어가 `attackRange × 1.2` 밖으로 이동하면 windupTimer를 리셋하고 Chase로 복귀했다. 의도한 설계는 "플레이어가 windup 모션을 보고 피할 수 있는" 회피 가능 공격이었다.
+
+**원인:** 이탈 거리 체크가 windupTimer보다 먼저 평가되어, 플레이어가 살짝 물러나기만 해도 공격이 취소되고 NPC가 다시 쫓아오는 Chase → Windup → Chase 반복이 발생했다.
+
+**수정:** `updateAttackWindup()`에서 `dist > attackRange_ × 1.2` 이탈 체크 블록 제거. windupTimer 완료 시 사거리 체크로 hit/miss 판정:
+- 범위 내: 데미지 적용 → AttackRecover
+- 범위 밖: miss 로그 → AttackRecover (targetId_ 유지, 이후 Chase 재진입)
+
+`windupTime`이 플레이어의 유효 회피 창이 된다.
+
+---
+
+## [6] Reposition 고정 슬롯이 이동하는 타겟에 반응하지 못하는 문제
+
+**발견:** `calcRepositionTarget()`이 진입 시점의 타겟 위치를 스냅샷으로 찍어 고정 좌표를 슬롯으로 사용했다. 플레이어가 이동하면 NPC가 타겟이 있었던 빈 자리로 이동하고, 슬롯 도착 후 Chase로 전환되어 Reposition이 실질적으로 "잠깐 엉뚱한 방향으로 달리기"가 됐다.
+
+추가로 `repositionRadius_ > attackRange_` (Goblin: 3.0 > 1.8, Orc: 4.0 > 3.0)이라 슬롯 도착 시 항상 sattackRange 밖에 위치, `Reposition → AttackWindup` 전이가 사실상 dead code였다.
+
+**수정:** 고정 슬롯 개념 전면 제거. 진입 시 타겟 방향 수직 벡터(`repositionDir_`)를 한 번 계산하고, 매 틱 `toTarget + repositionDir_ × 0.8`을 블렌드해 이동. 타겟이 이동해도 NPC가 계속 접근하면서 군집을 탈출한다. `isOvercrowded()` 해소 또는 `REPOSITION_TIMEOUT(1.5s)` 초과 시 종료.
+
+**제거된 것:** `NpcConfig::repositionRadius`, `calcRepositionTarget()`, `repositionTarget_`, `hasRepositionTarget_`, DebugSnapshot reposition 필드, Renderer 슬롯 시각화
+
+---

@@ -26,7 +26,6 @@ void ScenarioSoloNpc::setup(Room& room) {
     goblin.separationRadius   = 3.5f;
     goblin.separationWeight   = 0.7f;
     goblin.canReAggroOnReturn = true;
-    goblin.repositionRadius   = 3.0f;
     goblin.overlapThreshold   = 2;
 
     // ── Orc 설정 ──────────────────────────────────────────────────────────────
@@ -43,19 +42,26 @@ void ScenarioSoloNpc::setup(Room& room) {
     orc.separationRadius   = 5.0f;
     orc.separationWeight   = 0.5f;
     orc.canReAggroOnReturn = false;
-    orc.repositionRadius   = 4.0f;
     orc.overlapThreshold   = 1;
 
-    // ── 독립 Goblin 3마리 ─────────────────────────────────────────────────────
+    // ── 독립 Goblin 10마리 ───────────────────────────────────────────────────
     room.addActor(std::make_shared<Npc>("Goblin01", Vec3{ 10.f, 0.f,  5.f }, goblin));
     room.addActor(std::make_shared<Npc>("Goblin02", Vec3{ 15.f, 0.f, -3.f }, goblin));
     room.addActor(std::make_shared<Npc>("Goblin03", Vec3{  8.f, 0.f, -8.f }, goblin));
+    room.addActor(std::make_shared<Npc>("Goblin04", Vec3{ 20.f, 0.f,  8.f }, goblin));
+    room.addActor(std::make_shared<Npc>("Goblin05", Vec3{ 22.f, 0.f, -2.f }, goblin));
+    room.addActor(std::make_shared<Npc>("Goblin06", Vec3{ 18.f, 0.f, -10.f}, goblin));
+    room.addActor(std::make_shared<Npc>("Goblin07", Vec3{ 28.f, 0.f,  3.f }, goblin));
+    room.addActor(std::make_shared<Npc>("Goblin08", Vec3{ 25.f, 0.f, -8.f }, goblin));
+    room.addActor(std::make_shared<Npc>("Goblin09", Vec3{ 12.f, 0.f, 12.f }, goblin));
+    room.addActor(std::make_shared<Npc>("Goblin10", Vec3{ 30.f, 0.f, -4.f }, goblin));
 
     // ── 독립 Orc 2마리 ────────────────────────────────────────────────────────
     //room.addActor(std::make_shared<Npc>("Orc01", Vec3{ 25.f, 0.f,  0.f }, orc));
     //room.addActor(std::make_shared<Npc>("Orc02", Vec3{ 28.f, 0.f,  8.f }, orc));
 
-    printf("[Sim] ScenarioSoloNpc: 1 player, 3 goblins, 2 orcs (all standalone)\n");
+    //printf("[Sim] ScenarioSoloNpc: 1 player, 3 goblins, 2 orcs (all standalone)\n");
+    printf("[Sim] ScenarioSoloNpc: 1 player, 10 goblins (all standalone)\n");
 }
 
 } // namespace sim

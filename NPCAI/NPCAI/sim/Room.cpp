@@ -322,9 +322,6 @@ DebugSnapshot Room::buildSnapshot() const {
             e.homeZ               = npc->getSpawnPos().z;
             e.windupProgress      = npc->getWindupProgress();
             e.recoverProgress     = npc->getRecoverProgress();
-            e.hasRepositionTarget = npc->hasRepositionTarget();
-            e.repositionX         = npc->getRepositionTargetPos().x;
-            e.repositionZ         = npc->getRepositionTargetPos().z;
             e.squadId             = npc->getSquadId();
             e.isLeader            = npc->getIsLeader();
             snap.npcs.push_back(e);

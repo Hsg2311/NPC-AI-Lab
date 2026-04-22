@@ -117,8 +117,7 @@ Idle   → Chase          : player within detectionRange (score-based selection)
 Chase  → AttackWindup   : dist ≤ attackRange
 Chase  → Regroup        : squad active + target gone/leash exceeded/too far from home
 Chase  → Return         : standalone (squadId_==-1) target gone/leash exceeded/too far from home
-AttackWindup → AttackRecover : windupTimer complete → damage applied
-AttackWindup → Chase         : dist > attackRange × 1.5
+AttackWindup → AttackRecover : windupTimer complete → hit if in range, miss if out of range (NPC commits to swing)
 AttackWindup → Regroup/Return: target gone / too far from home
 AttackRecover → AttackWindup : timer done, in range, not overcrowded
 AttackRecover → Chase        : timer done, out of range, not overcrowded

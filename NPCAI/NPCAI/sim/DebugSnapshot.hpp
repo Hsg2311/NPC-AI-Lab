@@ -43,9 +43,6 @@ struct DebugNpcEntry {
     float       homeZ{ 0.f };
     float       windupProgress{ 0.f };   // 0-1, AttackWindup fraction complete
     float       recoverProgress{ 0.f };  // 0-1, AttackRecover fraction complete
-    bool        hasRepositionTarget{ false };
-    float       repositionX{ 0.f };
-    float       repositionZ{ 0.f };
     // ── Squad fields ──────────────────────────────────────────────────────
     int  squadId{ -1 };     // -1 = not in squad
     bool isLeader{ false };

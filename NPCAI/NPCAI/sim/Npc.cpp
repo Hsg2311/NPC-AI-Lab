@@ -44,7 +44,6 @@ Npc::Npc(const std::string& name, const Vec3& pos, const NpcConfig& cfg)
     , separationRadius_(cfg.separationRadius)
     , separationWeight_(cfg.separationWeight)
     , canReAggroOnReturn_(cfg.canReAggroOnReturn)
-    , repositionRadius_(cfg.repositionRadius)
     , overlapThreshold_(cfg.overlapThreshold)
 {}
 
@@ -158,8 +157,9 @@ void Npc::update(float dt, Room& room) {
 void Npc::transitionTo(NpcState next, const char* reason) {
     if (state_ == next) return;
     Logger::get().logTransition(name_, npcStateStr(state_), npcStateStr(next), reason);
-    if (next == NpcState::AttackWindup)  windupTimer_  = 0.f;
-    if (next == NpcState::AttackRecover) recoverTimer_ = 0.f;
+    if (next == NpcState::AttackWindup)  windupTimer_   = 0.f;
+    if (next == NpcState::AttackRecover) recoverTimer_  = 0.f;
+    if (next == NpcState::Reposition)    repositionTimer_ = 0.f;
     state_ = next;
 }
 
@@ -275,31 +275,35 @@ void Npc::updateAttackWindup(float dt, Room& room) {
         return;
     }
 
-    float dist = Vec3::distance(position_, target->getPosition());
-    if (dist > attackRange_ * 1.2f) {
-        transitionTo(NpcState::Chase, "target escaped during windup");
-        return;
-    }
-
     Vec3 sep = calcSeparationForce(room);
     if (sep.length() > 0.1f)
         facing_ = (facing_ + sep * 0.3f).normalized();
 
     windupTimer_ += dt;
     if (windupTimer_ >= attackWindupTime_) {
-        target->takeDamage(attackDamage_);
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "hit %s for %.0f  (hp=%.1f)",
-            target->getName().c_str(), attackDamage_, target->getHp());
-        Logger::get().log("NPC:" + name_, buf);
+        float dist = Vec3::distance(position_, target->getPosition());
+        if (dist <= attackRange_) {
+            target->takeDamage(attackDamage_);
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "hit %s for %.0f  (hp=%.1f)",
+                target->getName().c_str(), attackDamage_, target->getHp());
+            Logger::get().log("NPC:" + name_, buf);
 
-        if (!target->isAlive()) {
-            targetId_ = 0;
-            transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
-                         "target killed");
-            return;
+            if (!target->isAlive()) {
+                targetId_ = 0;
+                transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
+                             "target killed");
+                return;
+            }
+            transitionTo(NpcState::AttackRecover, "windup complete");
         }
-        transitionTo(NpcState::AttackRecover, "windup complete");
+        else {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "missed %s (dist=%.1f > range=%.1f)",
+                target->getName().c_str(), dist, attackRange_);
+            Logger::get().log("NPC:" + name_, buf);
+            transitionTo(NpcState::AttackRecover, "swung and missed");
+        }
     }
 }
 
@@ -328,8 +332,11 @@ void Npc::updateAttackRecover(float dt, Room& room) {
     recoverTimer_ += dt;
     if (recoverTimer_ >= attackRecoverTime_) {
         if (isOvercrowded(room)) {
-            repositionTarget_    = calcRepositionTarget(target->getPosition());
-            hasRepositionTarget_ = true;
+            Vec3 toTarget  = (target->getPosition() - position_).normalized();
+            // Perpendicular sidestep direction: odd id → left, even id → right
+            repositionDir_ = (id_ % 2 == 0)
+                ? Vec3{  toTarget.z, 0.f, -toTarget.x }
+                : Vec3{ -toTarget.z, 0.f,  toTarget.x };
             transitionTo(NpcState::Reposition, "overcrowded after recover");
             return;
         }
@@ -401,40 +408,44 @@ void Npc::updateRegroup(float dt, Room& room) {
 }
 
 // ─── Reposition ───────────────────────────────────────────────────────────────
+// Sidestep away from crowded position: blend toward target + perpendicular dir.
+// Exits when no longer overcrowded, or after REPOSITION_TIMEOUT seconds.
 
 void Npc::updateReposition(float dt, Room& room) {
     Actor* target = resolveTarget(room);
     if (!target) {
         targetId_ = 0;
-        hasRepositionTarget_ = false;
         transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
                      "target lost during reposition");
         return;
     }
     if (isTooFarFromHome()) {
         targetId_ = 0;
-        hasRepositionTarget_ = false;
         leashBreak_ = true;
         transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
                      "too far from home");
         return;
     }
 
-    float distToSlot = Vec3::distance(position_, repositionTarget_);
-    if (distToSlot < 0.4f) {
-        hasRepositionTarget_ = false;
-        float distToTarget = Vec3::distance(position_, target->getPosition());
-        if (distToTarget <= attackRange_)
+    repositionTimer_ += dt;
+    if (repositionTimer_ >= REPOSITION_TIMEOUT) {
+        transitionTo(NpcState::Chase, "reposition timeout");
+        return;
+    }
+
+    if (!isOvercrowded(room)) {
+        float dist = Vec3::distance(position_, target->getPosition());
+        if (dist <= attackRange_)
             transitionTo(NpcState::AttackWindup, "reposition done, in range");
         else
             transitionTo(NpcState::Chase, "reposition done, chasing");
         return;
     }
 
-    Vec3 dir     = (repositionTarget_ - position_).normalized();
-    Vec3 sep     = calcSeparationForce(room);
-    Vec3 moveDir = (dir + sep * separationWeight_).normalized();
-    facing_   = moveDir;
+    Vec3 toTarget = (target->getPosition() - position_).normalized();
+    Vec3 sep      = calcSeparationForce(room);
+    Vec3 moveDir  = (toTarget + repositionDir_ * 0.8f + sep * separationWeight_).normalized();
+    facing_    = moveDir;
     position_ += moveDir * (moveSpeed_ * dt);
 }
 
@@ -566,18 +577,6 @@ Vec3 Npc::calcSeparationForce(Room& room) const {
         force += away.normalized() * strength;
     }
     return force;
-}
-
-// ─── calcRepositionTarget ────────────────────────────────────────────────────
-
-Vec3 Npc::calcRepositionTarget(const Vec3& targetPos) const {
-    float angle  = static_cast<float>(id_) * 2.399963f;
-    float radius = repositionRadius_;
-    return Vec3{
-        targetPos.x + std::cosf(angle) * radius,
-        0.f,
-        targetPos.z + std::sinf(angle) * radius
-    };
 }
 
 // ─── isTooFarFromHome ────────────────────────────────────────────────────────

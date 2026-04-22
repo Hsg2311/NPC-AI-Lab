@@ -16,7 +16,7 @@ enum class NpcState {
     AttackWindup,   // 2   attack preparation (no movement)
     AttackRecover,  // 3   post-attack cooldown
     Return,         // 4   walking back to spawn (standalone NPCs)
-    Reposition,     // 5   moving to a better attack slot
+    Reposition,     // 5   sidestep away from crowded position
     Regroup,        // 6   rally toward squad target (legacy; standalone NPCs)
     Confused,       // 7   disoriented after leader death (NpcCommand::Confused)
     MoveToSlot,     // 8   moving to formation slot position (future formation use)
@@ -38,7 +38,6 @@ struct NpcConfig {
     float separationRadius   = 4.f;   // push away NPCs within this radius
     float separationWeight   = 0.6f;  // separation force relative to chase force
     bool  canReAggroOnReturn = true;  // standalone NPCs only: re-aggro while returning
-    float repositionRadius   = 3.0f;  // orbit radius for reposition slot
     int   overlapThreshold   = 2;     // trigger Reposition if this many NPCs too close
 };
 
@@ -61,8 +60,6 @@ public:
     float    getSeparationRadius() const { return separationRadius_; }
     float    getWindupProgress()   const;
     float    getRecoverProgress()  const;
-    bool     hasRepositionTarget()    const { return hasRepositionTarget_; }
-    Vec3     getRepositionTargetPos() const { return repositionTarget_; }
 
     // ── Squad integration ─────────────────────────────────────────────────────
     int      getSquadId()    const { return squadId_; }
@@ -96,7 +93,6 @@ private:
     Player* selectBestTarget     (Room& room) const;
     float   evaluateTargetScore  (const Player* p, Room& room) const;
     Vec3    calcSeparationForce  (Room& room) const;
-    Vec3    calcRepositionTarget (const Vec3& targetPos) const;
     bool    isTooFarFromHome     () const;
     bool    isOvercrowded        (Room& room) const;
 
@@ -117,7 +113,6 @@ private:
     float separationRadius_;
     float separationWeight_;
     bool  canReAggroOnReturn_;
-    float repositionRadius_;
     int   overlapThreshold_;
 
     // Timers
@@ -126,8 +121,8 @@ private:
     float targetEvalTimer_{ 0.f };
 
     // Reposition
-    Vec3 repositionTarget_{ 0.f, 0.f, 0.f };
-    bool hasRepositionTarget_{ false };
+    Vec3  repositionDir_  { 1.f, 0.f, 0.f };  // perpendicular sidestep direction
+    float repositionTimer_{ 0.f };
 
     // ── Squad fields ──────────────────────────────────────────────────────────
     bool leashBreak_{ false };     // set when Return is triggered by leash violation; blocks re-aggro until home
@@ -143,8 +138,9 @@ private:
     float confusedTimer_     { 0.f };
     Vec3  confusedDir_       { 1.f, 0.f, 0.f };
 
-    static constexpr float TARGET_EVAL_INTERVAL = 0.5f;
-    static constexpr float CONFUSION_DURATION   = 3.0f;
+    static constexpr float TARGET_EVAL_INTERVAL  = 0.5f;
+    static constexpr float CONFUSION_DURATION    = 3.0f;
+    static constexpr float REPOSITION_TIMEOUT    = 1.5f;
 };
 
 } // namespace sim

@@ -46,19 +46,20 @@
 
 #### 상태 머신 확장 (5→7 state)
 
-- [o] **AttackWindup** — 공격 전 준비 단계
-  - [o] `windupTimer_` 누적, 완료 시 피해 발동 후 AttackRecover 전이
+- [o] **AttackWindup** — 공격 전 준비 단계 (회피 가능한 공격 모션)
+  - [o] `windupTimer_` 누적, 완료 시 사거리 체크 → hit(데미지) or miss (둘 다 AttackRecover 전이)
   - [o] Windup 중 **위치 이동 없음** — separation force는 `facing_`만 조정
-  - [o] 타겟이 `attackRange × 1.5` 이상 벗어나면 Chase로 복귀
+  - [o] 타겟이 도망쳐도 스윙 취소 없음 — NPC가 끝까지 commit
   - [o] `transitionTo()` 진입 시 `windupTimer_ = 0` 리셋 (entry timer reset 패턴)
 - [o] **AttackRecover** — 공격 후 경직 단계
   - [o] `recoverTimer_` 누적, 경직 중 약한 separation drift 허용 (`weight × 0.3 × speed × dt`)
   - [o] 완료 시 `isOvercrowded()` 판단 → Reposition 또는 Chase/AttackWindup 전이
   - [o] `transitionTo()` 진입 시 `recoverTimer_ = 0` 리셋
-- [o] **Reposition** — 혼잡 시 공격 위치 재배치
-  - [o] `calcRepositionTarget()`: golden angle (`id_ × 2.399963 rad`) 기반 균등 분산
-  - [o] 슬롯 도착 시 거리 판단 → AttackWindup 또는 Chase 전이
-  - [o] `repositionRadius >= separationRadius × 0.7` 조건 보장 (진동 방지)
+- [o] **Reposition** — 과밀 탈출 비켜서기
+  - [o] 진입 시 수직 방향 계산 (`repositionDir_`): 홀수 id → 왼쪽, 짝수 id → 오른쪽
+  - [o] 매 틱 `toTarget + repositionDir_ × 0.8` 블렌드 이동 (타겟 추적 유지)
+  - [o] `isOvercrowded()` 해소 시 Chase / AttackWindup 전이
+  - [o] `REPOSITION_TIMEOUT (1.5s)` 초과 시 Chase 강제 전환
 
 #### Separation Force
 
@@ -101,7 +102,7 @@
 
 - [o] **Home 마커** — NPC 스폰 위치에 `×` (drawHomeMarker, 회색 X 십자)
 - [o] **Return 점선** — Return 상태일 때 NPC → home 녹색 점선
-- [o] **Reposition 마커** — 재배치 슬롯에 보라색 원 + NPC → 슬롯 점선
+- [x] **Reposition 마커** — 제거됨 (슬롯 좌표 개념 삭제로 불필요)
 - [o] **Windup/Recover 게이지** — 몸통 위 20×4 px 진행 바 (주황/갈색)
 - [o] **7색 상태 범례** — Idle(회)/Chase(빨)/Windup(주황)/Recover(진주황)/Return(초록)/Repos(보라)/Dead(검)
 - [o] **플레이어 어그로 카운트** — 플레이어 옆 빨간 `x2` 레이블
@@ -175,14 +176,14 @@ Idle   → Chase          : detectionRange 내 플레이어 감지 (score 기반
 Chase  → AttackWindup   : dist ≤ attackRange
 Chase  → Return         : target 소멸 / dist > chaseRange / too far from home
 AttackWindup → AttackRecover : windupTimer 완료 → 피해 발동
-AttackWindup → Chase         : dist > attackRange × 1.5 (타겟 이탈)
+AttackWindup → AttackRecover : windupTimer 완료 → hit(범위 내) or miss(범위 밖)
 AttackWindup → Return        : target 소멸 / too far from home
 AttackRecover → AttackWindup : 경직 완료, in range, 혼잡 없음
 AttackRecover → Chase        : 경직 완료, out of range, 혼잡 없음
 AttackRecover → Reposition   : 경직 완료, isOvercrowded()
 AttackRecover → Return       : target 소멸 / too far from home
-Reposition → AttackWindup    : 슬롯 도착, dist ≤ attackRange
-Reposition → Chase           : 슬롯 도착, dist > attackRange
+Reposition → AttackWindup    : isOvercrowded() 해소 && dist ≤ attackRange
+Reposition → Chase           : isOvercrowded() 해소 && dist > attackRange, 또는 REPOSITION_TIMEOUT(1.5s) 초과
 Reposition → Return          : target 소멸 / too far from home
 Return → Chase               : detectionRange 내 플레이어 재감지 (canReAggroOnReturn=true 시)
 Return → Idle                : dist to spawnPos < 0.3
@@ -476,6 +477,26 @@ Dead    → (none)             : terminal
 - [o] `std::unique_ptr<sim::Scenario> scenario_` 멤버 추가
 - [o] `init()` 에서 `ScenarioSoloNpc` 생성 후 `setup(room_)` 호출
 - [o] `stepOneTick()` 의 `simMode_` 분기 제거 — `controlledPlayer_ != nullptr` 체크로 단순화
+
+---
+
+## 갱신: 2026-04-22 — AttackWindup 회피 메커니즘 + Reposition 방식 변경
+
+### AttackWindup — commit to swing
+
+windupTimer 완료 시 사거리 체크로 hit/miss 판정. 타겟이 도망쳐도 스윙 취소 없음.
+miss여도 `targetId_` 유지 → AttackRecover 후 자동으로 Chase 재진입.
+`windupTime`이 플레이어의 회피 가능 시간이 된다 (Goblin 0.3s, Orc 0.6s).
+
+**제거:** `AttackWindup → Chase (dist > attackRange × 1.2)` 전이
+
+### Reposition — 고정 슬롯 → 수직 비켜서기
+
+황금각 기반 고정 좌표 슬롯 이동 방식을 제거. 타겟 방향 + 수직 이탈 방향 블렌드로 교체.
+플레이어가 이동해도 NPC가 타겟을 계속 추적하면서 군집을 탈출한다.
+
+**제거:** `NpcConfig::repositionRadius`, `calcRepositionTarget()`, `repositionTarget_/hasRepositionTarget_`
+**제거:** `DebugSnapshot`의 reposition 좌표 필드, Renderer의 슬롯 시각화
 
 ### 새 시나리오 추가 방법
 

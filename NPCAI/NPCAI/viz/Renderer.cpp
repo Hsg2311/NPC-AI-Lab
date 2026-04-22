@@ -216,28 +216,6 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
         // ── Target line (dotted yellow) ──────────────────────────────────────
         drawTargetLine(hdc, w, h, npc, snap);
 
-        // ── Reposition target: small purple circle + dotted line ─────────────
-        if (npc.hasRepositionTarget) {
-            POINT rpt = worldToScreen(npc.repositionX, npc.repositionZ, w, h);
-            {
-                int    r    = 5;
-                HPEN   pen  = CreatePen(PS_SOLID, 2, RGB(160, 60, 200));
-                HPEN   oldP = static_cast<HPEN>(SelectObject(hdc, pen));
-                HBRUSH oldB = static_cast<HBRUSH>(SelectObject(hdc, GetStockObject(NULL_BRUSH)));
-                Ellipse(hdc, rpt.x - r, rpt.y - r, rpt.x + r, rpt.y + r);
-                SelectObject(hdc, oldP);
-                SelectObject(hdc, oldB);
-                DeleteObject(pen);
-            }
-            {
-                HPEN dpen  = CreatePen(PS_DOT, 1, RGB(160, 60, 200));
-                HPEN oldDP = static_cast<HPEN>(SelectObject(hdc, dpen));
-                MoveToEx(hdc, center.x, center.y, nullptr);
-                LineTo  (hdc, rpt.x,    rpt.y);
-                SelectObject(hdc, oldDP);
-                DeleteObject(dpen);
-            }
-        }
     }
 
     // ── Body circle ─────────────────────────────────────────────────────────
