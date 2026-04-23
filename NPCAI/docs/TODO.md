@@ -110,6 +110,34 @@
 
 ---
 
+## 아키텍처 결정 사항
+
+### standalone NPC chaseRange_ 경계 핑퐁 grace timer — Squad AI 이후 판단 (검토: 2026-04-23)
+
+chaseRange_ 경계에서 두 플레이어가 NPC를 교대로 유인해 Chase↔Return을 반복하는 패턴에 대해
+standalone NPC용 타겟 grace timer 도입을 검토했으나 **보류**.
+
+- chaseRange_ 경계 핑퐁은 두 플레이어가 정확히 22u 경계에 동시에 위치하면서 re-aggro 타이밍을
+  맞춰야 해 실전 빈도가 낮음
+- Squad::selectTarget()의 TARGET_MEMORY_DURATION(4s) 히스테리시스가 동등한 역할을 하며,
+  다중 플레이어 시나리오는 대부분 Squad 컨텍스트에서 발생
+- grace timer 추가 시 standalone 전용 상태가 늘어나고, Squad AI 설계 후 구조가 바뀌면
+  재수정 가능성이 있음
+- **결론:** Squad AI 설계 완료 후 standalone NPC grace timer 필요 여부를 함께 판단
+
+---
+
+### FSM 유지 결정 (검토: 2026-04-23)
+
+NPC 개별 행동 AI를 FSM에서 Behavior Tree(BT)로 전환하는 방안을 검토했으나 **현행 FSM 유지**로 결정.
+
+- 현재 11개 상태 FSM은 Squad/Platoon 계층과 명확히 분리되어 있어 BT 도입 이점이 크지 않음
+- BT가 FSM 대비 유리해지는 시점은 행동 조합이 폭발적으로 늘어날 때인데, 상위 의사결정은 Squad/Platoon이 담당하고 NPC 개별 행동은 전투 루틴에 집중되어 있어 FSM으로 충분한 복잡도
+- 외부 라이브러리 금지 원칙상 BT 프레임워크를 직접 구현해야 하는 부담이 큼
+- CLAUDE.md에 "No Behavior Tree" 제약이 명시되어 있음
+
+---
+
 ## 미완료 / 다음 단계
 
 ### [v3] DummyPlayerController 패턴 확장

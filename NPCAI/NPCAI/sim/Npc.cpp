@@ -45,7 +45,16 @@ Npc::Npc(const std::string& name, const Vec3& pos, const NpcConfig& cfg)
     , separationWeight_(cfg.separationWeight)
     , canReAggroOnReturn_(cfg.canReAggroOnReturn)
     , overlapThreshold_(cfg.overlapThreshold)
-{}
+    , returnSpeedMult_(cfg.returnSpeedMult)
+{
+    if (detectionRange_ > chaseRange_) {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf),
+            "[CONFIG] %s: detectionRange(%.1f) > chaseRange(%.1f) - invalid",
+            name_.c_str(), detectionRange_, chaseRange_);
+        Logger::get().log("NPC", buf);
+    }
+}
 
 // ─── Accessors ────────────────────────────────────────────────────────────────
 
@@ -157,9 +166,10 @@ void Npc::update(float dt, Room& room) {
 void Npc::transitionTo(NpcState next, const char* reason) {
     if (state_ == next) return;
     Logger::get().logTransition(name_, npcStateStr(state_), npcStateStr(next), reason);
-    if (next == NpcState::AttackWindup)  windupTimer_   = 0.f;
-    if (next == NpcState::AttackRecover) recoverTimer_  = 0.f;
-    if (next == NpcState::Reposition)    repositionTimer_ = 0.f;
+    if (next == NpcState::Chase)         countedThisEngage_ = false;
+    if (next == NpcState::AttackWindup)  windupTimer_       = 0.f;
+    if (next == NpcState::AttackRecover) recoverTimer_      = 0.f;
+    if (next == NpcState::Reposition)    repositionTimer_   = 0.f;
     state_ = next;
 }
 
@@ -232,7 +242,7 @@ void Npc::updateChase(float dt, Room& room) {
     }
     if (isTooFarFromHome()) {
         targetId_ = 0;
-        leashBreak_ = true;
+        if (!countedThisEngage_) { leashBreakCount_++; countedThisEngage_ = true; }
         transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
                      "too far from home");
         return;
@@ -269,7 +279,7 @@ void Npc::updateAttackWindup(float dt, Room& room) {
     }
     if (isTooFarFromHome()) {
         targetId_ = 0;
-        leashBreak_ = true;
+        if (!countedThisEngage_) { leashBreakCount_++; countedThisEngage_ = true; }
         transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
                      "too far from home");
         return;
@@ -319,7 +329,7 @@ void Npc::updateAttackRecover(float dt, Room& room) {
     }
     if (isTooFarFromHome()) {
         targetId_ = 0;
-        leashBreak_ = true;
+        if (!countedThisEngage_) { leashBreakCount_++; countedThisEngage_ = true; }
         transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
                      "too far from home");
         return;
@@ -353,7 +363,9 @@ void Npc::updateAttackRecover(float dt, Room& room) {
 // Squad members reach Idle instead (they wait for the next EngageTarget).
 
 void Npc::updateReturn(float dt, Room& room) {
-    if (canReAggroOnReturn_ && squadId_ == -1 && !leashBreak_) {
+    bool insideSafeZone = Vec3::distance(position_, spawnPos_) <= maxChaseDistance_ * LEASH_REAGGRO_RATIO;
+    bool underBreakLimit = (leashBreakCount_ < MAX_LEASH_BREAKS);
+    if (canReAggroOnReturn_ && squadId_ == -1 && insideSafeZone && underBreakLimit) {
         Player* candidate = selectBestTarget(room);
         if (candidate &&
             Vec3::distance(position_, candidate->getPosition()) <= detectionRange_) {
@@ -369,8 +381,9 @@ void Npc::updateReturn(float dt, Room& room) {
 
     float distToHome = Vec3::distance(position_, spawnPos_);
     if (distToHome < 0.3f) {
-        position_   = spawnPos_;
-        leashBreak_ = false;
+        position_          = spawnPos_;
+        leashBreakCount_   = 0;
+        countedThisEngage_ = false;
         transitionTo(NpcState::Idle, "reached home");
         return;
     }
@@ -379,7 +392,7 @@ void Npc::updateReturn(float dt, Room& room) {
     Vec3 sep     = calcSeparationForce(room);
     Vec3 moveDir = (homeDir + sep * (separationWeight_ * 0.25f)).normalized();
     facing_   = moveDir;
-    position_ += moveDir * (moveSpeed_ * dt);
+    position_ += moveDir * (moveSpeed_ * returnSpeedMult_ * dt);
 }
 
 // ─── Regroup ──────────────────────────────────────────────────────────────────
@@ -421,7 +434,7 @@ void Npc::updateReposition(float dt, Room& room) {
     }
     if (isTooFarFromHome()) {
         targetId_ = 0;
-        leashBreak_ = true;
+        if (!countedThisEngage_) { leashBreakCount_++; countedThisEngage_ = true; }
         transitionTo((squadId_ != -1) ? NpcState::Idle : NpcState::Return,
                      "too far from home");
         return;

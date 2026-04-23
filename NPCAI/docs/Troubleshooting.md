@@ -274,3 +274,142 @@ leash 위반으로 Return에 진입하면 실제로 home에 도달(`distToHome <
 **제거된 것:** `NpcConfig::repositionRadius`, `calcRepositionTarget()`, `repositionTarget_`, `hasRepositionTarget_`, DebugSnapshot reposition 필드, Renderer 슬롯 시각화
 
 ---
+
+## [7] NpcConfig detectionRange > chaseRange 설정 역전 미감지
+
+**발견:** `evaluateTargetScore()`의 내부 컷오프가 `chaseRange_` 기준이고, `updateIdle()`은 사전에 `detectionRange_`로 필터링한다. 두 값이 정상 관계(`detectionRange_ <= chaseRange_`)이면 문제없지만, 설정 실수로 역전될 경우 동작 이상이 생겨도 컴파일 및 런타임에 아무런 경고가 없었다.
+
+**수정:** `Npc::Npc()` 생성자 끝에 Logger 경고 추가.
+
+```cpp
+if (detectionRange_ > chaseRange_) {
+    char buf[128];
+    std::snprintf(buf, sizeof(buf),
+        "[CONFIG] %s: detectionRange(%.1f) > chaseRange(%.1f) -- invalid config",
+        name_.c_str(), detectionRange_, chaseRange_);
+    Logger::get().log("NPC", buf);
+}
+```
+
+assert 대신 Logger를 사용해 릴리스 빌드에서도 확인 가능하다.
+
+---
+
+## [8] leashBreak_ 귀환 중 NPC 무방비 + Chase/Return 경계 진동
+
+**증상 (1단계 — 무방비):**
+NPC가 `isTooFarFromHome()` 위반으로 Return 진입 시 `leashBreak_ = true`가 세트된다.
+기존 re-aggro 조건 `!leashBreak_`으로 인해 NPC가 집에 완전히 도달(`distToHome < 0.3`)할 때까지
+플레이어가 `detectionRange_` 안에 접근해도 반격하지 못하는 무방비 구간이 발생했다.
+
+**수정 시도 1 — `!isTooFarFromHome()` 교체 (진동 발생):**
+`!leashBreak_`을 `!isTooFarFromHome()`으로 교체했더니 `maxChaseDistance_` 경계에서 진동이 발생했다.
+
+```
+[T:1300][NPC:Goblin09] Chase -> Return  (too far from home)
+[T:1302][NPC:Goblin09] Return -> Chase  (re-aggro on P1 dist=9.4)
+[T:1304][NPC:Goblin09] Chase -> Return  (too far from home)
+[T:1306][NPC:Goblin09] Return -> Chase  (re-aggro on P1 dist=9.4)
+```
+
+원인: NPC가 `maxChaseDistance_` 경계(위치 C)에서 re-aggro → Chase 진입 → `isTooFarFromHome()` 재발동 → Return. Chase에서 이동은 leash 체크 이후에 일어나므로 NPC가 위치 C에 고정된 채 매 2틱 진동한다.
+
+**최종 수정 — 히스테리시스(LEASH_REAGGRO_RATIO):**
+re-aggro 허용 기준을 `maxChaseDistance_`보다 25% 안쪽으로 분리.
+
+`sim/Npc.hpp`:
+```cpp
+static constexpr float LEASH_REAGGRO_RATIO = 0.75f; // 리쉬 위반 귀환 중 re-aggro 허용 기준 (maxChaseDistance_ 대비 비율)
+```
+
+`sim/Npc.cpp` `updateReturn()`:
+```cpp
+bool insideSafeZone = Vec3::distance(position_, spawnPos_) <= maxChaseDistance_ * LEASH_REAGGRO_RATIO;
+if (canReAggroOnReturn_ && squadId_ == -1 && insideSafeZone) {
+    ...
+    leashBreak_ = false;  // re-aggro 시 리셋
+    transitionTo(NpcState::Chase, ...);
+}
+```
+
+NPC가 경계에서 최소 25% 이상 안으로 이동한 뒤에만 re-aggro가 허용되므로, Chase 재진입 후 `isTooFarFromHome()`이 바로 발동되지 않아 구조적으로 진동이 불가능하다.
+
+---
+
+## [9] Return 상태 이동 속도 증가
+
+**발견:** 귀환 중 NPC 이동 속도가 `moveSpeed_`와 동일해 플레이어가 쉽게 따라붙었다.
+`canReAggroOnReturn_ = false`인 NPC(Orc)도 귀환이 매우 느려 전투 흐름이 어색했다.
+
+**수정:**
+
+`sim/Npc.hpp` `NpcConfig`:
+```cpp
+float returnSpeedMult = 2.5f;  // Return 상태 이동 속도 배율
+```
+
+`sim/Npc.cpp` `updateReturn()` 이동 코드:
+```cpp
+position_ += moveDir * (moveSpeed_ * returnSpeedMult_ * dt);
+```
+
+배율 2.5f는 Goblin(speed 5.5) 기준 귀환 속도 13.75, Orc(speed 3.0) 기준 7.5로,
+플레이어가 귀환 중인 NPC를 쫓아가기 어렵게 만든다.
+
+---
+
+## [10] 다중 플레이어 리쉬 핑퐁 exploit 방어 및 leashBreak_ 제거
+
+**문제:** 플레이어 2명 이상이 NPC를 `isTooFarFromHome()` 경계 근방에서 교대로 유인하면,
+NPC가 귀환 중 한 명에게 re-aggro → 다시 경계 위반 → 귀환 → 또 다른 플레이어에게 re-aggro를
+무한 반복할 수 있었다. `leashBreak_` + `LEASH_REAGGRO_RATIO` 조합만으로는 이 패턴을 막지 못했다.
+
+**수정:**
+
+`sim/Npc.hpp` — 카운터 멤버 추가, 상수 추가, `leashBreak_` 제거:
+```cpp
+int  leashBreakCount_{ 0 };       // 이번 귀환 중 누적 리쉬 위반 횟수
+bool countedThisEngage_{ false }; // 이번 교전에서 이미 카운트했으면 true (중복 방지)
+
+static constexpr int MAX_LEASH_BREAKS = 2; // 이 횟수 이상 리쉬 위반 시 강제 귀환 (re-aggro 차단)
+```
+
+`sim/Npc.cpp` `transitionTo()` — Chase 진입 시 교전 플래그 리셋:
+```cpp
+if (next == NpcState::Chase) countedThisEngage_ = false;
+```
+
+`sim/Npc.cpp` `isTooFarFromHome()` 트리거 4곳(`updateChase`, `updateAttackWindup`,
+`updateAttackRecover`, `updateReposition`) — 카운트 누적:
+```cpp
+if (!countedThisEngage_) {
+    leashBreakCount_++;
+    countedThisEngage_ = true;
+}
+transitionTo(...NpcState::Return, "too far from home");
+```
+
+`dist > chaseRange_` 로 인한 Return 진입은 카운트하지 않는다.
+타겟과의 거리 이탈은 exploit 의도 없는 정상 이탈이기 때문이다.
+
+`sim/Npc.cpp` `updateReturn()` — re-aggro 조건에 카운터 추가, 귀환 완료 시 전체 리셋:
+```cpp
+bool insideSafeZone = Vec3::distance(position_, spawnPos_) <= maxChaseDistance_ * LEASH_REAGGRO_RATIO;
+bool underBreakLimit = (leashBreakCount_ < MAX_LEASH_BREAKS);
+if (canReAggroOnReturn_ && squadId_ == -1 && insideSafeZone && underBreakLimit) {
+    ...
+    transitionTo(NpcState::Chase, ...);
+    return;
+}
+
+// 귀환 완료
+position_          = spawnPos_;
+leashBreakCount_   = 0;
+countedThisEngage_ = false;
+transitionTo(NpcState::Idle, "reached home");
+```
+
+**leashBreak_ 제거:** 카운터 시스템 도입 후 `leashBreak_`는 어디서도 조건으로 읽히지 않고
+세트/리셋만 되는 잉여 플래그임이 확인됐다. 선언 1곳, 세트 4곳, 리셋 2곳 전부 제거.
+
+---

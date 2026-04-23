@@ -39,6 +39,7 @@ struct NpcConfig {
     float separationWeight   = 0.6f;  // separation force relative to chase force
     bool  canReAggroOnReturn = true;  // standalone NPCs only: re-aggro while returning
     int   overlapThreshold   = 2;     // trigger Reposition if this many NPCs too close
+    float returnSpeedMult    = 2.5f;  // Return 상태 이동 속도 배율
 };
 
 // ─── Npc ─────────────────────────────────────────────────────────────────────
@@ -114,6 +115,7 @@ private:
     float separationWeight_;
     bool  canReAggroOnReturn_;
     int   overlapThreshold_;
+    float returnSpeedMult_;
 
     // Timers
     float windupTimer_{ 0.f };
@@ -125,7 +127,8 @@ private:
     float repositionTimer_{ 0.f };
 
     // ── Squad fields ──────────────────────────────────────────────────────────
-    bool leashBreak_{ false };     // set when Return is triggered by leash violation; blocks re-aggro until home
+    int  leashBreakCount_{ 0 };       // 이번 귀환 중 누적 리쉬 위반 횟수
+    bool countedThisEngage_{ false }; // 이번 교전에서 이미 카운트했으면 true (중복 방지)
 
     int      squadId_{ -1 };        // -1 = standalone (uses legacy self-target)
     bool     isLeader_{ false };
@@ -141,6 +144,8 @@ private:
     static constexpr float TARGET_EVAL_INTERVAL  = 0.5f;
     static constexpr float CONFUSION_DURATION    = 3.0f;
     static constexpr float REPOSITION_TIMEOUT    = 1.5f;
+    static constexpr float LEASH_REAGGRO_RATIO   = 0.75f; // 리쉬 위반 귀환 중 re-aggro 허용 기준 (maxChaseDistance_ 대비 비율)
+    static constexpr int   MAX_LEASH_BREAKS      = 2;     // 이 횟수 이상 리쉬 위반 시 강제 귀환 (re-aggro 차단)
 };
 
 } // namespace sim
