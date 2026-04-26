@@ -421,7 +421,11 @@ transitionTo(NpcState::Idle, "reached home");
 
 ---
 
-## [11] NpcGroup 공유 메모리 위치가 활동 구역 밖을 가리키는 문제
+## [11] NpcGroup 공유 메모리 위치가 활동 구역 밖을 가리키는 문제 (→ [14]에서 수정)
+
+> **수정됨:** 여기서 도입한 `clearMemory()` 프리앰블이 [14]에서 발견된 업데이트 순서
+> 경쟁 조건의 원인이었다. 현재 코드는 [14]의 수정을 적용한 상태이다.
+
 
 **설계 배경:**
 
@@ -461,7 +465,7 @@ if (groupId_ >= 0) {
 
 ---
 
-## [12] Idle 상태에서 이동하는 "조사" 행동의 설계 결정
+## [12] Idle 상태에서 이동하는 "조사" 행동의 설계 결정 (→ [13]에서 번복)
 
 **맥락:**
 
@@ -479,5 +483,165 @@ if (groupId_ >= 0) {
 Idle (이동 중) → 공유 메모리 위치 도달 → 플레이어 감지 → Chase
                                         → 플레이어 없음  → Return (스폰 귀환)
 ```
+
+> **번복:** [13]에서 `Investigate` 상태를 정식 도입하고 이 설계를 폐기함.
+
+---
+
+## [13] Idle 내 조사 이동 → Investigate 상태 분리
+
+**문제:**
+
+[12]의 "Idle 유지하며 이동" 방식은 두 가지 문제를 낳았다.
+
+1. **로그 불투명** — 상태 전이가 없으므로 NPC가 실제로 이동 중인지, 그냥 대기 중인지
+   로그만으로 구분할 수 없었다.
+2. **구역 이탈 체크 중복 · 불완전** — [11]의 preamble 처리와 `updateIdle()` 내부 처리가
+   겹쳐 있어, 이후 [14]에서 발견된 `clearMemory()` 경쟁 조건의 온상이 됐다.
+
+**수정 (`NpcState::Investigate = 7`):**
+
+`updateIdle()`의 그룹 메모리 이동 코드를 `updateInvestigate()`로 완전히 이관한다.
+Idle은 탐지 또는 Investigate 전이만 담당한다.
+
+```
+Idle   → 감지 성공                          → Chase
+       → 그룹 메모리 존재 && 위치가 구역 안  → Investigate
+       → 그룹 메모리 위치가 구역 밖           → (Idle 유지, 메모리 자연 만료 대기)
+
+Investigate → 직접 감지 성공               → Chase
+            → 메모리 위치 도달, 플레이어 없음 → Return
+            → 메모리 만료 (getBestMemory=null)→ Return  "메모리 만료, 귀환"
+            → 메모리 위치가 구역 밖           → Return  "조사 목표 구역 이탈"
+            → NPC 자신이 구역 이탈            → Return  "활동 구역 이탈 (조사 중단)"
+
+Chase  → 타겟 소실 && 그룹 메모리가 구역 안  → Investigate  "target lost, 조사 시작"
+```
+
+`Renderer`에 노란색(`RGB(220,200,50)`) 색상과 `"Invest"` 레이블 추가.
+
+---
+
+## [14] clearMemory() 업데이트 순서 경쟁 조건
+
+**증상:**
+
+플레이어가 활동 구역을 벗어날 때, 그룹 NPC들이 서로 다른 이유 메시지로 Return에 진입했다.
+또한 추격 중인 NPC(A1)가 구역 밖으로 멀리 쫓아가는 현상이 나타났다.
+
+```
+[T:85]  GoblinA1 Idle -> Chase      (target=P1 dist=6.7)
+[T:85]  GoblinA2 Idle -> Investigate
+[T:85]  GoblinA3 Idle -> Investigate
+[T:117] GoblinA2 Investigate -> Return  (메모리 만료, 귀환)   ← 원인 잘못 기록
+[T:117] GoblinA3 Investigate -> Return  (메모리 만료, 귀환)   ← 원인 잘못 기록
+[T:228] GoblinA1 Chase -> Return        (outside activity zone) ← 구역 밖까지 추격
+```
+
+**원인:**
+
+[11]에서 도입한 `update()` 프리앰블의 `group->clearMemory()` 호출이
+NPC **업데이트 순서**에 따라 다른 결과를 냈다.
+
+```
+P1 구역 이탈 → A1이 구역 밖 위치를 reportSight()
+
+다음 틱, 업데이트 순서가 [A2, A3, A1]인 경우:
+
+  A2 프리앰블:  메모리 위치가 구역 밖
+                → clearMemory() 호출
+                → targetId_==0 이므로 Return 강제 없음
+  A2 updateInvestigate(): getBestMemory() = null
+                → "메모리 만료, 귀환"   ← 실제 원인은 '구역 이탈'인데 '만료'로 기록됨
+
+  A3 프리앰블:  메모리 이미 지워짐 → 아무 처리 없음
+  A3 updateInvestigate(): getBestMemory() = null → "메모리 만료, 귀환"
+
+  A1 프리앰블:  메모리 이미 지워짐 → 아무 처리 없음
+  A1 updateChase(): 타겟 살아있음 + 자신은 아직 구역 안
+                → 계속 추격 → 직접 구역 경계를 밟을 때까지 반복
+```
+
+즉 A2/A3의 `clearMemory()` 호출이 A1이 프리앰블에서 메모리를 볼 기회를 빼앗았다.
+`clearMemory()`는 그룹 공유 상태를 부수효과로 변경하므로 업데이트 순서에 의해
+동작이 결정됐다.
+
+**수정 (4곳):**
+
+### 1. `update()` 프리앰블 — `clearMemory()` 제거, Chase 전용으로 범위 축소
+
+```cpp
+// 변경 전
+if (groupId_ >= 0) {
+    ...
+    if (mem && !group->isInsideActivityArea(mem->lastKnownPosition)) {
+        group->clearMemory();      // ← 전체 NPC에서 호출, 순서 의존
+        if (targetId_ != 0) { ... Return; }
+    }
+}
+
+// 변경 후
+if (groupId_ >= 0 && state_ == NpcState::Chase && targetId_ != 0) {
+    ...
+    if (mem && !group->isInsideActivityArea(mem->lastKnownPosition)) {
+        // clearMemory() 없음 — 각 상태가 독자 판단
+        targetId_ = 0;
+        transitionTo(NpcState::Return, "그룹 메모리 구역 이탈");
+        return;
+    }
+}
+```
+
+Chase 상태인 NPC만 이 경로를 밟는다. 다른 상태의 NPC가 메모리를 지우지 않으므로
+업데이트 순서와 관계없이 Chase NPC가 항상 메모리를 볼 수 있다.
+
+### 2. `updateInvestigate()` — 메모리 위치 구역 체크 추가
+
+```cpp
+if (!group->isInsideActivityArea(mem->lastKnownPosition)) {
+    transitionTo(NpcState::Return, "조사 목표 구역 이탈");  // 정확한 원인 기록
+    return;
+}
+```
+
+### 3. `updateIdle()` — 구역 밖 메모리는 Investigate 진입 차단
+
+```cpp
+} else if (!group->isInsideActivityArea(mem->lastKnownPosition)) {
+    // 메모리 위치가 구역 밖 — Idle 유지 (메모리 자연 만료 대기)
+} else {
+    transitionTo(NpcState::Investigate, "공유 메모리 조사");
+}
+```
+
+### 4. `updateChase()` 타겟 소실 → Investigate 분기 — 위치 검증 추가
+
+```cpp
+// 변경 전: hasValidMemory()만 확인
+if (group && group->hasValidMemory(room.getTickCount())) { ... Investigate; }
+
+// 변경 후: 메모리 위치가 구역 안일 때만 Investigate
+const SharedTargetMemory* mem = group->getBestMemory(room.getTickCount());
+if (mem && group->isInsideActivityArea(mem->lastKnownPosition)) { ... Investigate; }
+```
+
+**수정 후 기대 로그:**
+
+```
+T:85   GoblinA1 Idle -> Chase
+T:85   GoblinA2 Idle -> Investigate
+T:85   GoblinA3 Idle -> Investigate
+T:N+1  GoblinA2 Investigate -> Return  (조사 목표 구역 이탈)  ← 정확한 원인
+T:N+1  GoblinA3 Investigate -> Return  (조사 목표 구역 이탈)  ← 정확한 원인
+T:N+1  GoblinA1 Chase -> Return        (그룹 메모리 구역 이탈) ← 업데이트 순서 무관
+```
+
+세 NPC가 거의 같은 틱에 Return에 진입하며, 메시지가 실제 원인을 정확히 반영한다.
+
+**메모리 잔류 처리:**
+
+`clearMemory()` 미호출로 메모리가 자연 만료(`memoryDurationTick`, 기본 180틱)까지 남는다.
+그 동안 Idle NPC는 "메모리 위치가 구역 밖" 경로로 Investigate 진입이 차단되므로
+추가 추격이 발생하지 않는다.
 
 ---

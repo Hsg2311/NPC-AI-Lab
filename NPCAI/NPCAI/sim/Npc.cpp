@@ -68,18 +68,16 @@ void Npc::update(float dt, Room& room) {
         return;
     }
 
-    // 그룹 공유 메모리 위치가 활동 구역 밖이면 메모리 초기화 후 귀환
-    if (groupId_ >= 0) {
+    // Chase 중이고 그룹 메모리 위치가 활동 구역 밖이면 귀환
+    // clearMemory()는 호출하지 않음 — 업데이트 순서와 무관하게 각 상태가 독자 판단
+    if (groupId_ >= 0 && state_ == NpcState::Chase && targetId_ != 0) {
         NpcGroup* group = room.getNpcGroup(groupId_);
-        if (group && group->hasValidMemory(room.getTickCount())) {
+        if (group) {
             const SharedTargetMemory* mem = group->getBestMemory(room.getTickCount());
             if (mem && !group->isInsideActivityArea(mem->lastKnownPosition)) {
-                group->clearMemory();
-                if (targetId_ != 0) {
-                    targetId_ = 0;
-                    transitionTo(NpcState::Return, "그룹 메모리 구역 이탈");
-                    return;
-                }
+                targetId_ = 0;
+                transitionTo(NpcState::Return, "그룹 메모리 구역 이탈");
+                return;
             }
         }
     }
@@ -145,6 +143,9 @@ void Npc::updateIdle(float dt, Room& room) {
                 if (isOutsideActivityZone()) {
                     transitionTo(NpcState::Return, "활동 구역 이탈 (조사 중단)");
                 } 
+                else if (!group->isInsideActivityArea(mem->lastKnownPosition)) {
+                    // 메모리 위치가 구역 밖 — Idle 유지 (메모리 자연 만료 대기)
+                } 
                 else {
                     transitionTo(NpcState::Investigate, "공유 메모리 조사");
                 }
@@ -175,12 +176,15 @@ void Npc::updateChase(float dt, Room& room) {
     Actor* target = resolveTarget(room);
     if (!target) {
         targetId_ = 0;
-        // 그룹 유효 메모리가 있고 활동 구역 내에 있으면 조사로 전환
+        // 그룹 메모리 위치가 활동 구역 내에 있으면 조사로 전환
         if (!isOutsideActivityZone() && groupId_ >= 0) {
             NpcGroup* group = room.getNpcGroup(groupId_);
-            if (group && group->hasValidMemory(room.getTickCount())) {
-                transitionTo(NpcState::Investigate, "target lost, 조사 시작");
-                return;
+            if (group) {
+                const SharedTargetMemory* mem = group->getBestMemory(room.getTickCount());
+                if (mem && group->isInsideActivityArea(mem->lastKnownPosition)) {
+                    transitionTo(NpcState::Investigate, "target lost, 조사 시작");
+                    return;
+                }
             }
         }
         transitionTo(NpcState::Return, "target lost");
@@ -405,6 +409,10 @@ void Npc::updateInvestigate(float dt, Room& room) {
     const SharedTargetMemory* mem = group ? group->getBestMemory(room.getTickCount()) : nullptr;
     if (!mem) {
         transitionTo(NpcState::Return, "메모리 만료, 귀환");
+        return;
+    }
+    if (!group->isInsideActivityArea(mem->lastKnownPosition)) {
+        transitionTo(NpcState::Return, "조사 목표 구역 이탈");
         return;
     }
 
