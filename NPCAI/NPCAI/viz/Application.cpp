@@ -5,7 +5,7 @@
 namespace viz {
 
 Application::Application()
-    : room_(/*roomId=*/1, /*dumpInterval=*/0)   // disable console dump in visual mode
+    : room_(/*roomId=*/1, /*dumpInterval=*/0)   // 시각화 모드에서 콘솔 덤프 비활성화
 {}
 
 // ─── init ────────────────────────────────────────────────────────────────────
@@ -13,14 +13,14 @@ Application::Application()
 bool Application::init(HINSTANCE hInst, int nCmdShow) {
     hInst_ = hInst;
 
-    // Register window class
+    // 윈도우 클래스 등록
     WNDCLASSEXA wc    = {};
     wc.cbSize         = sizeof(wc);
     wc.style          = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc    = WndProc;
     wc.hInstance      = hInst;
     wc.hCursor        = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground  = nullptr;          // we paint the whole client area manually
+    wc.hbrBackground  = nullptr;          // 클라이언트 영역 전체를 직접 그림
     wc.lpszClassName  = "NPCAISimViz";
     wc.hIcon          = LoadIcon(nullptr, IDI_APPLICATION);
 
@@ -29,7 +29,7 @@ bool Application::init(HINSTANCE hInst, int nCmdShow) {
         return false;
     }
 
-    // Compute window rect so the *client* area matches CLIENT_W x CLIENT_H
+    // 클라이언트 영역이 CLIENT_W x CLIENT_H가 되도록 창 크기 계산
     RECT rc = { 0, 0, CLIENT_W, CLIENT_H };
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
 
@@ -40,7 +40,7 @@ bool Application::init(HINSTANCE hInst, int nCmdShow) {
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
         rc.right - rc.left, rc.bottom - rc.top,
-        nullptr, nullptr, hInst, this);   // 'this' passed as lpCreateParams
+        nullptr, nullptr, hInst, this);   // lpCreateParams로 this 포인터 전달
 
     if (!hwnd_) {
         MessageBoxA(nullptr, "CreateWindowEx failed", "Error", MB_OK);
@@ -51,7 +51,7 @@ bool Application::init(HINSTANCE hInst, int nCmdShow) {
     scenario_->setup(room_);
     controlledPlayer_ = scenario_->controlledPlayer();
 
-    // Build initial snapshot so window isn't blank before first tick
+    // 첫 틱 전에 창이 비어 있지 않도록 초기 스냅샷 빌드
     snapshot_        = room_.buildSnapshot();
     snapshot_.paused = paused_;
 
@@ -79,10 +79,10 @@ void Application::stepOneTick(HWND hwnd) {
     if (controlledPlayer_ && controlledPlayer_->isAlive())
     {
         sim::Vec3 dir{};
-        if (keysHeld_[0]) dir.z -= 1.f;   // Up
-        if (keysHeld_[1]) dir.z += 1.f;   // Down
-        if (keysHeld_[2]) dir.x -= 1.f;   // Left
-        if (keysHeld_[3]) dir.x += 1.f;   // Right
+        if (keysHeld_[0]) dir.z -= 1.f;   // 위
+        if (keysHeld_[1]) dir.z += 1.f;   // 아래
+        if (keysHeld_[2]) dir.x -= 1.f;   // 왼쪽
+        if (keysHeld_[3]) dir.x += 1.f;   // 오른쪽
 
         sim::Vec3 pos = controlledPlayer_->getPosition();
         if (dir.lengthSq() > 0.5f)
@@ -102,7 +102,7 @@ void Application::stepOneTick(HWND hwnd) {
 LRESULT CALLBACK Application::WndProc(HWND hwnd, UINT msg,
                                         WPARAM wParam, LPARAM lParam) {
     if (msg == WM_NCCREATE) {
-        // Store the Application* in the window's user data immediately
+        // Application 포인터를 창 유저 데이터에 즉시 저장
         auto* cs  = reinterpret_cast<CREATESTRUCT*>(lParam);
         auto* app = static_cast<Application*>(cs->lpCreateParams);
         SetWindowLongPtrA(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(app));
@@ -123,14 +123,14 @@ LRESULT Application::handleMessage(HWND hwnd, UINT msg,
                                      WPARAM wParam, LPARAM lParam) {
     switch (msg) {
 
-    // ── Timer: advance simulation ─────────────────────────────────────────
+    // ── 타이머: 시뮬레이션 진행 ──────────────────────────────────────────
     case WM_TIMER:
         if (wParam == TIMER_ID && !paused_) {
             stepOneTick(hwnd);
         }
         return 0;
 
-    // ── Paint: double-buffered render ─────────────────────────────────────
+    // ── 페인트: 더블 버퍼 렌더링 ─────────────────────────────────────────
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
@@ -156,7 +156,7 @@ LRESULT Application::handleMessage(HWND hwnd, UINT msg,
         return 0;
     }
 
-    // ── Keyboard input ────────────────────────────────────────────────────
+    // ── 키보드 입력 ──────────────────────────────────────────────────────
     case WM_KEYDOWN:
         if (wParam == VK_SPACE) {
             paused_ = !paused_;
@@ -185,11 +185,11 @@ LRESULT Application::handleMessage(HWND hwnd, UINT msg,
         else if (wParam == VK_RIGHT) { keysHeld_[3] = false; }
         return 0;
 
-    // ── Prevent background erase (we fill ourselves) ──────────────────────
+    // ── 배경 지우기 방지 (직접 채움) ─────────────────────────────────────
     case WM_ERASEBKGND:
         return 1;
 
-    // ── Cleanup ───────────────────────────────────────────────────────────
+    // ── 정리 ─────────────────────────────────────────────────────────────
     case WM_DESTROY:
         KillTimer(hwnd, TIMER_ID);
         PostQuitMessage(0);

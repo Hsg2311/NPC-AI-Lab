@@ -18,8 +18,7 @@ void ScenarioSoloNpc::setup(Room& room) {
     goblin.moveSpeed          = 5.5f;
     goblin.detectionRange     = 12.f;
     goblin.attackRange        = 1.8f;
-    goblin.chaseRange         = 20.f;
-    goblin.maxChaseDistance   = 24.f;
+    goblin.activityZoneRadius = 24.f;
     goblin.attackDamage       = 8.f;
     goblin.attackWindupTime   = 0.30f;
     goblin.attackRecoverTime  = 0.60f;
@@ -34,8 +33,7 @@ void ScenarioSoloNpc::setup(Room& room) {
     orc.moveSpeed          = 3.0f;
     orc.detectionRange     = 8.f;
     orc.attackRange        = 3.0f;
-    orc.chaseRange         = 18.f;
-    orc.maxChaseDistance   = 22.f;
+    orc.activityZoneRadius = 22.f;
     orc.attackDamage       = 22.f;
     orc.attackWindupTime   = 0.60f;
     orc.attackRecoverTime  = 1.40f;

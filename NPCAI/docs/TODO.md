@@ -1,6 +1,6 @@
 # NPCAI Project — TODO
 
-> 마지막 갱신: 2026-04-12
+> 마지막 갱신: 2026-04-26
 
 ---
 
@@ -178,17 +178,15 @@ NPCAI/
     Logger.hpp / Logger.cpp
     Actor.hpp / Actor.cpp
     Player.hpp / Player.cpp
-    Npc.hpp / Npc.cpp                  ← v3: 10-state, separation, home, score target, reposition
-    Squad.hpp / Squad.cpp              ← v4: target memory, Confused/Broken status, NpcCommand dispatch
-    Platoon.hpp / Platoon.cpp          ← v4: 전술 조율, retreat efficiency threshold
+    Npc.hpp / Npc.cpp                  ← 7-state FSM, activityZone, separation, score target, reposition
     DummyPlayerController.hpp / .cpp
-    Room.hpp / Room.cpp                ← v3+: getLivingPlayers, spawnSquad, spawnPlatoon
-    DebugSnapshot.hpp
-    Scenario.hpp                       ← v5: 시나리오 추상 베이스 클래스
-    ScenarioSoloNpc.hpp / .cpp         ← v5: 독립 NPC 시나리오 (스쿼드/플래툰 없음)
+    Room.hpp / Room.cpp                ← getLivingPlayers, findNearbyNpcPositions, countNpcsTargeting
+    DebugSnapshot.hpp                  ← activityZone 필드 포함
+    Scenario.hpp                       ← 시나리오 추상 베이스 클래스
+    ScenarioSoloNpc.hpp / .cpp         ← 독립 NPC 시나리오
   viz/
-    Renderer.hpp / Renderer.cpp        ← v3: home marker, return line, reposition dot, progress bar, 8-color legend
-    Application.hpp / Application.cpp  ← v5: Scenario 시스템으로 교체
+    Renderer.hpp / Renderer.cpp        ← 7-color legend, home marker, progress bar
+    Application.hpp / Application.cpp  ← Scenario 시스템
   mathUtil.hpp               (기존 DirectXMath 수학 라이브러리, 독립 유지)
   main.cpp
   NPCAI.vcxproj
@@ -197,22 +195,21 @@ NPCAI/
 
 ---
 
-## NPC 상태 전이 요약 (v3 현재)
+## NPC 상태 전이 요약 (현재)
 
 ```
 Idle   → Chase          : detectionRange 내 플레이어 감지 (score 기반 선택)
 Chase  → AttackWindup   : dist ≤ attackRange
-Chase  → Return         : target 소멸 / dist > chaseRange / too far from home
-AttackWindup → AttackRecover : windupTimer 완료 → 피해 발동
+Chase  → Return         : 타겟 소실 / isOutsideActivityZone
 AttackWindup → AttackRecover : windupTimer 완료 → hit(범위 내) or miss(범위 밖)
-AttackWindup → Return        : target 소멸 / too far from home
+AttackWindup → Return        : 타겟 소실 / isOutsideActivityZone
 AttackRecover → AttackWindup : 경직 완료, in range, 혼잡 없음
 AttackRecover → Chase        : 경직 완료, out of range, 혼잡 없음
 AttackRecover → Reposition   : 경직 완료, isOvercrowded()
-AttackRecover → Return       : target 소멸 / too far from home
+AttackRecover → Return       : 타겟 소실 / isOutsideActivityZone
 Reposition → AttackWindup    : isOvercrowded() 해소 && dist ≤ attackRange
 Reposition → Chase           : isOvercrowded() 해소 && dist > attackRange, 또는 REPOSITION_TIMEOUT(1.5s) 초과
-Reposition → Return          : target 소멸 / too far from home
+Reposition → Return          : 타겟 소실 / isOutsideActivityZone
 Return → Chase               : detectionRange 내 플레이어 재감지 (canReAggroOnReturn=true 시)
 Return → Idle                : dist to spawnPos < 0.3
 Dead   → (none)              : terminal
@@ -538,3 +535,57 @@ public:
 // 2. Application::init() 한 줄 교체
 scenario_ = std::make_unique<ScenarioMySetup>();
 ```
+
+---
+
+## 갱신: 2026-04-26 — Squad / Platoon 계층 제거 + NPC 단독 행동 전환
+
+### 배경
+
+Squad/Platoon 계층은 분대 전술을 구현하려는 목적으로 도입됐으나, 개별 NPC 행동 AI 자체를
+먼저 완성하기 위해 일단 전면 제거. 모든 NPC는 standalone(단독 행동)으로 동작.
+
+### 제거된 파일
+
+- `sim/Squad.hpp` / `Squad.cpp` — 분대 타겟 선택, NpcCommand 발행, Confused/Broken 상태 관리
+- `sim/Platoon.hpp` / `Platoon.cpp` — 전술 조율, 전투 효율 임계값 후퇴 명령
+
+### NpcState 단순화 (11 → 7 상태)
+
+| 제거된 상태 | 이유 |
+|---|---|
+| `Regroup (6)` | Squad 소속 NPC 전용; Squad 제거로 불필요 |
+| `Confused (7)` | Squad 리더 사망 시 발동; Squad 제거로 불필요 |
+| `MoveToSlot (8)` | Formation 확장 예약 상태; 미사용 |
+| `Retreat (9)` | Squad 명령 기반 후퇴; Squad 제거로 불필요 |
+
+`Dead`가 10 → 6으로 이동. `Renderer` 색상 테이블 및 범례 7색으로 갱신.
+
+### NpcConfig 변경
+
+| 제거 | 대체 |
+|---|---|
+| `chaseRange` (22.0) | `activityZoneRadius` (28.0) — 스폰 중심 활동 반경으로 통합 |
+| `maxChaseDistance` (26.0) | 同上 |
+
+### Npc 내부 필드 제거
+
+`squadId_`, `squadTargetId_`, `isLeader_`, `leashBreak_`, `leashBreakCount_`,
+`countedThisEngage_`, `LEASH_REAGGRO_RATIO`, `MAX_LEASH_BREAKS`
+
+### Room 단순화
+
+- `updatePlatoons()` / `updateSquads()` 제거
+- `spawnSquad()` / `spawnPlatoon()` 제거
+- `findNpcById()` 제거 (Squad가 유일한 호출처였음)
+
+### DebugSnapshot 변경
+
+- `DebugNpcEntry`에 `activityZoneCenterX/Z`, `activityZoneRadius` 추가
+- Squad / Platoon 관련 항목 전부 제거
+
+### 미완료 → 다음 단계
+
+- [ ] **ScenarioSharedSight** — 시야 공유 Squad NPC 시나리오 (memory의 1번 과제)
+  - NPC끼리 탐지 정보를 공유해 한 NPC가 감지한 플레이어를 다른 NPC가 추적
+  - Squad/Platoon 클래스 재도입 없이 Room 쿼리 + Npc 인터페이스 레벨에서 구현 예정

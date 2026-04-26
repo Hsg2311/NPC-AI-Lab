@@ -77,6 +77,8 @@
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
+      <ForceSynchronousPDBWrites>true</ForceSynchronousPDBWrites>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -92,6 +94,8 @@
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
+      <ForceSynchronousPDBWrites>true</ForceSynchronousPDBWrites>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -105,6 +109,8 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
+      <ForceSynchronousPDBWrites>true</ForceSynchronousPDBWrites>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -120,6 +126,8 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
+      <ForceSynchronousPDBWrites>true</ForceSynchronousPDBWrites>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -133,8 +141,6 @@
     <ClInclude Include="sim\Actor.hpp" />
     <ClInclude Include="sim\Player.hpp" />
     <ClInclude Include="sim\Npc.hpp" />
-    <ClInclude Include="sim\Squad.hpp" />
-    <ClInclude Include="sim\Platoon.hpp" />
     <ClInclude Include="sim\DummyPlayerController.hpp" />
     <ClInclude Include="sim\Room.hpp" />
     <ClInclude Include="sim\DebugSnapshot.hpp" />
@@ -149,8 +155,6 @@
     <ClCompile Include="sim\Actor.cpp" />
     <ClCompile Include="sim\Player.cpp" />
     <ClCompile Include="sim\Npc.cpp" />
-    <ClCompile Include="sim\Squad.cpp" />
-    <ClCompile Include="sim\Platoon.cpp" />
     <ClCompile Include="sim\DummyPlayerController.cpp" />
     <ClCompile Include="sim\Room.cpp" />
     <ClCompile Include="sim\ScenarioSoloNpc.cpp" />

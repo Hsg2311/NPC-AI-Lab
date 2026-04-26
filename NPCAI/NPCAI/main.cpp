@@ -1,16 +1,16 @@
-﻿// main.cpp — NPC AI Simulator with 2D Visualization
+﻿// main.cpp - NPC AI 시뮬레이터 (2D 시각화 포함)
 //
-// Console subsystem is kept intentionally:
-//   - console window shows real-time state-transition logs from Logger
-//   - WinAPI window shows the 2D visual debug view
+// 콘솔 서브시스템은 의도적으로 유지:
+//   - 콘솔 창: Logger의 실시간 상태 전이 로그 출력
+//   - WinAPI 창: 2D 시각 디버그 뷰 표시
 //
-// Keys: Space = pause/resume   S = step   Esc = quit
+// 키: Space = 일시정지/재개   S = 한 틱 진행   Esc = 종료
 
 #include "viz/Application.hpp"
 #include <iostream>
 
 int main() {
-    // Both windows appear: console (logs) + the visualizer window.
+    // 콘솔 (로그)과 시각화 창, 두 창이 함께 표시된다.
     std::cout << "=== NPC AI Simulator  v2  (WinAPI + GDI) ===\n";
     std::cout << "  Space  Pause / Resume\n";
     std::cout << "  S      Step one tick (while paused)\n";

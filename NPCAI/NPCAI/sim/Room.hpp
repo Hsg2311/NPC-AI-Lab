@@ -1,8 +1,6 @@
 #pragma once
 #include "DummyPlayerController.hpp"
 #include "DebugSnapshot.hpp"
-#include "Squad.hpp"
-#include "Platoon.hpp"
 #include <unordered_map>
 #include <memory>
 #include <cstdint>
@@ -14,73 +12,47 @@ namespace sim {
 class Actor;
 class Player;
 class Npc;
-struct NpcConfig;
 
 class Room {
 public:
-    // roomId:       identifier for log output
-    // dumpInterval: print snapshot every N ticks (0 = disabled)
+    // roomId:       로그 출력용 식별자
+    // dumpInterval: N 틱마다 스냅샷 출력 (0 = 비활성화)
     explicit Room(uint32_t roomId, uint32_t dumpInterval = 20);
 
-    // Actor management
+    // Actor 관리
     void addActor(std::shared_ptr<Actor> actor);
 
-    // Advance simulation by one tick
+    // 시뮬레이션을 한 틱 진행
     void tick(float dt);
 
-    // Queries (return raw non-owning pointers; Room owns lifetime)
+    // 쿼리 (비소유 원시 포인터 반환; Room이 생존 기간 소유)
     Actor*  findActorById(uint32_t id) const;
     Player* findNearestLivingPlayer(const Vec3& from, float maxRange) const;
 
-    // Access controller to register player routes before simulation
+    // 시뮬레이션 전 플레이어 경로를 등록하는 컨트롤러 접근
     DummyPlayerController& getDummyController() { return dummyCtrl_; }
 
     uint32_t getTickCount() const { return tickCount_; }
 
-    // Print formatted snapshot to stdout
+    // 스냅샷을 포맷하여 stdout에 출력
     void dumpSnapshot() const;
 
-    // Build a rendering-ready snapshot (AI logic ↔ renderer boundary)
+    // 렌더링 준비 스냅샷 생성 (AI 로직 - 렌더러 경계)
     DebugSnapshot buildSnapshot() const;
 
-    // ── AI Query Helpers ─────────────────────────────────────────────────────
+    // ── AI 쿼리 헬퍼 ─────────────────────────────────────────────────────────
     std::vector<Player*> getLivingPlayers() const;
     void findNearbyNpcPositions(const Vec3& from, float radius, uint32_t excludeId,
                                 std::vector<Vec3>& out) const;
     int  countNpcsTargeting(uint32_t playerId) const;
 
-    // ── Squad management ─────────────────────────────────────────────────────
-    int    createSquad();
-    void   addNpcToSquad(int squadId, uint32_t npcId, bool asLeader = false);
-    void   spawnSquad(const std::string& namePrefix,
-                      const std::vector<Vec3>& positions,
-                      const NpcConfig& cfg);
-    Squad* findSquadById(int id);
-    Npc*   findNpcById(uint32_t id);
-
-    // ── Platoon management ───────────────────────────────────────────────────
-    int      createPlatoon();
-    void     addSquadToPlatoon(int platoonId, int squadId);
-    void     spawnPlatoon(const std::string& namePrefix,
-                          const std::vector<std::vector<Vec3>>& squadPositions,
-                          const NpcConfig& cfg);
-    Platoon* findPlatoonById(int id);
-
 private:
-    void updatePlatoons(float dt);
-    void updateSquads  (float dt);
-
     uint32_t roomId_;
     uint32_t tickCount_{ 0 };
     uint32_t dumpInterval_;
 
     std::unordered_map<uint32_t, std::shared_ptr<Actor>> actors_{};
     DummyPlayerController dummyCtrl_{};
-
-    std::vector<Squad>   squads_;
-    std::vector<Platoon> platoons_;
-    int                  nextSquadId_  { 1 };
-    int                  nextPlatoonId_{ 1 };
 };
 
 } // namespace sim

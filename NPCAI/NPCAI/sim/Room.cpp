@@ -2,8 +2,6 @@
 #include "Actor.hpp"
 #include "Player.hpp"
 #include "Npc.hpp"
-#include "Squad.hpp"
-#include "Platoon.hpp"
 #include "Logger.hpp"
 #include <iostream>
 #include <iomanip>
@@ -21,16 +19,13 @@ void Room::addActor(std::shared_ptr<Actor> actor) {
 }
 
 // ─── tick ─────────────────────────────────────────────────────────────────────
-// Update order:
-//   1. Sync logger tick counter
-//   2. DummyPlayerController  → assign move targets
-//   3. All living Players     → execute movement
-//   4. updatePlatoons()       → Platoon reads SquadReports, issues orders to Squads
-//   5. updateSquads()         → Squad reads NPC states, issues NpcCommands;
-//                               then builds SquadReports for next Platoon tick
-//   6. All NPCs               → execute NpcCommands + AI
-//   7. Increment tick counter
-//   8. Periodic snapshot dump
+// 업데이트 순서:
+//   1. 로거 틱 카운터 동기화
+//   2. DummyPlayerController  -> 이동 목표 할당
+//   3. 생존한 모든 Player     -> 이동 실행
+//   4. 모든 NPC               -> AI 실행
+//   5. 틱 카운터 증가
+//   6. 주기적 스냅샷 출력
 
 void Room::tick(float dt) {
     Logger::get().setTick(tickCount_);
@@ -41,9 +36,6 @@ void Room::tick(float dt) {
         if (auto* p = dynamic_cast<Player*>(actor.get()))
             p->update(dt, *this);
     }
-
-    updatePlatoons(dt);   // ← Platoon decisions (reads last tick's SquadReports)
-    updateSquads(dt);     // ← Squad decisions  (issues NpcCommands; builds new SquadReports)
 
     for (auto& [id, actor] : actors_) {
         if (auto* npc = dynamic_cast<Npc*>(actor.get()))
@@ -56,136 +48,11 @@ void Room::tick(float dt) {
         dumpSnapshot();
 }
 
-// ─── Queries ──────────────────────────────────────────────────────────────────
+// ─── 쿼리 ─────────────────────────────────────────────────────────────────────
 
 Actor* Room::findActorById(uint32_t id) const {
     auto it = actors_.find(id);
     return (it != actors_.end()) ? it->second.get() : nullptr;
-}
-
-Npc* Room::findNpcById(uint32_t id) {
-    return dynamic_cast<Npc*>(findActorById(id));
-}
-
-// ─── Squad management ────────────────────────────────────────────────────────
-
-Squad* Room::findSquadById(int id) {
-    for (Squad& sq : squads_)
-        if (sq.getSquadId() == id) return &sq;
-    return nullptr;
-}
-
-int Room::createSquad() {
-    int id = nextSquadId_++;
-    squads_.emplace_back(id);
-    return id;
-}
-
-void Room::addNpcToSquad(int squadId, uint32_t npcId, bool asLeader) {
-    Squad* sq = findSquadById(squadId);
-    if (!sq) return;
-    sq->addMember(npcId, asLeader);
-    Npc* npc = findNpcById(npcId);
-    if (!npc) return;
-    npc->setSquadId(squadId);
-    if (asLeader) npc->setIsLeader(true);
-}
-
-void Room::spawnSquad(const std::string& namePrefix,
-                       const std::vector<Vec3>& positions,
-                       const NpcConfig& cfg) {
-    if (positions.empty()) return;
-    int sqId = createSquad();
-    for (std::size_t i = 0; i < positions.size(); ++i) {
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "%s%02d",
-            namePrefix.c_str(), static_cast<int>(i + 1));
-        auto     npc   = std::make_shared<Npc>(buf, positions[i], cfg);
-        uint32_t npcId = npc->getId();
-        addActor(std::move(npc));
-        addNpcToSquad(sqId, npcId, /*asLeader=*/ i == 0);
-    }
-    Logger::get().log("Room",
-        "squad #" + std::to_string(sqId) + " '" + namePrefix
-        + "' members=" + std::to_string(positions.size()));
-}
-
-// ─── Platoon management ──────────────────────────────────────────────────────
-
-Platoon* Room::findPlatoonById(int id) {
-    for (Platoon& plt : platoons_)
-        if (plt.platoonId() == id) return &plt;
-    return nullptr;
-}
-
-int Room::createPlatoon() {
-    int id = nextPlatoonId_++;
-    platoons_.emplace_back(id);
-    return id;
-}
-
-void Room::addSquadToPlatoon(int platoonId, int squadId) {
-    Platoon* plt = findPlatoonById(platoonId);
-    if (plt) plt->addSquad(squadId);
-}
-
-void Room::spawnPlatoon(const std::string& namePrefix,
-                         const std::vector<std::vector<Vec3>>& squadPositions,
-                         const NpcConfig& cfg) {
-    if (squadPositions.empty()) return;
-    int pltId = createPlatoon();
-    for (std::size_t si = 0; si < squadPositions.size(); ++si) {
-        char sqName[64];
-        std::snprintf(sqName, sizeof(sqName), "%sS%d_",
-            namePrefix.c_str(), static_cast<int>(si + 1));
-        spawnSquad(sqName, squadPositions[si], cfg);
-        int sqId = nextSquadId_ - 1;   // spawnSquad just created this id
-        addSquadToPlatoon(pltId, sqId);
-    }
-    Logger::get().log("Room",
-        "platoon #" + std::to_string(pltId) + " '" + namePrefix
-        + "' squads=" + std::to_string(squadPositions.size()));
-}
-
-// ─── updatePlatoons ──────────────────────────────────────────────────────────
-// Platoon reads last tick's SquadReports (already stored via receiveReport)
-// and issues orders to Squads via setPlatoonOrder.
-
-void Room::updatePlatoons(float dt) {
-    for (Platoon& plt : platoons_)
-        plt.update(dt, *this);
-
-    // Remove empty Platoons
-    platoons_.erase(
-        std::remove_if(platoons_.begin(), platoons_.end(),
-            [](const Platoon& p) { return p.isEmpty(); }),
-        platoons_.end());
-}
-
-// ─── updateSquads ────────────────────────────────────────────────────────────
-// Pass 1: each Squad updates (issues NpcCommands to its members).
-// Pass 2: build SquadReports and deliver to the owning Platoon for next tick.
-// Pass 3: remove empty Squads (disbanded or all members dead).
-
-void Room::updateSquads(float dt) {
-    // Pass 1
-    for (Squad& sq : squads_)
-        sq.update(dt, *this);
-
-    // Pass 2: each squad's report goes only to the Platoon that owns it
-    for (Squad& sq : squads_) {
-        SquadReport rep = sq.buildReport(*this);
-        for (Platoon& plt : platoons_) {
-            if (plt.ownsSquad(sq.getSquadId()))
-                plt.receiveReport(rep);
-        }
-    }
-
-    // Pass 3
-    squads_.erase(
-        std::remove_if(squads_.begin(), squads_.end(),
-            [](const Squad& sq) { return sq.isEmpty(); }),
-        squads_.end());
 }
 
 // ─── findNearestLivingPlayer ─────────────────────────────────────────────────
@@ -322,8 +189,9 @@ DebugSnapshot Room::buildSnapshot() const {
             e.homeZ               = npc->getSpawnPos().z;
             e.windupProgress      = npc->getWindupProgress();
             e.recoverProgress     = npc->getRecoverProgress();
-            e.squadId             = npc->getSquadId();
-            e.isLeader            = npc->getIsLeader();
+            e.activityZoneCenterX = npc->getActivityZoneCenter().x;
+            e.activityZoneCenterZ = npc->getActivityZoneCenter().z;
+            e.activityZoneRadius  = npc->getActivityZoneRadius();
             snap.npcs.push_back(e);
         }
     }

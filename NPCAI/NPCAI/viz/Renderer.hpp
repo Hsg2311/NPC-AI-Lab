@@ -6,9 +6,9 @@
 
 namespace viz {
 
-// Camera: world→screen transform parameters.
-// worldCenterX/Z: which world point maps to the screen center.
-// scale: pixels per one world unit.
+// Camera: 월드→스크린 변환 파라미터.
+// worldCenterX/Z: 화면 중앙에 대응하는 월드 좌표.
+// scale: 월드 단위당 픽셀 수.
 struct Camera {
     float worldCenterX = 20.f;
     float worldCenterZ = 0.f;
@@ -17,8 +17,8 @@ struct Camera {
 
 class Renderer {
 public:
-    // Renders everything to the supplied (memory) DC.
-    // clientW / clientH are the pixel dimensions of that DC.
+    // 전달받은 (메모리) DC에 모든 요소를 렌더링한다.
+    // clientW / clientH는 해당 DC의 픽셀 크기다.
     void render(HDC hdc, int clientW, int clientH, const sim::DebugSnapshot& snapshot);
 
     Camera& camera() { return camera_; }
@@ -26,10 +26,10 @@ public:
 private:
     Camera camera_;
 
-    // ── Coordinate transform ────────────────────────────────────────────────
+    // ── 좌표 변환 ───────────────────────────────────────────────────────────
     POINT worldToScreen(float x, float z, int w, int h) const;
 
-    // ── Draw passes ─────────────────────────────────────────────────────────
+    // ── 드로우 패스 ─────────────────────────────────────────────────────────
     void drawBackground(HDC hdc, int w, int h);
     void drawGrid(HDC hdc, int w, int h);
     void drawNpc(HDC hdc, int w, int h, const sim::DebugNpcEntry& npc, const sim::DebugSnapshot& snap);
@@ -37,7 +37,7 @@ private:
     void drawTargetLine(HDC hdc, int w, int h, const sim::DebugNpcEntry& npc, const sim::DebugSnapshot& snap);
     void drawHUD(HDC hdc, int w, int h, const sim::DebugSnapshot& snap);
 
-    // ── GDI helpers ─────────────────────────────────────────────────────────
+    // ── GDI 헬퍼 ─────────────────────────────────────────────────────────
     void drawCircleOutline(HDC hdc, POINT center, int radiusPx);
     void drawFilledCircle(HDC hdc, POINT center, int radiusPx, COLORREF fill, COLORREF outline);
     void drawArrow(HDC hdc, POINT from, POINT to, COLORREF col);

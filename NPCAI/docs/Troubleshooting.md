@@ -2,6 +2,13 @@
 
 ---
 
+> **2026-04-26 — Squad/Platoon 제거 안내**
+> [1]~[3]은 Squad/Platoon 계층(2026-04-26 삭제)에 관한 기록. 관련 코드는 현재 존재하지 않는다.
+> [7]은 `chaseRange` 파라미터가 제거되어 해당 없음.
+> [8][10]은 `leashBreak_`/`leashBreakCount_`가 제거되어 해당 없음.
+
+---
+
 ## [1] Platoon이 시나리오에 적용되어 있지 않음
 
 **발견:** Platoon 클래스 및 `Room::spawnPlatoon` 등 관련 인프라는 완전히 구현되어 있었으나,

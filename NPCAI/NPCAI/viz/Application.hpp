@@ -9,20 +9,20 @@
 
 namespace viz {
 
-// Application owns the WinAPI window, the sim::Room, and the Renderer.
-// Tick loop:
-//   WM_TIMER (every ~16ms):
-//     if (!paused_) room_.tick(DT)     <- simulate
+// Application은 WinAPI 창, sim::Room, Renderer를 소유한다.
+// 틱 루프:
+//   WM_TIMER (약 16ms마다):
+//     if (!paused_) room_.tick(DT)     <- 시뮬레이션 진행
 //     snapshot_ = room_.buildSnapshot()
-//     InvalidateRect                   <- request repaint
+//     InvalidateRect                   <- 화면 갱신 요청
 //   WM_PAINT:
-//     double-buffer render via Renderer
+//     Renderer를 통한 더블 버퍼 렌더링
 //
-// Keys:
-//   Arrows – move player
-//   Space  – toggle pause / resume
-//   S      – step one tick (pause must be active)
-//   Esc    – quit
+// 키:
+//   방향키 - 플레이어 이동
+//   Space  - 일시정지 / 재개 전환
+//   S      - 한 틱 진행 (일시정지 상태에서만)
+//   Esc    - 종료
 
 class Application {
 public:
@@ -32,15 +32,15 @@ public:
     void run();
 
 private:
-    // ── WinAPI plumbing ─────────────────────────────────────────────────────
+    // ── WinAPI 배선 ─────────────────────────────────────────────────────────
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
                                     WPARAM wParam, LPARAM lParam);
     LRESULT handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-    // ── Simulation helpers ──────────────────────────────────────────────────
+    // ── 시뮬레이션 헬퍼 ─────────────────────────────────────────────────────
     void stepOneTick(HWND hwnd);
 
-    // ── Data ────────────────────────────────────────────────────────────────
+    // ── 데이터 ──────────────────────────────────────────────────────────────
     HINSTANCE hInst_{ nullptr };
     HWND hwnd_{ nullptr };
     bool paused_{ false };
@@ -51,12 +51,12 @@ private:
 
     std::unique_ptr<sim::Scenario> scenario_;
 
-    // keysHeld_: 0=Up  1=Down  2=Left  3=Right
+    // keysHeld_: 0=위 1=아래 2=왼쪽 3=오른쪽
     bool         keysHeld_[4]{};
-    sim::Player* controlledPlayer_{ nullptr };   // non-owning, set by scenario
+    sim::Player* controlledPlayer_{ nullptr };   // 비소유 포인터, 시나리오에서 설정
 
     static constexpr int TIMER_ID{ 1 };
-    static constexpr UINT TIMER_MS{ 16 };        // ~60 FPS
+    static constexpr UINT TIMER_MS{ 16 };        // 약 60 FPS
     static constexpr float DT{ 1.f / 60.f };
     static constexpr int CLIENT_W{ 1280 };
     static constexpr int CLIENT_H{ 800 };

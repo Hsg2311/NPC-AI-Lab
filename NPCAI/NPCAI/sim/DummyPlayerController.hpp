@@ -7,15 +7,15 @@ namespace sim {
 
 class Room; // forward declaration
 
-// Controls dummy players by assigning them waypoint routes.
-// Call addControl() once per player, then update() each tick.
+// 웨이포인트 경로를 할당해 더미 플레이어를 조종한다.
+// 플레이어당 addControl()을 한 번 호출하고 매 틱 update()를 호출한다.
 class DummyPlayerController {
 public:
     struct PlayerControl {
         uint32_t playerId = 0;
         std::vector<Vec3> waypoints;
         int currentWaypoint = 0;
-        bool loop = true;   // restart from waypoint[0] at end
+        bool loop = true;   // 끝에 도달하면 waypoint[0]부터 재시작
     };
 
     void addControl(uint32_t playerId, std::vector<Vec3> waypoints, bool loop = true);

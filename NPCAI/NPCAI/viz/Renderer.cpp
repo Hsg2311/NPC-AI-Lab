@@ -5,28 +5,23 @@
 
 namespace viz {
 
-// ─── Color table ─────────────────────────────────────────────────────────────
-// NpcState int: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Return
-//               5=Reposition 6=Regroup 7=Confused 8=MoveToSlot 9=Retreat 10=Dead
+// ─── 색상 테이블 ─────────────────────────────────────────────────────────────
+// NpcState int 값: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Return 5=Reposition 6=Dead
 
 COLORREF Renderer::npcStateColor(int state) {
     switch (state) {
-        case  0: return RGB(140, 140, 140);  // Idle          – gray
-        case  1: return RGB(220,  50,  50);  // Chase         – red
-        case  2: return RGB(255, 140,   0);  // AttackWindup  – orange
-        case  3: return RGB(160,  70,   0);  // AttackRecover – dark orange
-        case  4: return RGB( 50, 200,  80);  // Return        – green
-        case  5: return RGB(160,  60, 200);  // Reposition    – purple
-        case  6: return RGB( 70, 160, 230);  // Regroup       – sky blue
-        case  7: return RGB(255, 220,  80);  // Confused      – yellow
-        case  8: return RGB( 80, 200, 220);  // MoveToSlot    – cyan
-        case  9: return RGB(255,  80, 150);  // Retreat       – pink-red
-        case 10: return RGB( 40,  40,  40);  // Dead          – near-black
+        case 0: return RGB(140, 140, 140);  // Idle          - 회색
+        case 1: return RGB(220,  50,  50);  // Chase         - 빨간색
+        case 2: return RGB(255, 140,   0);  // AttackWindup  - 주황색
+        case 3: return RGB(160,  70,   0);  // AttackRecover - 진한 주황색
+        case 4: return RGB( 50, 200,  80);  // Return        - 초록색
+        case 5: return RGB(160,  60, 200);  // Reposition    - 보라색
+        case 6: return RGB( 40,  40,  40);  // Dead          - 거의 검정
     }
     return RGB(255, 255, 255);
 }
 
-// ─── Coordinate transform ─────────────────────────────────────────────────────
+// ─── 좌표 변환 ───────────────────────────────────────────────────────────────
 
 POINT Renderer::worldToScreen(float x, float z, int w, int h) const {
     float sx = w * 0.5f + (x - camera_.worldCenterX) * camera_.scale;
@@ -34,7 +29,7 @@ POINT Renderer::worldToScreen(float x, float z, int w, int h) const {
     return { static_cast<LONG>(sx), static_cast<LONG>(sy) };
 }
 
-// ─── GDI helpers ─────────────────────────────────────────────────────────────
+// ─── GDI 헬퍼 ─────────────────────────────────────────────────────────────
 
 void Renderer::drawCircleOutline(HDC hdc, POINT c, int r) {
     HBRUSH oldBrush = static_cast<HBRUSH>(SelectObject(hdc, GetStockObject(NULL_BRUSH)));
@@ -173,13 +168,24 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
     POINT    home   = worldToScreen(npc.homeX, npc.homeZ, w, h);
     COLORREF col    = npcStateColor(npc.state);
 
-    // ── Home marker (X) ─────────────────────────────────────────────────────
+    // ── 홈 마커 (X) ─────────────────────────────────────────────────────────
     {
         COLORREF hcol = npc.alive ? RGB(70, 70, 100) : RGB(40, 40, 50);
         drawHomeMarker(hdc, home, hcol);
     }
 
-    // ── Return state: dotted line NPC → home ────────────────────────────────
+    // ── 활동 구역 (구역 중심 기준 점선 원) ──────────────────────────────────
+    if (npc.alive && npc.activityZoneRadius > 0.f) {
+        POINT zonePt = worldToScreen(npc.activityZoneCenterX, npc.activityZoneCenterZ, w, h);
+        int   zonePx = static_cast<int>(npc.activityZoneRadius * camera_.scale);
+        HPEN pen    = CreatePen(PS_DASH, 1, RGB(50, 110, 60));
+        HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, pen));
+        drawCircleOutline(hdc, zonePt, zonePx);
+        SelectObject(hdc, oldPen);
+        DeleteObject(pen);
+    }
+
+    // ── Return 상태: NPC에서 홈 위치까지 점선 ───────────────────────────────
     if (npc.alive && npc.state == 4 /* Return */) {
         HPEN pen    = CreatePen(PS_DOT, 1, RGB(50, 200, 80));
         HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, pen));
@@ -189,7 +195,7 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
         DeleteObject(pen);
     }
 
-    // ── Detection range circle (dim) ────────────────────────────────────────
+    // ── 감지 범위 원 (흐리게) ──────────────────────────────────────────────
     {
         int      detPx  = static_cast<int>(npc.detectionRange * camera_.scale);
         COLORREF detCol = npc.alive
@@ -203,7 +209,7 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
     }
 
     if (npc.alive) {
-        // ── Attack range circle (red) ────────────────────────────────────────
+        // ── 공격 범위 원 (빨간색) ────────────────────────────────────────────
         {
             int  atkPx  = static_cast<int>(npc.attackRange * camera_.scale);
             HPEN pen    = CreatePen(PS_SOLID, 1, RGB(180, 40, 40));
@@ -213,12 +219,12 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
             DeleteObject(pen);
         }
 
-        // ── Target line (dotted yellow) ──────────────────────────────────────
+        // ── 타겟 선 (점선 노란색) ────────────────────────────────────────────
         drawTargetLine(hdc, w, h, npc, snap);
 
     }
 
-    // ── Body circle ─────────────────────────────────────────────────────────
+    // ── 몸체 원 ─────────────────────────────────────────────────────────────
     {
         COLORREF bodyCol    = npc.alive ? col : RGB(35, 35, 35);
         COLORREF outlineCol = npc.alive
@@ -229,27 +235,7 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
         drawFilledCircle(hdc, center, 9, bodyCol, outlineCol);
     }
 
-    // ── Leader diamond (yellow outline, 4-corner polygon) ───────────────────
-    if (npc.alive && npc.isLeader) {
-        const int D = 6;
-        POINT diamond[5] = {
-            { center.x,     center.y - D },   // top
-            { center.x + D, center.y     },   // right
-            { center.x,     center.y + D },   // bottom
-            { center.x - D, center.y     },   // left
-            { center.x,     center.y - D }    // close
-        };
-        HPEN   dpen  = CreatePen(PS_SOLID, 2, RGB(255, 220, 0));
-        HBRUSH dbrush = static_cast<HBRUSH>(GetStockObject(NULL_BRUSH));
-        HPEN   oldP  = static_cast<HPEN>  (SelectObject(hdc, dpen));
-        HBRUSH oldB  = static_cast<HBRUSH>(SelectObject(hdc, dbrush));
-        Polyline(hdc, diamond, 5);
-        SelectObject(hdc, oldP);
-        SelectObject(hdc, oldB);
-        DeleteObject(dpen);
-    }
-
-    // ── Windup / Recover progress bar (20×4 px above body) ──────────────────
+    // ── Windup / Recover 진행 바 (몸체 위 20x4 px) ──────────────────────────
     if (npc.alive && (npc.state == 2 || npc.state == 3)) {
         float    progress = (npc.state == 2) ? npc.windupProgress : npc.recoverProgress;
         const int BAR_W   = 20;
@@ -273,7 +259,7 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
         }
     }
 
-    // ── Facing arrow ────────────────────────────────────────────────────────
+    // ── 방향 화살표 ─────────────────────────────────────────────────────────
     if (npc.alive && (std::fabsf(npc.dirX) + std::fabsf(npc.dirZ)) > 0.05f) {
         POINT tip = {
             static_cast<LONG>(center.x + npc.dirX * 16.f),
@@ -282,20 +268,15 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
         drawArrow(hdc, center, tip, col);
     }
 
-    // ── Label: name [state] ──────────────────────────────────────────────────
+    // ── 레이블: 이름 [상태] ──────────────────────────────────────────────────
     {
         static const char* stateNames[] = {
-            "Idle","Chase","Windup","Recover","Return",
-            "Repos","Regroup","Confused","Slot","Retreat","Dead"
+            "Idle","Chase","Windup","Recover","Return","Repos","Dead"
         };
-        const char* sname = (npc.state >= 0 && npc.state < 11)
+        const char* sname = (npc.state >= 0 && npc.state < 7)
             ? stateNames[npc.state] : "?";
         char label[80];
-        if (npc.squadId >= 0)
-            std::snprintf(label, sizeof(label), "%s [%s] S%d",
-                npc.name.c_str(), sname, npc.squadId);
-        else
-            std::snprintf(label, sizeof(label), "%s [%s]", npc.name.c_str(), sname);
+        std::snprintf(label, sizeof(label), "%s [%s]", npc.name.c_str(), sname);
 
         SetTextColor(hdc, npc.alive ? col : RGB(70, 70, 70));
         SetBkMode   (hdc, TRANSPARENT);
@@ -350,14 +331,14 @@ void Renderer::drawHUD(HDC hdc, int w, int h,
     HFONT oldFont = static_cast<HFONT>(SelectObject(hdc, font));
     SetBkMode(hdc, TRANSPARENT);
 
-    // Tick counter
+    // 틱 카운터
     char tickBuf[64];
     std::snprintf(tickBuf, sizeof(tickBuf), "Tick: %llu",
         static_cast<unsigned long long>(snap.tick));
     SetTextColor(hdc, RGB(200, 200, 200));
     TextOutA(hdc, 10, 10, tickBuf, static_cast<int>(std::strlen(tickBuf)));
 
-    // Pause indicator
+    // 일시정지 표시
     if (snap.paused) {
         SetTextColor(hdc, RGB(255, 210, 50));
         const char* msg = "[ PAUSED ]  Space=Resume   S=Step";
@@ -368,7 +349,7 @@ void Renderer::drawHUD(HDC hdc, int w, int h,
         TextOutA(hdc, 10, 30, msg, static_cast<int>(std::strlen(msg)));
     }
 
-    // Player aggro summary
+    // 플레이어 어그로 요약
     int aggroY = 55;
     for (const auto& p : snap.players) {
         if (!p.alive) continue;
@@ -379,23 +360,19 @@ void Renderer::drawHUD(HDC hdc, int w, int h,
         aggroY += 16;
     }
 
-    // State legend (bottom-left) — 11 entries
+    // 상태 범례 (좌측 하단) - 7개 항목
     struct LegendEntry { const char* name; COLORREF col; };
     static const LegendEntry legend[] = {
-        { "Idle",     RGB(140, 140, 140) },
-        { "Chase",    RGB(220,  50,  50) },
-        { "Windup",   RGB(255, 140,   0) },
-        { "Recover",  RGB(160,  70,   0) },
-        { "Return",   RGB( 50, 200,  80) },
-        { "Repos",    RGB(160,  60, 200) },
-        { "Regroup",  RGB( 70, 160, 230) },
-        { "Confused", RGB(255, 220,  80) },
-        { "Slot",     RGB( 80, 200, 220) },
-        { "Retreat",  RGB(255,  80, 150) },
-        { "Dead",     RGB( 60,  60,  60) },
+        { "Idle",    RGB(140, 140, 140) },
+        { "Chase",   RGB(220,  50,  50) },
+        { "Windup",  RGB(255, 140,   0) },
+        { "Recover", RGB(160,  70,   0) },
+        { "Return",  RGB( 50, 200,  80) },
+        { "Repos",   RGB(160,  60, 200) },
+        { "Dead",    RGB( 40,  40,  40) },
     };
 
-    int ly = h - 215;  // adjusted for 11 entries (was 162 for 8)
+    int ly = h - 137;  // 7 entries × 17px + header 18px
     SetTextColor(hdc, RGB(160, 160, 160));
     TextOutA(hdc, 10, ly, "NPC States:", 11);
     ly += 18;
@@ -415,7 +392,7 @@ void Renderer::drawHUD(HDC hdc, int w, int h,
     DeleteObject(font);
 }
 
-// ─── render (public entry) ───────────────────────────────────────────────────
+// ─── render (공개 진입점) ────────────────────────────────────────────────────
 
 void Renderer::render(HDC hdc, int clientW, int clientH,
                        const sim::DebugSnapshot& snapshot) {
