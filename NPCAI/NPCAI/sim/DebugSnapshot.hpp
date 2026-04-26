@@ -45,6 +45,19 @@ struct DebugNpcEntry {
     float activityZoneCenterX{ 0.f };
     float activityZoneCenterZ{ 0.f };
     float activityZoneRadius { 0.f };
+    // ── NpcGroup ──────────────────────────────────────────────────────────
+    int   groupId{ -1 };   // -1 = 그룹 없음
+};
+
+// 그룹 활동 구역 + 공유 메모리 위치 시각화용
+struct DebugGroupEntry {
+    int   groupId{ -1 };
+    float centerX{ 0.f };
+    float centerZ{ 0.f };
+    float radius { 0.f };
+    bool  hasMemory{ false };
+    float memoryX{ 0.f };   // 마지막 목격 위치 (hasMemory == true 시 유효)
+    float memoryZ{ 0.f };
 };
 
 struct DebugSnapshot {
@@ -52,6 +65,7 @@ struct DebugSnapshot {
     bool                          paused{ false };
     std::vector<DebugPlayerEntry> players;
     std::vector<DebugNpcEntry>    npcs;
+    std::vector<DebugGroupEntry>  groups;
 };
 
 } // namespace sim

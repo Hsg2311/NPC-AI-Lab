@@ -1,6 +1,7 @@
 #include "Npc.hpp"
 #include "Room.hpp"
 #include "Player.hpp"
+#include "NpcGroup.hpp"
 #include "Logger.hpp"
 #include <cmath>
 #include <cstdio>
@@ -65,6 +66,23 @@ void Npc::update(float dt, Room& room) {
         updateDead();
         return;
     }
+
+    // 그룹 공유 메모리 위치가 활동 구역 밖이면 메모리 초기화 후 귀환
+    if (groupId_ >= 0) {
+        NpcGroup* group = room.getNpcGroup(groupId_);
+        if (group && group->hasValidMemory(room.getTickCount())) {
+            const SharedTargetMemory* mem = group->getBestMemory(room.getTickCount());
+            if (mem && !group->isInsideActivityArea(mem->lastKnownPosition)) {
+                group->clearMemory();
+                if (targetId_ != 0) {
+                    targetId_ = 0;
+                    transitionTo(NpcState::Return, "그룹 메모리 구역 이탈");
+                    return;
+                }
+            }
+        }
+    }
+
     switch (state_) {
         case NpcState::Idle:           updateIdle          (dt, room); break;
         case NpcState::Chase:          updateChase         (dt, room); break;
@@ -89,7 +107,7 @@ void Npc::transitionTo(NpcState next, const char* reason) {
 
 // ─── Idle ─────────────────────────────────────────────────────────────────────
 
-void Npc::updateIdle(float /*dt*/, Room& room) {
+void Npc::updateIdle(float dt, Room& room) {
     auto    players   = room.getLivingPlayers();
     Player* best      = nullptr;
     float   bestScore = -999.f;
@@ -99,14 +117,50 @@ void Npc::updateIdle(float /*dt*/, Room& room) {
         float s = evaluateTargetScore(p, room);
         if (s > bestScore) { bestScore = s; best = p; }
     }
-    if (!best) return;
+    if (best) {
+        targetId_ = best->getId();
+        // 그룹에 시야 보고
+        if (groupId_ >= 0) {
+            NpcGroup* group = room.getNpcGroup(groupId_);
+            if (group)
+                group->reportSight(id_, best->getId(), best->getPosition(),
+                                   room.getTickCount());
+        }
+        char buf[80];
+        std::snprintf(buf, sizeof(buf), "target=%s dist=%.1f",
+            best->getName().c_str(),
+            Vec3::distance(position_, best->getPosition()));
+        transitionTo(NpcState::Chase, buf);
+        return;
+    }
 
-    targetId_ = best->getId();
-    char buf[80];
-    std::snprintf(buf, sizeof(buf), "target=%s dist=%.1f",
-        best->getName().c_str(),
-        Vec3::distance(position_, best->getPosition()));
-    transitionTo(NpcState::Chase, buf);
+    // 직접 감지 실패 시 공유 메모리 위치 조사
+    if (groupId_ >= 0) {
+        NpcGroup* group = room.getNpcGroup(groupId_);
+        if (group) {
+            const SharedTargetMemory* mem = group->getBestMemory(room.getTickCount());
+            if (mem) {
+                if (isOutsideActivityZone()) {
+                    transitionTo(NpcState::Return, "활동 구역 이탈 (조사 중단)");
+                    return;
+                }
+                Vec3  diff = mem->lastKnownPosition - position_;
+                float dist = diff.length();
+                if (dist > 0.5f) {
+                    facing_    = diff.normalized();
+                    position_ += facing_ * (moveSpeed_ * dt);
+                } else {
+                    // 조사 위치 도달했으나 플레이어 없음 → 귀환
+                    if (Vec3::distance(position_, spawnPos_) > 0.5f)
+                        transitionTo(NpcState::Return, "조사 완료, 플레이어 없음");
+                }
+                return;
+            }
+            // 유효 메모리 없음 + 스폰에서 이탈해 있으면 귀환
+            if (isOutsideActivityZone() || Vec3::distance(position_, spawnPos_) > 1.f)
+                transitionTo(NpcState::Return, "메모리 만료, 귀환");
+        }
+    }
 }
 
 // ─── Chase ────────────────────────────────────────────────────────────────────
@@ -127,6 +181,14 @@ void Npc::updateChase(float dt, Room& room) {
     Actor* target = resolveTarget(room);
     if (!target) {
         targetId_ = 0;
+        // 그룹 유효 메모리가 있고 활동 구역 내에 있으면 조사로 전환
+        if (!isOutsideActivityZone() && groupId_ >= 0) {
+            NpcGroup* group = room.getNpcGroup(groupId_);
+            if (group && group->hasValidMemory(room.getTickCount())) {
+                transitionTo(NpcState::Idle, "target lost, 조사 시작");
+                return;
+            }
+        }
         transitionTo(NpcState::Return, "target lost");
         return;
     }
@@ -134,6 +196,16 @@ void Npc::updateChase(float dt, Room& room) {
         targetId_ = 0;
         transitionTo(NpcState::Return, "outside activity zone");
         return;
+    }
+
+    // 추격 중 그룹에 위치 보고
+    if (groupId_ >= 0) {
+        NpcGroup* group = room.getNpcGroup(groupId_);
+        if (group) {
+            if (auto* p = dynamic_cast<Player*>(target))
+                group->reportSight(id_, p->getId(), p->getPosition(),
+                                   room.getTickCount());
+        }
     }
 
     float dist = Vec3::distance(position_, target->getPosition());

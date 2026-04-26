@@ -15,7 +15,7 @@
 
 | 값 | 상태 | 설명 |
 |---|---|---|
-| 0 | `Idle` | 대기. `detectionRange` 내 플레이어 자율 감지 후 Chase 진입. |
+| 0 | `Idle` | 대기. `detectionRange` 내 플레이어 자율 감지 후 Chase 진입. 그룹 소속 NPC는 감지 실패 시 공유 메모리 위치로 이동해 조사한다. |
 | 1 | `Chase` | 타겟 추격. 분리 힘(separation force)과 추격 방향 블렌드로 이동. |
 | 2 | `AttackWindup` | 공격 선딜 (이동 없음). `windupTimer` 완료 시 hit/miss 판정. 타겟 이탈해도 취소 없음. |
 | 3 | `AttackRecover` | 공격 후딜. 약한 separation drift 허용. |
@@ -74,15 +74,24 @@
 |---|
 | `detectionRange` 내 생존 플레이어 존재. `evaluateTargetScore()`로 최고 점수 타겟 선택. |
 
+**그룹 소속 NPC (groupId ≥ 0)의 추가 행동:**
+
+직접 감지 실패 시 `NpcGroup::getBestMemory()`를 조회한다.
+- 유효 메모리 존재 && `!isOutsideActivityZone()` → 메모리 위치로 이동 (Idle 상태 유지하며 이동 = "조사")
+- 조사 위치 도달 후 플레이어 없음 → `Return`
+- 유효 메모리 없음 && 스폰에서 1u 이상 이탈 → `Return`
+
 #### Chase → *
 
 | 전이 대상 | 조건 |
 |---|---|
 | `AttackWindup` | `dist ≤ attackRange_` |
-| `Return` | 타겟 소실/사망 |
+| `Idle` | 타겟 소실/사망 && 그룹 유효 메모리 존재 && `!isOutsideActivityZone()` (조사 재개) |
+| `Return` | 타겟 소실/사망 (그룹 메모리 없거나 활동 구역 이탈) |
 | `Return` | `isOutsideActivityZone()` |
 
 Chase 중 0.5s(`TARGET_EVAL_INTERVAL`) 주기로 타겟 재평가. 더 높은 점수의 타겟으로 교체 가능.
+Chase 중 그룹에 `reportSight()` 호출 → 다른 그룹원이 공유 메모리를 통해 타겟 위치 파악 가능.
 
 #### AttackWindup → *
 
@@ -174,7 +183,9 @@ score = max(0, (1 − dist / (activityZoneRadius × 2))) × 50  // 거리 점수
 
 ```
 Idle   → Chase          : detectionRange 내 플레이어 감지 (score 기반)
+Idle   → Return         : (그룹) 조사 위치 도달 + 플레이어 없음 / 활동 구역 이탈 / 메모리 만료 후 이탈
 Chase  → AttackWindup   : dist ≤ attackRange
+Chase  → Idle           : (그룹) 타겟 소실 && 유효 메모리 존재 && 활동 구역 내 (조사 재개)
 Chase  → Return         : 타겟 소실 / isOutsideActivityZone
 AttackWindup → AttackRecover : windupTimer 완료 → hit(범위 내) or miss(범위 밖)
 AttackWindup → Return        : 타겟 소실 / isOutsideActivityZone
@@ -189,3 +200,77 @@ Return → Chase               : detectionRange 내 플레이어 재감지 (canR
 Return → Idle                : dist to spawnPos < 0.3
 Dead   → (none)              : terminal
 ```
+
+---
+
+## 3. NpcGroup 시야 공유 시스템
+
+### 개요
+
+`NpcGroup`은 경량 시야 공유 그룹이다. 지휘 계층(Squad/Platoon)이 없고 NPC에게 명령을 내리지 않는다.
+Room이 소유하며, NPC는 `groupId_`를 통해 조회만 한다.
+
+### SharedTargetMemory
+
+```
+struct SharedTargetMemory {
+    playerId            -- 추적 대상 플레이어 id (0 = 빈 슬롯)
+    reporterNpcId       -- 마지막으로 보고한 NPC id
+    lastKnownPosition   -- 마지막 목격 위치
+    lastSeenTick        -- 보고된 틱
+    expireTick          -- 유효 기한 (lastSeenTick + memoryDurationTick)
+    valid               -- 슬롯 유효 여부
+}
+```
+
+플레이어당 슬롯 1개 (`MaxPlayerCount = 4`). 기본 유효 기간 180 틱 (≈ 3초 @ 60fps).
+
+### NpcGroup 라이프사이클
+
+```
+Room::tick()
+  ├── npcGroup.update(tick)   ← 만료된 메모리 슬롯 초기화
+  └── NPC.update(dt, room)
+        ├── Npc::update() 진입부: 메모리 위치가 활동 구역 밖 → clearMemory() + Return
+        ├── updateIdle():
+        │     직접 감지 성공 → reportSight() → Chase
+        │     직접 감지 실패 + 유효 메모리 → 메모리 위치로 이동 (조사, Idle 유지)
+        │     조사 위치 도달 + 플레이어 없음 → Return
+        └── updateChase():
+              추격 중 매 틱 reportSight() 호출
+              타겟 소실 + 유효 메모리 존재 → Idle로 전환 (재조사)
+```
+
+### Room API
+
+| 메서드 | 설명 |
+|---|---|
+| `createNpcGroup(center, radius, memoryDurationTick)` | 그룹 생성; Room이 소유. 반환 포인터는 Room 생존 기간 유효. |
+| `getNpcGroup(groupId)` | groupId로 그룹 조회 |
+
+### Npc API (그룹 연동)
+
+| 메서드 / 필드 | 설명 |
+|---|---|
+| `groupId_ (-1)` | -1 = 독립 NPC; ≥ 0 = NpcGroup 소속 |
+| `setGroupId(id)` | 그룹 id 설정 |
+| `getGroupId()` | 그룹 id 반환 |
+
+NPC를 그룹에 연결하려면 `setGroupId()`와 `NpcGroup::addMember()` 양쪽 모두 호출해야 한다.
+`activityZone`과 `NpcGroup`의 center/radius는 **일치**시켜야 한다 — 구역 이탈 판정이 일관되게 유지된다.
+
+### DebugSnapshot 확장
+
+| 필드 | 설명 |
+|---|---|
+| `DebugNpcEntry::groupId` | -1 = 독립, ≥ 0 = 그룹 소속 |
+| `DebugGroupEntry` | groupId, center, radius, hasMemory, memoryX/Z |
+| `DebugSnapshot::groups` | `DebugGroupEntry` 벡터 |
+
+### 시각화 (Renderer)
+
+| 요소 | 설명 |
+|---|---|
+| 그룹 활동 구역 원 | 그룹별 색상 실선 (G0 청록 / G1 황금 / G2 보라 / G3 연두) |
+| `G0` / `G1` 레이블 | 구역 원 위쪽 |
+| 공유 메모리 위치 마커 | `×` (hasMemory == true 시 표시) |

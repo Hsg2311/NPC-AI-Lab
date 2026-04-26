@@ -6,6 +6,7 @@ namespace sim {
 
 class Room;
 class Player;
+class NpcGroup;
 
 // ─── NpcState ────────────────────────────────────────────────────────────────
 // int 값은 Renderer 색상 테이블 및 DebugSnapshot에서 사용된다.
@@ -56,11 +57,13 @@ public:
     float    getSeparationRadius()   const { return separationRadius_; }
     float    getWindupProgress()     const;
     float    getRecoverProgress()    const;
+    int      getGroupId()            const { return groupId_; }
 
     void setActivityZone(const Vec3& center, float radius) {
         activityZoneCenter_ = center;
         activityZoneRadius_ = radius;
     }
+    void setGroupId(int id) { groupId_ = id; }
 
 private:
     // ── 상태 전이 / 상태별 업데이트 ─────────────────────────────────────────
@@ -86,6 +89,7 @@ private:
     NpcState state_{ NpcState::Idle };
     Vec3     spawnPos_;
     uint32_t targetId_{ 0 };
+    int      groupId_{ -1 };   // -1 = 독립 NPC (그룹 없음)
 
     // 설정 복사본
     float detectionRange_;

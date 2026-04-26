@@ -1,6 +1,7 @@
 #pragma once
 #include "DummyPlayerController.hpp"
 #include "DebugSnapshot.hpp"
+#include "NpcGroup.hpp"
 #include <unordered_map>
 #include <memory>
 #include <cstdint>
@@ -46,6 +47,12 @@ public:
                                 std::vector<Vec3>& out) const;
     int  countNpcsTargeting(uint32_t playerId) const;
 
+    // ── NpcGroup 관리 ─────────────────────────────────────────────────────────
+    // 그룹 생성 후 Room이 소유; 반환된 포인터는 Room 생존 기간 동안 유효
+    NpcGroup* createNpcGroup(const Vec3& center, float radius,
+                              uint32_t memoryDurationTick = 180);
+    NpcGroup* getNpcGroup(int groupId);
+
 private:
     uint32_t roomId_;
     uint32_t tickCount_{ 0 };
@@ -53,6 +60,7 @@ private:
 
     std::unordered_map<uint32_t, std::shared_ptr<Actor>> actors_{};
     DummyPlayerController dummyCtrl_{};
+    std::vector<std::unique_ptr<NpcGroup>> npcGroups_{};
 };
 
 } // namespace sim

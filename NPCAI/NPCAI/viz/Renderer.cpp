@@ -87,6 +87,60 @@ void Renderer::drawHomeMarker(HDC hdc, POINT c, COLORREF col) {
     DeleteObject(pen);
 }
 
+// ─── 그룹 색상 테이블 ────────────────────────────────────────────────────────
+
+static COLORREF groupColor(int groupId) {
+    static const COLORREF table[] = {
+        RGB(  0, 200, 220),   // 0 - 청록
+        RGB(220, 180,   0),   // 1 - 황금
+        RGB(200,  80, 200),   // 2 - 보라
+        RGB( 80, 220, 100),   // 3 - 연두
+    };
+    if (groupId >= 0 && groupId < static_cast<int>(std::size(table)))
+        return table[groupId];
+    return RGB(200, 200, 200);
+}
+
+// ─── drawGroups ──────────────────────────────────────────────────────────────
+
+void Renderer::drawGroups(HDC hdc, int w, int h, const sim::DebugSnapshot& snap) {
+    for (const auto& g : snap.groups) {
+        COLORREF col  = groupColor(g.groupId);
+        POINT    cent = worldToScreen(g.centerX, g.centerZ, w, h);
+        int      rad  = static_cast<int>(g.radius * camera_.scale);
+
+        // 활동 구역 원 (실선, 얇게)
+        HPEN pen    = CreatePen(PS_SOLID, 1,
+                                RGB(GetRValue(col)/2, GetGValue(col)/2, GetBValue(col)/2));
+        HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, pen));
+        drawCircleOutline(hdc, cent, rad);
+        SelectObject(hdc, oldPen);
+        DeleteObject(pen);
+
+        // 그룹 ID 레이블
+        {
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "G%d", g.groupId);
+            SetTextColor(hdc, col);
+            SetBkMode   (hdc, TRANSPARENT);
+            TextOutA    (hdc, cent.x + 4, cent.y - rad - 16,
+                         buf, static_cast<int>(std::strlen(buf)));
+        }
+
+        // 공유 메모리 위치 마커 (X)
+        if (g.hasMemory) {
+            POINT mp  = worldToScreen(g.memoryX, g.memoryZ, w, h);
+            int   s   = 7;
+            HPEN  mp_ = CreatePen(PS_SOLID, 2, col);
+            HPEN  op_ = static_cast<HPEN>(SelectObject(hdc, mp_));
+            MoveToEx(hdc, mp.x - s, mp.y - s, nullptr); LineTo(hdc, mp.x + s, mp.y + s);
+            MoveToEx(hdc, mp.x + s, mp.y - s, nullptr); LineTo(hdc, mp.x - s, mp.y + s);
+            SelectObject(hdc, op_);
+            DeleteObject(mp_);
+        }
+    }
+}
+
 // ─── drawBackground ──────────────────────────────────────────────────────────
 
 void Renderer::drawBackground(HDC hdc, int w, int h) {
@@ -398,6 +452,7 @@ void Renderer::render(HDC hdc, int clientW, int clientH,
                        const sim::DebugSnapshot& snapshot) {
     drawBackground(hdc, clientW, clientH);
     drawGrid(hdc, clientW, clientH);
+    drawGroups(hdc, clientW, clientH, snapshot);
 
     for (const auto& npc : snapshot.npcs) {
         drawNpc(hdc, clientW, clientH, npc, snapshot);

@@ -37,6 +37,10 @@ void Room::tick(float dt) {
             p->update(dt, *this);
     }
 
+    // NPC 업데이트 전 그룹 메모리 만료 슬롯 정리
+    for (auto& group : npcGroups_)
+        group->update(tickCount_);
+
     for (auto& [id, actor] : actors_) {
         if (auto* npc = dynamic_cast<Npc*>(actor.get()))
             npc->update(dt, *this);
@@ -112,6 +116,22 @@ int Room::countNpcsTargeting(uint32_t playerId) const {
             ++count;
     }
     return count;
+}
+
+// ─── createNpcGroup / getNpcGroup ────────────────────────────────────────────
+
+NpcGroup* Room::createNpcGroup(const Vec3& center, float radius,
+                                uint32_t memoryDurationTick) {
+    int id = static_cast<int>(npcGroups_.size());
+    npcGroups_.push_back(
+        std::make_unique<NpcGroup>(id, center, radius, memoryDurationTick));
+    return npcGroups_.back().get();
+}
+
+NpcGroup* Room::getNpcGroup(int groupId) {
+    if (groupId < 0 || groupId >= static_cast<int>(npcGroups_.size()))
+        return nullptr;
+    return npcGroups_[groupId].get();
 }
 
 // ─── dumpSnapshot ────────────────────────────────────────────────────────────
@@ -192,9 +212,27 @@ DebugSnapshot Room::buildSnapshot() const {
             e.activityZoneCenterX = npc->getActivityZoneCenter().x;
             e.activityZoneCenterZ = npc->getActivityZoneCenter().z;
             e.activityZoneRadius  = npc->getActivityZoneRadius();
+            e.groupId             = npc->getGroupId();
             snap.npcs.push_back(e);
         }
     }
+
+    // 그룹 활동 구역 및 공유 메모리 위치
+    for (const auto& group : npcGroups_) {
+        DebugGroupEntry g;
+        g.groupId  = group->getGroupId();
+        g.centerX  = group->getCenter().x;
+        g.centerZ  = group->getCenter().z;
+        g.radius   = group->getRadius();
+        const SharedTargetMemory* mem = group->getBestMemory(tickCount_);
+        if (mem) {
+            g.hasMemory = true;
+            g.memoryX   = mem->lastKnownPosition.x;
+            g.memoryZ   = mem->lastKnownPosition.z;
+        }
+        snap.groups.push_back(g);
+    }
+
     return snap;
 }
 

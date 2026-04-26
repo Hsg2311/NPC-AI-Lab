@@ -420,3 +420,64 @@ transitionTo(NpcState::Idle, "reached home");
 세트/리셋만 되는 잉여 플래그임이 확인됐다. 선언 1곳, 세트 4곳, 리셋 2곳 전부 제거.
 
 ---
+
+## [11] NpcGroup 공유 메모리 위치가 활동 구역 밖을 가리키는 문제
+
+**설계 배경:**
+
+플레이어가 그룹 활동 구역 안에서 감지된 후 이동해 구역 밖으로 나갔을 때, 공유 메모리의
+`lastKnownPosition`은 구역 밖 좌표를 가리킬 수 있다.
+이 상태를 방치하면 그룹 NPC들이 조사(`updateIdle` 이동) 또는 추격(`updateChase`) 중
+자신의 `activityZoneRadius`를 초과해 `Return` 전이를 반복하는 루프가 발생한다.
+
+**처리 방식:**
+
+`Npc::update()` 진입부(FSM 분기 전)에서 선제 체크한다.
+
+```cpp
+// Npc.cpp — update() 시작부
+if (groupId_ >= 0) {
+    NpcGroup* group = room.getNpcGroup(groupId_);
+    if (group && group->hasValidMemory(room.getTickCount())) {
+        const SharedTargetMemory* mem = group->getBestMemory(room.getTickCount());
+        if (mem && !group->isInsideActivityArea(mem->lastKnownPosition)) {
+            group->clearMemory();   // 구역 이탈 메모리 전체 초기화
+            if (targetId_ != 0) {
+                targetId_ = 0;
+                transitionTo(NpcState::Return, "그룹 메모리 구역 이탈");
+                return;
+            }
+        }
+    }
+}
+```
+
+`clearMemory()`는 그룹 전체 메모리를 날리므로, 이 틱에 다른 그룹원이 해당 플레이어를
+`reportSight()`로 다시 등록하지 않는 한 다음 틱부터는 조사 이동이 발동되지 않는다.
+
+**주의:** `isInsideActivityArea()`는 `NpcGroup`의 center/radius를 기준으로 판정한다.
+`Npc::setActivityZone()`에 전달하는 값과 `createNpcGroup()`에 전달하는 값이 **반드시 일치**해야 한다.
+불일치하면 그룹 체크와 개별 NPC 체크가 서로 다른 경계를 사용해 예상치 못한 귀환이 발생한다.
+
+---
+
+## [12] Idle 상태에서 이동하는 "조사" 행동의 설계 결정
+
+**맥락:**
+
+`updateIdle()`의 조사 행동은 Idle 상태를 유지하면서 위치를 이동시킨다. 이는 직관에 반한다
+(Idle = 정지 대기 이미지). 아래 이유로 별도 상태를 만들지 않고 Idle 내 이동으로 처리했다.
+
+- 조사 이동은 상태 전이 로그를 남기지 않는 것이 적합하다 — 플레이어를 감지한 것이 아니므로
+  Chase 진입이 아님.
+- 조사 도중 플레이어를 실제 감지하면 즉시 `Chase`로 전이된다 — 정상 경로 유지.
+- 별도 `Investigate` 상태를 도입하면 Renderer 색상 테이블, DebugSnapshot, 범례 등
+  연쇄 수정이 필요해 현재 단계에서 불필요한 복잡도가 생긴다.
+
+**동작 요약:**
+```
+Idle (이동 중) → 공유 메모리 위치 도달 → 플레이어 감지 → Chase
+                                        → 플레이어 없음  → Return (스폰 귀환)
+```
+
+---

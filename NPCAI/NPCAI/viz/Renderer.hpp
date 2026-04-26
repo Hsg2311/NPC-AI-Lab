@@ -32,6 +32,7 @@ private:
     // ── 드로우 패스 ─────────────────────────────────────────────────────────
     void drawBackground(HDC hdc, int w, int h);
     void drawGrid(HDC hdc, int w, int h);
+    void drawGroups(HDC hdc, int w, int h, const sim::DebugSnapshot& snap);
     void drawNpc(HDC hdc, int w, int h, const sim::DebugNpcEntry& npc, const sim::DebugSnapshot& snap);
     void drawPlayer(HDC hdc, int w, int h, const sim::DebugPlayerEntry& p);
     void drawTargetLine(HDC hdc, int w, int h, const sim::DebugNpcEntry& npc, const sim::DebugSnapshot& snap);

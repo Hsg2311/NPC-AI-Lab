@@ -1,5 +1,5 @@
 ﻿#include "Application.hpp"
-#include "../sim/ScenarioSoloNpc.hpp"
+#include "../sim/ScenarioSharedSight.hpp"
 #include <cstdio>
 
 namespace viz {
@@ -47,7 +47,7 @@ bool Application::init(HINSTANCE hInst, int nCmdShow) {
         return false;
     }
 
-    scenario_ = std::make_unique<sim::ScenarioSoloNpc>();
+    scenario_ = std::make_unique<sim::ScenarioSharedSight>();
     scenario_->setup(room_);
     controlledPlayer_ = scenario_->controlledPlayer();
 
