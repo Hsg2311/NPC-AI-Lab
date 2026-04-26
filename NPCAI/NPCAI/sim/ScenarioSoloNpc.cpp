@@ -1,8 +1,8 @@
-#include "ScenarioSoloNpc.hpp"
+﻿#include "ScenarioSoloNpc.hpp"
 #include "Player.hpp"
 #include "Npc.hpp"
 #include <memory>
-#include <cstdio>
+#include <iostream>
 
 namespace sim {
 
@@ -59,7 +59,7 @@ void ScenarioSoloNpc::setup(Room& room) {
     //room.addActor(std::make_shared<Npc>("Orc02", Vec3{ 28.f, 0.f,  8.f }, orc));
 
     //printf("[Sim] ScenarioSoloNpc: 1 player, 3 goblins, 2 orcs (all standalone)\n");
-    printf("[Sim] ScenarioSoloNpc: 1 player, 10 goblins (all standalone)\n");
+	std::cout << "[Sim] ScenarioSoloNpc: 1 player, 10 goblins (all standalone)\n";
 }
 
 } // namespace sim

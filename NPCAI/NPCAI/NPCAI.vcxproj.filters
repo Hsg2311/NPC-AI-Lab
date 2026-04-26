@@ -1,27 +1,111 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <Filter Include="소스 파일">
-      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
-      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    <Filter Include="sim">
+      <UniqueIdentifier>{d0252313-6b08-497a-af4f-8ed618cce09d}</UniqueIdentifier>
     </Filter>
-    <Filter Include="헤더 파일">
-      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    <Filter Include="viz">
+      <UniqueIdentifier>{e53ba91b-c04a-4303-92a2-f8b565f0f3f5}</UniqueIdentifier>
     </Filter>
-    <Filter Include="리소스 파일">
-      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
-      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    <Filter Include="default">
+      <UniqueIdentifier>{c60315d4-47ff-49c6-9fdd-47423d04278c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sim\Actor">
+      <UniqueIdentifier>{b5a1f525-fb2d-4dc1-880f-17144121889f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sim\utils">
+      <UniqueIdentifier>{669e3409-4e47-4f29-b91d-0174b513df20}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sim\scenario">
+      <UniqueIdentifier>{0c6d419a-64b1-4328-b788-ee9e431fbfe1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sim\room">
+      <UniqueIdentifier>{1ab22d7c-12e9-4cf5-a6c5-0d5a939609cf}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="viz\Application.hpp">
+      <Filter>viz</Filter>
+    </ClInclude>
+    <ClInclude Include="viz\Renderer.hpp">
+      <Filter>viz</Filter>
+    </ClInclude>
     <ClInclude Include="mathUtil.hpp">
-      <Filter>헤더 파일</Filter>
+      <Filter>default</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\Actor.hpp">
+      <Filter>sim\Actor</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\Npc.hpp">
+      <Filter>sim\Actor</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\Player.hpp">
+      <Filter>sim\Actor</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\DebugSnapshot.hpp">
+      <Filter>sim\utils</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\DummyPlayerController.hpp">
+      <Filter>sim\utils</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\Logger.hpp">
+      <Filter>sim\utils</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\Vec3.hpp">
+      <Filter>sim\utils</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\Scenario.hpp">
+      <Filter>sim\scenario</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\ScenarioSharedSight.hpp">
+      <Filter>sim\scenario</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\ScenarioSoloNpc.hpp">
+      <Filter>sim\scenario</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\Room.hpp">
+      <Filter>sim\room</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\NpcGroup.hpp">
+      <Filter>sim\Actor</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="viz\Renderer.cpp">
+      <Filter>viz</Filter>
+    </ClCompile>
+    <ClCompile Include="viz\Application.cpp">
+      <Filter>viz</Filter>
+    </ClCompile>
     <ClCompile Include="main.cpp">
-      <Filter>소스 파일</Filter>
+      <Filter>default</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\Actor.cpp">
+      <Filter>sim\Actor</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\Npc.cpp">
+      <Filter>sim\Actor</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\Player.cpp">
+      <Filter>sim\Actor</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\DummyPlayerController.cpp">
+      <Filter>sim\utils</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\Logger.cpp">
+      <Filter>sim\utils</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\ScenarioSharedSight.cpp">
+      <Filter>sim\scenario</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\ScenarioSoloNpc.cpp">
+      <Filter>sim\scenario</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\Room.cpp">
+      <Filter>sim\room</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\NpcGroup.cpp">
+      <Filter>sim\Actor</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

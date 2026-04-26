@@ -8,8 +8,10 @@
 
 #include "viz/Application.hpp"
 #include <iostream>
+#include <windows.h>
 
 int main() {
+    SetConsoleOutputCP(CP_UTF8);
     // 콘솔 (로그)과 시각화 창, 두 창이 함께 표시된다.
     std::cout << "=== NPC AI Simulator  v2  (WinAPI + GDI) ===\n";
     std::cout << "  Space  Pause / Resume\n";

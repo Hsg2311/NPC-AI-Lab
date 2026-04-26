@@ -1,4 +1,4 @@
-#include "Npc.hpp"
+﻿#include "Npc.hpp"
 #include "Room.hpp"
 #include "Player.hpp"
 #include "NpcGroup.hpp"
@@ -144,7 +144,8 @@ void Npc::updateIdle(float dt, Room& room) {
             if (mem) {
                 if (isOutsideActivityZone()) {
                     transitionTo(NpcState::Return, "활동 구역 이탈 (조사 중단)");
-                } else {
+                } 
+                else {
                     transitionTo(NpcState::Investigate, "공유 메모리 조사");
                 }
                 return;

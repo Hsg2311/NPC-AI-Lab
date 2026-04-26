@@ -1,4 +1,4 @@
-#include "ScenarioSharedSight.hpp"
+﻿#include "ScenarioSharedSight.hpp"
 #include "Player.hpp"
 #include "Npc.hpp"
 #include "NpcGroup.hpp"

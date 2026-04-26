@@ -1,4 +1,4 @@
-#include "NpcGroup.hpp"
+﻿#include "NpcGroup.hpp"
 #include <algorithm>
 
 namespace sim {
