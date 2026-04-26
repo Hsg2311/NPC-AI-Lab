@@ -14,9 +14,7 @@ void Logger::setTick(uint32_t tick) {
 }
 
 void Logger::log(const std::string& category, const std::string& message) {
-    char tickBuf[16];
-    std::snprintf(tickBuf, sizeof(tickBuf), "[T:%04u]", currentTick_);
-    std::cout << tickBuf << "[" << category << "] " << message << "\n";
+    std::cout << "[T:" << currentTick_ << "]" << "[" << category << "] " << message << "\n";
 }
 
 void Logger::logTransition(const std::string& actorName,

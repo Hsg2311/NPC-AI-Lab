@@ -21,6 +21,7 @@ static const char* npcStateStr(NpcState s) {
         case NpcState::Return:         return "Return";
         case NpcState::Reposition:     return "Reposition";
         case NpcState::Dead:           return "Dead";
+        case NpcState::Investigate:    return "Investigate";
     }
     return "?";
 }
@@ -91,6 +92,7 @@ void Npc::update(float dt, Room& room) {
         case NpcState::Return:         updateReturn        (dt, room); break;
         case NpcState::Reposition:     updateReposition    (dt, room); break;
         case NpcState::Dead:           /* 종료 상태 */                  break;
+        case NpcState::Investigate:    updateInvestigate   (dt, room); break;
     }
 }
 
@@ -142,17 +144,8 @@ void Npc::updateIdle(float dt, Room& room) {
             if (mem) {
                 if (isOutsideActivityZone()) {
                     transitionTo(NpcState::Return, "활동 구역 이탈 (조사 중단)");
-                    return;
-                }
-                Vec3  diff = mem->lastKnownPosition - position_;
-                float dist = diff.length();
-                if (dist > 0.5f) {
-                    facing_    = diff.normalized();
-                    position_ += facing_ * (moveSpeed_ * dt);
                 } else {
-                    // 조사 위치 도달했으나 플레이어 없음 → 귀환
-                    if (Vec3::distance(position_, spawnPos_) > 0.5f)
-                        transitionTo(NpcState::Return, "조사 완료, 플레이어 없음");
+                    transitionTo(NpcState::Investigate, "공유 메모리 조사");
                 }
                 return;
             }
@@ -185,7 +178,7 @@ void Npc::updateChase(float dt, Room& room) {
         if (!isOutsideActivityZone() && groupId_ >= 0) {
             NpcGroup* group = room.getNpcGroup(groupId_);
             if (group && group->hasValidMemory(room.getTickCount())) {
-                transitionTo(NpcState::Idle, "target lost, 조사 시작");
+                transitionTo(NpcState::Investigate, "target lost, 조사 시작");
                 return;
             }
         }
@@ -370,6 +363,58 @@ void Npc::updateReposition(float dt, Room& room) {
     Vec3 moveDir  = (toTarget + repositionDir_ * 0.8f + sep * separationWeight_).normalized();
     facing_    = moveDir;
     position_ += moveDir * (moveSpeed_ * dt);
+}
+
+// ─── Investigate ─────────────────────────────────────────────────────────────
+
+void Npc::updateInvestigate(float dt, Room& room) {
+    // 직접 감지 성공 시 Chase로 전환
+    {
+        auto    players   = room.getLivingPlayers();
+        Player* best      = nullptr;
+        float   bestScore = -999.f;
+        for (Player* p : players) {
+            if (Vec3::distance(position_, p->getPosition()) > detectionRange_) continue;
+            float s = evaluateTargetScore(p, room);
+            if (s > bestScore) { bestScore = s; best = p; }
+        }
+        if (best) {
+            targetId_ = best->getId();
+            if (groupId_ >= 0) {
+                NpcGroup* group = room.getNpcGroup(groupId_);
+                if (group)
+                    group->reportSight(id_, best->getId(), best->getPosition(),
+                                       room.getTickCount());
+            }
+            char buf[80];
+            std::snprintf(buf, sizeof(buf), "target=%s dist=%.1f",
+                best->getName().c_str(),
+                Vec3::distance(position_, best->getPosition()));
+            transitionTo(NpcState::Chase, buf);
+            return;
+        }
+    }
+
+    if (isOutsideActivityZone()) {
+        transitionTo(NpcState::Return, "활동 구역 이탈 (조사 중단)");
+        return;
+    }
+
+    NpcGroup* group = (groupId_ >= 0) ? room.getNpcGroup(groupId_) : nullptr;
+    const SharedTargetMemory* mem = group ? group->getBestMemory(room.getTickCount()) : nullptr;
+    if (!mem) {
+        transitionTo(NpcState::Return, "메모리 만료, 귀환");
+        return;
+    }
+
+    Vec3  diff = mem->lastKnownPosition - position_;
+    float dist = diff.length();
+    if (dist > 0.5f) {
+        facing_    = diff.normalized();
+        position_ += facing_ * (moveSpeed_ * dt);
+    } else {
+        transitionTo(NpcState::Return, "조사 완료, 플레이어 없음");
+    }
 }
 
 // ─── Dead ─────────────────────────────────────────────────────────────────────

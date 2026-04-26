@@ -15,13 +15,14 @@
 
 | 값 | 상태 | 설명 |
 |---|---|---|
-| 0 | `Idle` | 대기. `detectionRange` 내 플레이어 자율 감지 후 Chase 진입. 그룹 소속 NPC는 감지 실패 시 공유 메모리 위치로 이동해 조사한다. |
+| 0 | `Idle` | 대기. `detectionRange` 내 플레이어 자율 감지 후 Chase 진입. 그룹 소속 NPC는 감지 실패 시 Investigate 전이. |
 | 1 | `Chase` | 타겟 추격. 분리 힘(separation force)과 추격 방향 블렌드로 이동. |
 | 2 | `AttackWindup` | 공격 선딜 (이동 없음). `windupTimer` 완료 시 hit/miss 판정. 타겟 이탈해도 취소 없음. |
 | 3 | `AttackRecover` | 공격 후딜. 약한 separation drift 허용. |
 | 4 | `Return` | 스폰 위치로 귀환. `returnSpeedMult_` 배율 적용. |
 | 5 | `Reposition` | 과밀 탈출 비켜서기. 타겟 방향 + 수직 이탈 블렌드 이동. |
 | 6 | `Dead` | 종단 상태. |
+| 7 | `Investigate` | 그룹 공유 메모리의 최종 목격 위치로 이동하며 조사. 감지 성공 시 Chase, 도달 후 플레이어 없으면 Return. |
 
 ### 핵심 행동 원칙
 
@@ -77,8 +78,8 @@
 **그룹 소속 NPC (groupId ≥ 0)의 추가 행동:**
 
 직접 감지 실패 시 `NpcGroup::getBestMemory()`를 조회한다.
-- 유효 메모리 존재 && `!isOutsideActivityZone()` → 메모리 위치로 이동 (Idle 상태 유지하며 이동 = "조사")
-- 조사 위치 도달 후 플레이어 없음 → `Return`
+- 유효 메모리 존재 && `!isOutsideActivityZone()` → `Investigate` 전이
+- 유효 메모리 존재 && `isOutsideActivityZone()` → `Return`
 - 유효 메모리 없음 && 스폰에서 1u 이상 이탈 → `Return`
 
 #### Chase → *
@@ -86,7 +87,7 @@
 | 전이 대상 | 조건 |
 |---|---|
 | `AttackWindup` | `dist ≤ attackRange_` |
-| `Idle` | 타겟 소실/사망 && 그룹 유효 메모리 존재 && `!isOutsideActivityZone()` (조사 재개) |
+| `Investigate` | 타겟 소실/사망 && 그룹 유효 메모리 존재 && `!isOutsideActivityZone()` |
 | `Return` | 타겟 소실/사망 (그룹 메모리 없거나 활동 구역 이탈) |
 | `Return` | `isOutsideActivityZone()` |
 
@@ -182,11 +183,14 @@ score = max(0, (1 − dist / (activityZoneRadius × 2))) × 50  // 거리 점수
 ## 전체 상태 전이 요약
 
 ```
-Idle   → Chase          : detectionRange 내 플레이어 감지 (score 기반)
-Idle   → Return         : (그룹) 조사 위치 도달 + 플레이어 없음 / 활동 구역 이탈 / 메모리 만료 후 이탈
-Chase  → AttackWindup   : dist ≤ attackRange
-Chase  → Idle           : (그룹) 타겟 소실 && 유효 메모리 존재 && 활동 구역 내 (조사 재개)
-Chase  → Return         : 타겟 소실 / isOutsideActivityZone
+Idle        → Chase          : detectionRange 내 플레이어 감지 (score 기반)
+Idle        → Investigate   : (그룹) 감지 실패 && 유효 메모리 존재 && 활동 구역 내
+Idle        → Return        : (그룹) 활동 구역 이탈 / 메모리 만료 후 이탈
+Chase       → AttackWindup  : dist ≤ attackRange
+Chase       → Investigate   : (그룹) 타겟 소실 && 유효 메모리 존재 && 활동 구역 내
+Chase       → Return        : 타겟 소실 / isOutsideActivityZone
+Investigate → Chase         : detectionRange 내 플레이어 감지
+Investigate → Return        : 활동 구역 이탈 / 메모리 만료 / 조사 위치 도달 후 플레이어 없음
 AttackWindup → AttackRecover : windupTimer 완료 → hit(범위 내) or miss(범위 밖)
 AttackWindup → Return        : 타겟 소실 / isOutsideActivityZone
 AttackRecover → AttackWindup : 경직 완료, in range, 혼잡 없음
@@ -234,11 +238,14 @@ Room::tick()
         ├── Npc::update() 진입부: 메모리 위치가 활동 구역 밖 → clearMemory() + Return
         ├── updateIdle():
         │     직접 감지 성공 → reportSight() → Chase
-        │     직접 감지 실패 + 유효 메모리 → 메모리 위치로 이동 (조사, Idle 유지)
-        │     조사 위치 도달 + 플레이어 없음 → Return
+        │     직접 감지 실패 + 유효 메모리 → Investigate
+        ├── updateInvestigate():
+        │     직접 감지 성공 → reportSight() → Chase
+        │     메모리 위치로 이동; 도달 후 플레이어 없음 → Return
+        │     메모리 만료 / 활동 구역 이탈 → Return
         └── updateChase():
               추격 중 매 틱 reportSight() 호출
-              타겟 소실 + 유효 메모리 존재 → Idle로 전환 (재조사)
+              타겟 소실 + 유효 메모리 존재 → Investigate
 ```
 
 ### Room API

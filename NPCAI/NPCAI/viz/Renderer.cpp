@@ -6,7 +6,7 @@
 namespace viz {
 
 // ─── 색상 테이블 ─────────────────────────────────────────────────────────────
-// NpcState int 값: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Return 5=Reposition 6=Dead
+// NpcState int 값: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Return 5=Reposition 6=Dead 7=Investigate
 
 COLORREF Renderer::npcStateColor(int state) {
     switch (state) {
@@ -17,6 +17,7 @@ COLORREF Renderer::npcStateColor(int state) {
         case 4: return RGB( 50, 200,  80);  // Return        - 초록색
         case 5: return RGB(160,  60, 200);  // Reposition    - 보라색
         case 6: return RGB( 40,  40,  40);  // Dead          - 거의 검정
+        case 7: return RGB(220, 200,  50);  // Investigate   - 노란색
     }
     return RGB(255, 255, 255);
 }
@@ -325,9 +326,9 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
     // ── 레이블: 이름 [상태] ──────────────────────────────────────────────────
     {
         static const char* stateNames[] = {
-            "Idle","Chase","Windup","Recover","Return","Repos","Dead"
+            "Idle","Chase","Windup","Recover","Return","Repos","Dead","Invest"
         };
-        const char* sname = (npc.state >= 0 && npc.state < 7)
+        const char* sname = (npc.state >= 0 && npc.state < 8)
             ? stateNames[npc.state] : "?";
         char label[80];
         std::snprintf(label, sizeof(label), "%s [%s]", npc.name.c_str(), sname);
@@ -414,7 +415,7 @@ void Renderer::drawHUD(HDC hdc, int w, int h,
         aggroY += 16;
     }
 
-    // 상태 범례 (좌측 하단) - 7개 항목
+    // 상태 범례 (좌측 하단) - 8개 항목
     struct LegendEntry { const char* name; COLORREF col; };
     static const LegendEntry legend[] = {
         { "Idle",    RGB(140, 140, 140) },
@@ -424,9 +425,10 @@ void Renderer::drawHUD(HDC hdc, int w, int h,
         { "Return",  RGB( 50, 200,  80) },
         { "Repos",   RGB(160,  60, 200) },
         { "Dead",    RGB( 40,  40,  40) },
+        { "Invest",  RGB(220, 200,  50) },
     };
 
-    int ly = h - 137;  // 7 entries × 17px + header 18px
+    int ly = h - 154;  // 8 entries × 17px + header 18px
     SetTextColor(hdc, RGB(160, 160, 160));
     TextOutA(hdc, 10, ly, "NPC States:", 11);
     ly += 18;

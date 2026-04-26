@@ -18,6 +18,7 @@ enum class NpcState {
     Return,         // 4   walking back to spawn
     Reposition,     // 5   sidestep away from crowded position
     Dead,           // 6   terminal state
+    Investigate,    // 7   group NPC: moving toward shared-memory last-known position
 };
 
 // ─── NpcConfig ───────────────────────────────────────────────────────────────
@@ -76,6 +77,7 @@ private:
     void updateReturn       (float dt, Room& room);
     void updateReposition   (float dt, Room& room);
     void updateDead         ();
+    void updateInvestigate  (float dt, Room& room);
 
     // ── 헬퍼 ──────────────────────────────────────────────────────────────────
     Actor*  resolveTarget           (Room& room) const;

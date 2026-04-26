@@ -3,7 +3,7 @@
 #include "Npc.hpp"
 #include "NpcGroup.hpp"
 #include <memory>
-#include <cstdio>
+#include <iostream>
 
 namespace sim {
 
@@ -79,8 +79,8 @@ void ScenarioSharedSight::setup(Room& room) {
     room.addActor(gb2);
     room.addActor(gb3);
 
-    printf("[Sim] ScenarioSharedSight: P1, 그룹A(G0) 고블린 3마리, 그룹B(G1) 고블린 3마리\n");
-    printf("      화살표키로 P1 이동. GoblinA1 감지 범위에 들어오면 그룹 전체가 반응한다.\n");
+	std::cout << "[Sim] ScenarioSharedSight: P1, 그룹A(G0) 고블린 3마리, 그룹B(G1) 고블린 3마리\n";
+    std::cout << "화살표키로 P1 이동. GoblinA1 감지 범위에 들어오면 그룹 전체가 반응한다.\n";
 }
 
 } // namespace sim

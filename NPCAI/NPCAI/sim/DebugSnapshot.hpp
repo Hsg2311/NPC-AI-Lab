@@ -22,7 +22,7 @@ struct DebugPlayerEntry {
     int         aggroCount{ 0 };  // 이 플레이어를 타겟으로 Chase/Windup/Recover/Reposition 상태인 NPC 수
 };
 
-// 상태: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Return 5=Reposition 6=Dead
+// 상태: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Return 5=Reposition 6=Dead 7=Investigate
 struct DebugNpcEntry {
     int         id{ 0 };
     float       x{ 0.f };
