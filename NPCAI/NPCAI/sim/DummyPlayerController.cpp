@@ -26,7 +26,7 @@ void DummyPlayerController::update(float dt, Room& room) {
         player->setMoveTarget(target);
 
         // 플레이어가 충분히 가까워지면 다음 웨이포인트로 진행
-        if (Vec3::distance(player->getPosition(), target) < 0.5f) {
+        if (Vec3::distanceSq(player->getPosition(), target) < 0.5f * 0.5f) {
             int next = ctrl.currentWaypoint + 1;
             if (next >= static_cast<int>(ctrl.waypoints.size())) {
                 next = ctrl.loop ? 0 : ctrl.currentWaypoint;

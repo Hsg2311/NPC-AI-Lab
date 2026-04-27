@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "Actor.hpp"
 #include <string>
+#include <vector>
 
 namespace sim {
 
@@ -81,18 +82,18 @@ private:
 
     // ── 헬퍼 ──────────────────────────────────────────────────────────────────
     Actor*  resolveTarget           (Room& room) const;
-    Player* selectBestTarget        (Room& room) const;
     Player* selectBestVisibleTarget (Room& room) const;
     float   evaluateTargetScore     (const Player* p, Room& room) const;
-    Vec3    calcSeparationForce     (Room& room) const;
+    Vec3    calcSeparationForce     (const std::vector<Vec3>& nearby) const;
     bool    isOutsideActivityZone   () const;
-    bool    isOvercrowded           (Room& room) const;
+    bool    isOvercrowded           (const std::vector<Vec3>& nearby) const;
 
     // ── 데이터 ────────────────────────────────────────────────────────────────
-    NpcState state_{ NpcState::Idle };
-    Vec3     spawnPos_;
-    uint32_t targetId_{ 0 };
-    int      groupId_{ -1 };   // -1 = 독립 NPC (그룹 없음)
+    NpcState    state_{ NpcState::Idle };
+    Vec3        spawnPos_;
+    uint32_t    targetId_{ 0 };
+    int         groupId_{ -1 };   // -1 = 독립 NPC (그룹 없음)
+    std::string logPrefix_{};     // "NPC:<name>" — 생성자에서 1회 계산
 
     // 설정 복사본
     float detectionRange_;
@@ -119,6 +120,9 @@ private:
     // 재배치
     Vec3  repositionDir_  { 1.f, 0.f, 0.f };
     float repositionTimer_{ 0.f };
+
+    // 재사용 버퍼 — 매 틱 분리 계산용
+    std::vector<Vec3> nearbyCache_;
 
     static constexpr float TARGET_EVAL_INTERVAL = 0.5f;
     static constexpr float REPOSITION_TIMEOUT   = 1.5f;

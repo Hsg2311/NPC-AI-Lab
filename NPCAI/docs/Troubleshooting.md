@@ -811,3 +811,904 @@ Player* Npc::selectBestVisibleTarget(Room& room) const {
 `selectBestTarget()`(필터 없는 원본)은 잠재적 용도를 위해 유지.
 
 ---
+
+# 최적화 기록
+
+> 졸업작품(게임 서버) 이식 대비 — NPC 수 증가 시 발생하는 알고리즘 병목 제거 (2026-04-27)
+> 대상 파일: `sim/Room.hpp`, `sim/Room.cpp`
+
+---
+
+## [Opt-A] actors_ 단일 맵 분리 → players_ / npcs_
+
+### 동기
+
+졸업작품 이식 후 NPC 수가 수백 명 규모로 늘어날 것을 대비한 구조 개선.
+기존에는 Player와 NPC를 단일 `actors_` 맵에 혼재해 관리했다.
+
+### 문제점 (변경 전)
+
+`tick()` 내 Player 루프·NPC 루프, `getLivingPlayers()`, `findNearestLivingPlayer()`,
+`findNearbyNpcPositions()`, `countNpcsTargeting()`, `dumpSnapshot()`, `buildSnapshot()`
+전부가 `actors_` 전체를 순회하며 `dynamic_cast`로 타입을 구분했다.
+Player N명 + NPC M명이면 Player 전용 쿼리도 매번 N+M개를 스캔하는 비효율이 있었다.
+
+```cpp
+// Room.hpp (변경 전)
+std::unordered_map<uint32_t, std::shared_ptr<Actor>> actors_{};
+
+// Room.cpp — tick() (변경 전)
+for (auto& [id, actor] : actors_) {                       // Player/NPC 혼재 전체 순회
+    if (auto* p = dynamic_cast<Player*>(actor.get()))     // dynamic_cast 매 틱
+        p->update(dt, *this);
+}
+for (auto& [id, actor] : actors_) {                       // 같은 맵을 또 순회
+    if (auto* npc = dynamic_cast<Npc*>(actor.get()))
+        npc->update(dt, *this);
+}
+
+// getLivingPlayers() (변경 전)
+for (const auto& [id, actor] : actors_) {
+    if (!actor->isAlive()) continue;
+    if (auto* p = dynamic_cast<Player*>(actor.get()))     // 매 호출 dynamic_cast
+        result.push_back(p);
+}
+```
+
+### 수정 (`sim/Room.hpp` / `sim/Room.cpp`)
+
+`actors_`를 제거하고 `players_` / `npcs_` 맵을 별도로 유지.
+`addActor()`에서 등록 시 딱 한 번 `dynamic_pointer_cast`로 분기하고,
+이후 모든 루프에서 `dynamic_cast` 완전 제거.
+
+```cpp
+// Room.hpp (변경 후)
+std::unordered_map<uint32_t, std::shared_ptr<Player>> players_{};
+std::unordered_map<uint32_t, std::shared_ptr<Npc>>    npcs_{};
+
+// Room.cpp — addActor() (변경 후): 등록 시 1회만 분기 (틱 루프 외부)
+void Room::addActor(std::shared_ptr<Actor> actor) {
+    if (auto p = std::dynamic_pointer_cast<Player>(actor))
+        players_[p->getId()] = std::move(p);
+    else if (auto n = std::dynamic_pointer_cast<Npc>(actor))
+        npcs_[n->getId()] = std::move(n);
+}
+
+// tick() (변경 후): dynamic_cast 없이 직접 순회
+for (auto& [id, p]   : players_)  p->update(dt, *this);
+for (auto& [id, npc] : npcs_)     npc->update(dt, *this);
+
+// getLivingPlayers() (변경 후)
+for (const auto& [id, p] : players_) {
+    if (p->isAlive()) result.push_back(p.get());
+}
+```
+
+`findActorById()`는 `players_` → `npcs_` 순 O(1) 조회 두 번으로 대체.
+`dumpSnapshot()`, `buildSnapshot()`도 각 맵을 직접 순회해 `dynamic_cast` 제거.
+
+---
+
+## [Opt-B] countNpcsTargeting() O(N) 스캔 → aggroCount_ 캐시
+
+### 동기
+
+`evaluateTargetScore()`(타겟 점수 계산)가 내부적으로 `countNpcsTargeting()`을 호출한다.
+`selectBestVisibleTarget()`은 모든 살아있는 플레이어마다 `evaluateTargetScore()`를 부르므로,
+Idle / Chase / Return / Investigate 상태의 NPC N명, 플레이어 M명 환경에서
+틱당 **O(N × M)** 번의 전체 스캔이 발생했다.
+
+### 문제점 (변경 전)
+
+```cpp
+// Room.cpp — countNpcsTargeting() (변경 전): 매 호출마다 전체 순회
+int Room::countNpcsTargeting(uint32_t playerId) const {
+    int count = 0;
+    for (const auto& [id, actor] : actors_) {           // O(N) 전체 스캔
+        auto* npc = dynamic_cast<Npc*>(actor.get());    // + dynamic_cast
+        if (!npc || !npc->isAlive())        continue;
+        if (npc->getTargetId() != playerId) continue;
+        NpcState s = npc->getState();
+        if (s == NpcState::Chase        ||
+            s == NpcState::AttackWindup  ||
+            s == NpcState::AttackRecover ||
+            s == NpcState::Reposition)
+            ++count;
+    }
+    return count;
+}
+// selectBestVisibleTarget() → evaluateTargetScore() → countNpcsTargeting()
+// NPC N명이 각각 플레이어 M명에 대해 호출 → 틱당 O(N×M) 스캔
+```
+
+### 수정 (`sim/Room.hpp` / `sim/Room.cpp`)
+
+NPC 업데이트 직전 `rebuildAggroCount()`로 캐시를 O(N) 1회 구성.
+이후 `countNpcsTargeting()`은 `unordered_map` O(1) 조회로 대체.
+
+```cpp
+// Room.hpp (변경 후)
+std::unordered_map<uint32_t, int> aggroCount_{};  // playerId → 어그로 중인 NPC 수
+
+// Room.cpp — rebuildAggroCount() (NPC 업데이트 직전 tick()에서 호출)
+void Room::rebuildAggroCount() {
+    aggroCount_.clear();
+    for (const auto& [id, npc] : npcs_) {
+        if (!npc->isAlive()) continue;
+        NpcState s = npc->getState();
+        if (s == NpcState::Chase        ||
+            s == NpcState::AttackWindup  ||
+            s == NpcState::AttackRecover ||
+            s == NpcState::Reposition)
+            aggroCount_[npc->getTargetId()]++;
+    }
+}
+
+// countNpcsTargeting() (변경 후): O(1) 조회
+int Room::countNpcsTargeting(uint32_t playerId) const {
+    auto it = aggroCount_.find(playerId);
+    return (it != aggroCount_.end()) ? it->second : 0;
+}
+```
+
+**비용 변화:** 틱당 O(N×M) → O(N) (rebuildAggroCount 1회) + O(1) × 호출 수.
+`aggroCount_`는 NPC 업데이트 직전 스냅샷 기준이므로 타겟 점수 계산에 허용 가능한 1틱 오차.
+
+---
+
+## [Opt-C] findNearbyNpcPositions() O(N²) → 공간 분할 그리드
+
+### 동기
+
+`calcSeparationForce()`와 `isOvercrowded()`가 매 틱 `findNearbyNpcPositions()`를 호출한다.
+이 두 함수는 Chase / AttackWindup / AttackRecover / Return / Reposition 상태에서
+활성화되므로, NPC가 N명이면 틱당 **O(N²)** 스캔이 발생했다.
+
+### 문제점 (변경 전)
+
+```cpp
+// Room.cpp — findNearbyNpcPositions() (변경 전): 전체 NPC 순회
+void Room::findNearbyNpcPositions(const Vec3& from, float radius,
+                                   uint32_t excludeId, std::vector<Vec3>& out) const {
+    for (const auto& [id, actor] : actors_) {         // O(N) 전체 스캔
+        if (id == excludeId)                    continue;
+        if (!actor->isAlive())                  continue;
+        if (!dynamic_cast<Npc*>(actor.get()))   continue;  // + dynamic_cast
+        if (Vec3::distance(from, actor->getPosition()) < radius)
+            out.push_back(actor->getPosition());
+    }
+}
+// calcSeparationForce()·isOvercrowded() 각각 O(N) 호출 → N명의 NPC가 매 틱 = O(N²)
+```
+
+### 수정 (`sim/Room.hpp` / `sim/Room.cpp`)
+
+NPC 업데이트 직전 `rebuildSpatialGrid()`로 셀 크기 6.0 격자를 구성.
+`findNearbyNpcPositions()`는 쿼리 범위에 걸치는 셀만 조회한다.
+separationRadius 최대값 5.0 기준, 쿼리당 최대 9셀 조회로 수렴.
+
+```cpp
+// Room.hpp (변경 후)
+static constexpr float GRID_CELL_SIZE = 6.f;  // 최대 separationRadius(5.0) 초과값
+std::unordered_map<int64_t, std::vector<uint32_t>> spatialGrid_{};
+
+// Room.cpp — rebuildSpatialGrid() (NPC 업데이트 직전 tick()에서 호출)
+void Room::rebuildSpatialGrid() {
+    spatialGrid_.clear();
+    for (const auto& [id, npc] : npcs_) {
+        if (!npc->isAlive()) continue;
+        Vec3 pos = npc->getPosition();
+        int  cx  = static_cast<int>(std::floor(pos.x / GRID_CELL_SIZE));
+        int  cz  = static_cast<int>(std::floor(pos.z / GRID_CELL_SIZE));
+        spatialGrid_[gridKey(cx, cz)].push_back(id);
+    }
+}
+
+// findNearbyNpcPositions() (변경 후): 주변 셀만 조회
+void Room::findNearbyNpcPositions(const Vec3& from, float radius,
+                                   uint32_t excludeId, std::vector<Vec3>& out) const {
+    int minCx = static_cast<int>(std::floor((from.x - radius) / GRID_CELL_SIZE));
+    int maxCx = static_cast<int>(std::floor((from.x + radius) / GRID_CELL_SIZE));
+    int minCz = static_cast<int>(std::floor((from.z - radius) / GRID_CELL_SIZE));
+    int maxCz = static_cast<int>(std::floor((from.z + radius) / GRID_CELL_SIZE));
+
+    for (int cx = minCx; cx <= maxCx; ++cx) {
+        for (int cz = minCz; cz <= maxCz; ++cz) {
+            auto it = spatialGrid_.find(gridKey(cx, cz));
+            if (it == spatialGrid_.end()) continue;
+            for (uint32_t npcId : it->second) {
+                if (npcId == excludeId) continue;
+                auto nit = npcs_.find(npcId);
+                if (nit == npcs_.end() || !nit->second->isAlive()) continue;
+                const Vec3& pos = nit->second->getPosition();
+                if (Vec3::distance(from, pos) < radius)
+                    out.push_back(pos);
+            }
+        }
+    }
+}
+
+// gridKey — cx/cz 좌표를 int64_t 하나로 인코딩 (±60,000 유닛 범위 충돌 없음)
+int64_t Room::gridKey(int cx, int cz) {
+    return (static_cast<int64_t>(cx) + 10000LL) * 20001LL
+         + (static_cast<int64_t>(cz) + 10000LL);
+}
+```
+
+**tick() 내 캐시 재구성 순서:**
+
+```
+Player 업데이트 → NpcGroup 업데이트
+    → rebuildAggroCount()   [B]
+    → rebuildSpatialGrid()  [C]
+    → NPC 업데이트
+```
+
+그리드는 NPC 이동 직전 위치 스냅샷 기준. 틱 중 NPC가 이동해 셀 경계를 넘어도
+쿼리 시 실제 위치를 재확인(`Vec3::distance`)하므로 false positive는 자동 필터되며,
+false negative(이동 후 범위 내이지만 원래 셀에 없는 경우)는 분리력 계산에서 허용 가능한 1틱 오차.
+
+**비용 변화:** 틱당 O(N²) → O(N) (그리드 재구성) + O(1) × 호출 수.
+
+### 알고리즘 상세 설명
+
+#### 핵심 아이디어
+
+기존 방식의 문제는 **"내 주변 NPC를 찾으려면 전체 NPC를 다 확인해야 한다"** 는 것이다.
+
+```
+NPC가 100명 있을 때:
+  Goblin01이 주변 NPC 찾기 → 나머지 99명 전부 거리 계산
+  Goblin02가 주변 NPC 찾기 → 나머지 99명 전부 거리 계산
+  ...
+  → 100 × 99 = 9,900번 계산 (틱당)
+```
+
+공간 분할의 아이디어: **전체 맵을 격자(grid)로 잘라서, 같은 칸 주변에 있는 NPC끼리만 확인한다.**
+
+---
+
+#### 1단계: 맵을 격자로 나누기
+
+월드 좌표 전체를 6×6 크기의 셀로 잘라낸다. 각 셀은 `(cx, cz)` 정수 좌표로 식별된다.
+
+```
+월드 좌표 (XZ 평면)
+                          x →
+        ┌────────┬────────┬────────┬────────┐
+        │ (-1,1) │ (0,1)  │ (1,1)  │ (2,1)  │
+  z ↓   ├────────┼────────┼────────┼────────┤
+        │ (-1,0) │ (0,0)  │ (1,0)  │ (2,0)  │
+        ├────────┼────────┼────────┼────────┤
+        │ (-1,-1)│ (0,-1) │ (1,-1) │ (2,-1) │
+        └────────┴────────┴────────┴────────┘
+        각 셀 = 6×6 월드 유닛
+        셀 (0,0) = x∈[0,6), z∈[0,6) 영역
+        셀 (1,0) = x∈[6,12), z∈[0,6) 영역
+```
+
+NPC의 월드 좌표 → 셀 좌표 변환:
+
+```cpp
+int cx = floor(pos.x / 6.0f);  // x=7.5 → cx=1
+int cz = floor(pos.z / 6.0f);  // z=2.3 → cz=0
+// → 이 NPC는 셀 (1, 0)에 속함
+```
+
+---
+
+#### 2단계: rebuildSpatialGrid() — 틱 시작 시 "NPC를 격자에 배치"
+
+```cpp
+void Room::rebuildSpatialGrid() {
+    spatialGrid_.clear();                              // 이전 틱 정보 초기화
+    for (const auto& [id, npc] : npcs_) {
+        if (!npc->isAlive()) continue;
+        Vec3 pos = npc->getPosition();
+        int cx = floor(pos.x / 6.f);                  // 이 NPC가 속한 셀 계산
+        int cz = floor(pos.z / 6.f);
+        spatialGrid_[gridKey(cx, cz)].push_back(id);  // 해당 셀에 NPC ID 등록
+    }
+}
+```
+
+예: NPC 5명이 배치되면
+
+```
+Goblin01 pos=(3,0,2)   → 셀 (0,0) 등록
+Goblin02 pos=(7,0,1)   → 셀 (1,0) 등록
+Goblin03 pos=(5,0,4)   → 셀 (0,0) 등록
+Goblin04 pos=(14,0,9)  → 셀 (2,1) 등록
+Goblin05 pos=(8,0,3)   → 셀 (1,0) 등록
+
+spatialGrid_ = {
+    셀(0,0) → [Goblin01, Goblin03]
+    셀(1,0) → [Goblin02, Goblin05]
+    셀(2,1) → [Goblin04]
+}
+```
+
+---
+
+#### 3단계: findNearbyNpcPositions() — "어느 셀만 볼지 계산"
+
+Goblin01(pos=3,2)이 반경 5.0 안의 NPC를 찾는다면:
+
+```
+x 범위: [3-5, 3+5] = [-2, 8]  → 셀 cx: floor(-2/6)=-1 ~ floor(8/6)=1
+z 범위: [2-5, 2+5] = [-3, 7]  → 셀 cz: floor(-3/6)=-1 ~ floor(7/6)=1
+
+확인할 셀: cx∈[-1,1], cz∈[-1,1] → 최대 3×3=9개 셀
+```
+
+실제 NPC가 있는 셀은 `(0,0)`, `(1,0)` 두 개뿐이므로
+Goblin02, Goblin03, Goblin05만 거리 계산. Goblin04(셀(2,1))는 조회 대상에서 제외.
+
+---
+
+#### 4단계: gridKey() — 셀 좌표를 숫자 하나로
+
+`spatialGrid_`는 `unordered_map`이라 키가 단일 값이어야 한다.
+`(cx, cz)` 두 정수를 `int64_t` 하나로 인코딩한다.
+
+```cpp
+int64_t Room::gridKey(int cx, int cz) {
+    return (static_cast<int64_t>(cx) + 10000LL) * 20001LL
+         + (static_cast<int64_t>(cz) + 10000LL);
+}
+```
+
+`+10000` 오프셋은 음수 셀 좌표를 양수로 올려 충돌을 방지한다.
+
+```
+cx= 0, cz= 0  →  10000 × 20001 + 10000 = 200,020,000
+cx= 1, cz= 0  →  10001 × 20001 + 10000 = 200,040,001  (고유)
+cx= 0, cz= 1  →  10000 × 20001 + 10001 = 200,020,001  (고유)
+cx=-1, cz= 0  →   9999 × 20001 + 10000 = 199,999,999  (고유)
+```
+
+각 `(cx, cz)` 조합이 고유한 숫자 하나에 대응되어 충돌 없음.
+
+---
+
+#### 비용 비교
+
+| NPC 수 | 기존 O(N²) | 그리드 O(N) |
+|---|---|---|
+| 10명 | 10×9 = 90번 | 10 × ~2~3명 ≈ 25번 |
+| 100명 | 100×99 = 9,900번 | 100 × ~2~3명 ≈ 250번 |
+| 1,000명 | 1,000×999 = 999,000번 | 1,000 × ~2~3명 ≈ 2,500번 |
+
+NPC가 많아져도 "같은 셀 안에 몰려있는 NPC 수"는 큰 변동이 없으므로 사실상 O(N)으로 수렴한다.
+
+---
+
+## [Opt-D] selectBestVisibleTarget() 내 getNpcGroup() 루프 밖으로 호이스트
+
+> 대상 파일: `sim/Npc.cpp`
+
+### 문제점 (변경 전)
+
+`selectBestVisibleTarget()`은 살아있는 플레이어를 순회하며 각 플레이어마다
+`room.getNpcGroup(groupId_)`를 호출했다.
+
+```cpp
+// Npc.cpp — selectBestVisibleTarget() (변경 전)
+for (Player* p : room.getLivingPlayers()) {
+    if (Vec3::distance(position_, p->getPosition()) > detectionRange_) continue;
+    if (groupId_ >= 0) {
+        NpcGroup* group = room.getNpcGroup(groupId_);   // ← 플레이어마다 map 조회
+        if (group && !group->isInsideActivityArea(p->getPosition())) continue;
+    }
+    ...
+}
+```
+
+`groupId_`는 NPC 자신의 값으로 루프 동안 변하지 않는다.
+플레이어 M명이면 `unordered_map` 조회가 M번 발생했다.
+
+### 수정 (`sim/Npc.cpp`)
+
+그룹 포인터를 루프 밖에서 1회만 조회한다.
+
+```cpp
+// Npc.cpp — selectBestVisibleTarget() (변경 후)
+NpcGroup* group   = (groupId_ >= 0) ? room.getNpcGroup(groupId_) : nullptr;
+Player*   best    = nullptr;
+float     bestScore = -999.f;
+for (Player* p : room.getLivingPlayers()) {
+    if (Vec3::distance(position_, p->getPosition()) > detectionRange_) continue;
+    if (group && !group->isInsideActivityArea(p->getPosition())) continue;
+    float s = evaluateTargetScore(p, room);
+    if (s > bestScore) { bestScore = s; best = p; }
+}
+```
+
+**비용 변화:** 플레이어 M명당 M번 → 1번 map 조회.
+
+---
+
+## [Opt-E] calcSeparationForce / isOvercrowded 이중 호출 제거 + 힙 할당 통합
+
+> 대상 파일: `sim/Npc.hpp`, `sim/Npc.cpp`
+
+### 문제점 (변경 전)
+
+`calcSeparationForce()`와 `isOvercrowded()`가 각자 내부에서 `std::vector<Vec3> nearby`를
+선언하고 `findNearbyNpcPositions()`를 호출했다.
+
+```cpp
+// Npc.cpp (변경 전)
+Vec3 Npc::calcSeparationForce(Room& room) const {
+    std::vector<Vec3> nearby;                                    // ← 힙 할당
+    room.findNearbyNpcPositions(position_, separationRadius_, id_, nearby);
+    ...
+}
+
+bool Npc::isOvercrowded(Room& room) const {
+    std::vector<Vec3> nearby;                                    // ← 힙 할당
+    room.findNearbyNpcPositions(position_, separationRadius_ * 0.7f, id_, nearby);
+    ...
+}
+```
+
+`AttackRecover` 상태에서 두 함수가 같은 틱에 모두 호출됐다.
+
+```cpp
+// updateAttackRecover() (변경 전)
+Vec3 sep = calcSeparationForce(room);   // ← findNearbyNpcPositions 1회
+...
+if (isOvercrowded(room)) { ... }        // ← findNearbyNpcPositions 2회째
+```
+
+`Reposition` 상태에서도 동일한 이중 호출이 발생했다.
+
+```cpp
+// updateReposition() (변경 전)
+if (!isOvercrowded(room)) { ... }       // ← findNearbyNpcPositions 1회
+...
+Vec3 sep = calcSeparationForce(room);   // ← findNearbyNpcPositions 2회째 (혼잡 시)
+```
+
+### 수정 (`sim/Npc.hpp` / `sim/Npc.cpp`)
+
+두 함수의 시그니처를 `const std::vector<Vec3>& nearby`를 받는 형태로 변경한다.
+호출부(상태 함수)에서 `findNearbyNpcPositions()`를 1회 실행하고, 결과를 두 함수에 공유한다.
+
+```cpp
+// Npc.hpp (변경 후) — 시그니처 변경
+Vec3 calcSeparationForce(const std::vector<Vec3>& nearby) const;
+bool isOvercrowded      (const std::vector<Vec3>& nearby) const;
+
+// Npc.cpp (변경 후) — 구현부: findNearbyNpcPositions 제거
+Vec3 Npc::calcSeparationForce(const std::vector<Vec3>& nearby) const {
+    Vec3 force{ 0.f, 0.f, 0.f };
+    for (const Vec3& op : nearby) { ... }
+    return force;
+}
+
+bool Npc::isOvercrowded(const std::vector<Vec3>& nearby) const {
+    float checkRadius = separationRadius_ * 0.7f;
+    int   count       = 0;
+    for (const Vec3& pos : nearby)
+        if (Vec3::distance(position_, pos) < checkRadius)
+            ++count;
+    return count >= overlapThreshold_;
+}
+```
+
+`isOvercrowded()`는 separationRadius_ 기준으로 미리 받은 nearby 목록에서
+0.7f 반경 이내인 항목만 카운트한다. 기존 동작과 의미적으로 동일하다.
+
+```cpp
+// updateAttackRecover() (변경 후): findNearbyNpcPositions 1회
+std::vector<Vec3> nearby;
+room.findNearbyNpcPositions(position_, separationRadius_, id_, nearby);
+Vec3 sep = calcSeparationForce(nearby);
+...
+if (isOvercrowded(nearby)) { ... }       // ← 추가 스캔 없음
+
+// updateReposition() (변경 후): findNearbyNpcPositions 1회
+std::vector<Vec3> nearby;
+room.findNearbyNpcPositions(position_, separationRadius_, id_, nearby);
+if (!isOvercrowded(nearby)) { ... }      // ← 1회
+...
+Vec3 sep = calcSeparationForce(nearby);  // ← 추가 스캔 없음
+```
+
+Chase / AttackWindup / Return 상태도 마찬가지로 nearby를 호출부에서 선언해 전달한다.
+
+**비용 변화:**
+- AttackRecover / Reposition: 틱당 `findNearbyNpcPositions()` 2회 → 1회
+- 힙 할당: 두 함수 각자 생성 → 호출부에서 1회 생성 후 공유
+
+---
+
+## [Opt-F] getLivingPlayers() 반복 벡터 생성 → 틱당 1회 캐시
+
+> 대상 파일: `sim/Room.hpp`, `sim/Room.cpp`
+
+### 문제점 (변경 전)
+
+`getLivingPlayers()`는 호출마다 `std::vector<Player*>`를 새로 생성해 반환했다.
+`selectBestVisibleTarget()` 등에서 NPC N명이 각자 호출하므로 틱당 N번 생성됐다.
+
+```cpp
+// Room.cpp (변경 전)
+std::vector<Player*> Room::getLivingPlayers() const {
+    std::vector<Player*> result;         // ← 매 호출 힙 할당
+    result.reserve(players_.size());
+    for (const auto& [id, p] : players_)
+        if (p->isAlive()) result.push_back(p.get());
+    return result;                       // ← 복사 반환
+}
+```
+
+### 수정 (`sim/Room.hpp` / `sim/Room.cpp`)
+
+NPC 업데이트 직전 `rebuildLivingPlayersCache()`로 캐시를 1회 구성한다.
+`getLivingPlayers()`는 캐시의 const 참조를 반환한다.
+
+```cpp
+// Room.hpp (변경 후)
+void                         rebuildLivingPlayersCache();
+const std::vector<Player*>&  getLivingPlayers() const;
+std::vector<Player*>         livingPlayersCache_{};
+
+// Room.cpp — rebuildLivingPlayersCache()
+void Room::rebuildLivingPlayersCache() {
+    livingPlayersCache_.clear();
+    for (const auto& [id, p] : players_)
+        if (p->isAlive())
+            livingPlayersCache_.push_back(p.get());
+}
+
+// getLivingPlayers() (변경 후): 참조 반환, 추가 할당 없음
+const std::vector<Player*>& Room::getLivingPlayers() const {
+    return livingPlayersCache_;
+}
+```
+
+```
+// tick() 내 캐시 재구성 순서 (변경 후)
+Player 업데이트 → NpcGroup 업데이트
+    → rebuildLivingPlayersCache()  [F]
+    → rebuildAggroCount()          [B]
+    → rebuildSpatialGrid()         [C]
+    → NPC 업데이트
+```
+
+캐시는 NPC 업데이트 시작 직전 스냅샷 기준이다.
+NPC가 같은 틱 안에서 플레이어를 처치하면 해당 틱의 나머지 NPC는 그 플레이어를 여전히 목록에서 보지만,
+`resolveTarget()`이 `isAlive()` 검사를 수행하므로 다음 틱에 즉시 정정된다.
+
+**비용 변화:** 틱당 N번 벡터 생성 + N번 `players_` 맵 순회 → 1번 구성 + const 참조 반환.
+
+---
+
+## [Opt-①] distanceSq() 추가 — 순수 범위 비교에서 sqrt 제거
+
+> 대상 파일: `sim/Vec3.hpp`, `sim/Npc.cpp`, `sim/Room.cpp`, `sim/NpcGroup.cpp`, `sim/DummyPlayerController.cpp`
+
+### 왜 distanceSq가 더 효율적인가
+
+`Vec3::distance()`는 내부적으로 `std::sqrt()`를 호출한다.
+
+```cpp
+static float distance(const Vec3& a, const Vec3& b) {
+    return (a - b).length();          // ← length() 내부에서 sqrt() 호출
+}
+float length() const { return std::sqrt(lengthSq()); }
+```
+
+`sqrt`는 IEEE 754 기준으로 수십 사이클이 소요되는 연산이다.
+그런데 단순 범위 비교(`d < r`)에서는 실제 거리 값이 필요하지 않다.
+두 값이 모두 0 이상이면 양변을 제곱해도 대소 관계가 유지된다.
+
+```
+d < r  ⟺  d² < r²    (d ≥ 0, r ≥ 0 일 때 항상 성립)
+```
+
+즉 `sqrt` 없이 제곱 거리끼리 비교하면 같은 결과를 얻을 수 있다.
+
+```cpp
+// 변경 전: sqrt 포함
+if (Vec3::distance(a, b) < radius) { ... }
+
+// 변경 후: sqrt 없음
+if (Vec3::distanceSq(a, b) < radius * radius) { ... }
+```
+
+### 수정 (`sim/Vec3.hpp`)
+
+```cpp
+static float distanceSq(const Vec3& a, const Vec3& b) {
+    return (a - b).lengthSq();   // sqrt 없음
+}
+```
+
+### 교체 지점 (11곳)
+
+**교체 가능 조건:** 비교 결과만 필요하고 실제 거리 값을 이후 로그·산식에 사용하지 않는 호출.
+
+| 파일 | 함수 / 위치 | 비교 |
+|---|---|---|
+| `Npc.cpp` | `selectBestVisibleTarget()` | `> detectionRange_` |
+| `Npc.cpp` | `isOutsideActivityZone()` | `> activityZoneRadius_` |
+| `Npc.cpp` | `isOvercrowded()` 루프 | `< checkRadius` |
+| `Npc.cpp` | `updateChase()` 공격 범위 판정 | `<= attackRange_` |
+| `Npc.cpp` | `updateAttackRecover()` 공격 범위 판정 | `<= attackRange_` |
+| `Npc.cpp` | `updateReposition()` 공격 범위 판정 | `<= attackRange_` |
+| `Npc.cpp` | `updateReturn()` 귀환 도착 판정 | `< 0.3f` |
+| `Npc.cpp` | `updateIdle()` 스폰 이탈 확인 | `> 1.f` |
+| `Room.cpp` | `findNearestLivingPlayer()` | `<= maxRange`, `< nearestDist` |
+| `Room.cpp` | `findNearbyNpcPositions()` 최종 필터 | `< radius` |
+| `NpcGroup.cpp` | `isInsideActivityArea()` | `<= activityRadius_` |
+| `DummyPlayerController.cpp` | 웨이포인트 도착 판정 | `< 0.5f` |
+
+`findNearestLivingPlayer()`는 `nearestDist`를 `nearestDistSq`로 전환해 추적한다.
+
+```cpp
+// Room.cpp — findNearestLivingPlayer() (변경 후)
+float maxRangeSq    = maxRange * maxRange;
+float nearestDistSq = (maxRange + 1.f) * (maxRange + 1.f);
+for (...) {
+    float dSq = Vec3::distanceSq(from, p->getPosition());
+    if (dSq <= maxRangeSq && dSq < nearestDistSq) { nearestDistSq = dSq; nearest = p.get(); }
+}
+```
+
+**교체하지 않은 호출:** `snprintf` 로그 메시지(실제 거리 값 출력), `evaluateTargetScore()` 점수 산식(거리로 나누기 포함).
+
+**비용 변화:** 범위 비교마다 `sqrt` 제거. 특히 `isOutsideActivityZone()` / `isInsideActivityArea()` / `selectBestVisibleTarget()` 루프처럼 매 틱 다수 호출되는 경로에서 효과적.
+
+---
+
+## [Opt-②] Logger 접두어 logPrefix_ 멤버 캐시
+
+> 대상 파일: `sim/Npc.hpp`, `sim/Npc.cpp`
+
+### 문제점 (변경 전)
+
+`Logger::get().log()` 호출 시 `"NPC:" + name_`으로 매번 `std::string`을 임시 생성했다.
+`std::string` 연산은 힙 할당을 수반한다.
+
+```cpp
+// Npc.cpp (변경 전)
+Logger::get().log("NPC:" + name_, buf);   // Chase 재타겟 (0.5s마다)
+Logger::get().log("NPC:" + name_, buf);   // AttackWindup 명중 로그
+Logger::get().log("NPC:" + name_, buf);   // AttackWindup 빗나감 로그
+```
+
+`name_`은 생성 이후 변하지 않으므로 접두어 문자열도 고정이다.
+
+### 수정 (`sim/Npc.hpp` / `sim/Npc.cpp`)
+
+```cpp
+// Npc.hpp (변경 후) — 데이터 멤버 추가
+std::string logPrefix_{};  // "NPC:<name>" — 생성자에서 1회 계산
+
+// Npc.cpp (변경 후) — 생성자 초기화 리스트
+, logPrefix_("NPC:" + name)
+
+// Npc.cpp (변경 후) — 호출부 3곳
+Logger::get().log(logPrefix_, buf);   // 임시 문자열 생성 없음
+```
+
+**비용 변화:** `log()` 호출마다 힙 할당 → 0회 (생성자에서 1회만 할당).
+
+---
+
+## [Opt-③] nearby 버퍼 멤버 캐시 — 매 틱 힙 할당 제거
+
+> 대상 파일: `sim/Npc.hpp`, `sim/Npc.cpp`
+
+### 문제점 (변경 전)
+
+`updateChase`, `updateAttackWindup`, `updateAttackRecover`, `updateReturn`, `updateReposition`
+5개 함수에서 매 틱마다 `std::vector<Vec3> nearby`를 지역 변수로 선언했다.
+
+```cpp
+// Npc.cpp (변경 전) — 각 상태 함수마다 반복
+std::vector<Vec3> nearby;   // ← 매 틱 힙 할당
+room.findNearbyNpcPositions(position_, separationRadius_, id_, nearby);
+```
+
+`findNearbyNpcPositions()`는 이미 외부 버퍼(`std::vector<Vec3>& out`)를 받는 설계임에도
+호출부에서 매번 빈 벡터를 만들어 넘기므로 NPC N명, 틱당 최대 5회 힙 할당이 발생했다.
+
+### 수정 (`sim/Npc.hpp` / `sim/Npc.cpp`)
+
+`nearbyCache_` 멤버를 추가하고 생성자에서 한 번만 `reserve(16)`한다.
+상태 함수에서는 `nearbyCache_.clear()` 후 재사용한다.
+
+```cpp
+// Npc.hpp (변경 후) — 데이터 멤버 추가
+std::vector<Vec3> nearbyCache_;  // 재사용 버퍼 — 매 틱 분리 계산용
+
+// Npc.cpp (변경 후) — 생성자 본문
+nearbyCache_.reserve(16);
+
+// Npc.cpp (변경 후) — 각 상태 함수
+nearbyCache_.clear();
+room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
+Vec3 sep = calcSeparationForce(nearbyCache_);
+```
+
+**비용 변화:** 상태 함수 호출당 `std::vector` 힙 할당 → 생성자에서 1회만 할당, 이후 재사용.
+
+---
+
+## [Opt-④] calcSeparationForce() sqrt 이중 호출 제거
+
+> 대상 파일: `sim/Npc.cpp`
+
+### 문제점 (변경 전)
+
+주변 NPC 1개당 `away.length()`(sqrt 1회) + `away.normalized()`(sqrt 1회) = **sqrt 2회** 호출.
+
+```cpp
+// Npc.cpp (변경 전)
+float d    = away.length();            // sqrt 1회
+...
+force += away.normalized() * strength; // 내부에서 sqrt 1회 더
+```
+
+`away.normalized()`는 내부적으로 `away / away.length()`를 수행하므로
+이미 구한 `d`를 버리고 sqrt를 다시 계산했다.
+
+### 수정 (`sim/Npc.cpp`)
+
+`d`를 이미 가지고 있으므로 `away / d`로 방향 벡터를 직접 구한다.
+
+```cpp
+// Npc.cpp (변경 후)
+float d    = away.length();            // sqrt 1회
+...
+force += (away / d) * strength;        // sqrt 추가 없음
+```
+
+`Vec3::operator/(float)`는 Vec3.hpp:17에 정의되어 있다.
+
+**비용 변화:** 주변 NPC 1개당 sqrt 2회 → 1회.
+
+---
+
+## [Opt-⑤] selectBestTarget() 데드코드 제거
+
+> 대상 파일: `sim/Npc.hpp`, `sim/Npc.cpp`
+
+[16]에서 `selectBestVisibleTarget()`으로 전환한 이후 `selectBestTarget()`은 코드 전체에서
+호출되지 않는 상태였다. 이 함수는 `detectionRange_` 필터 없이 모든 살아있는 플레이어를
+대상으로 점수를 계산하므로, 실수로 재사용 시 감지 범위 무시 버그([16] 참고)가 재발할 위험이 있었다.
+
+```cpp
+// 제거된 코드 (Npc.cpp)
+Player* Npc::selectBestTarget(Room& room) const {
+    const auto& players   = room.getLivingPlayers();
+    Player* best      = nullptr;
+    float   bestScore = -999.f;
+    for (Player* p : players) {
+        float s = evaluateTargetScore(p, room);   // detectionRange 필터 없음
+        if (s > bestScore) { bestScore = s; best = p; }
+    }
+    return best;
+}
+```
+
+- `Npc.hpp` 선언 제거
+- `Npc.cpp` 구현 제거
+
+---
+
+# 상태 전이 dead code 제거 기록
+
+> 대상 파일: `sim/Npc.cpp`
+
+---
+
+## [FSM-①] `updateIdle()` — `Idle → Return ("활동 구역 이탈 (조사 중단)")` 제거
+
+### 원인 분석
+
+```cpp
+// 변경 전
+if (group->getBestMemoryInsideActivityArea(room.getTickCount())) {
+    if (isOutsideActivityZone())
+        transitionTo(NpcState::Return, "활동 구역 이탈 (조사 중단)");  // ← dead
+    else
+        transitionTo(NpcState::Investigate, "공유 메모리 조사");
+    return;
+}
+```
+
+`isOutsideActivityZone()`은 Idle 상태에서 항상 false다.
+
+Idle에 진입하는 경로는 두 가지뿐이다:
+- **생성자 초기 상태**: `position_ = pos = activityZoneCenter_` → 거리 0, 항상 구역 안
+- **`updateReturn()` 귀환 완료**: `position_ = spawnPos_` 강제 세팅 후 전이
+
+모든 시나리오에서 `spawnPos_`는 활동 구역 반경 내에 배치된다. Idle 상태에는 이동 코드가 없으므로 진입 후 위치 변경이 없다. 따라서 `if (isOutsideActivityZone())` 분기는 구조적으로 도달 불가.
+
+### 수정
+
+```cpp
+// 변경 후
+if (group->getBestMemoryInsideActivityArea(room.getTickCount())) {
+    transitionTo(NpcState::Investigate, "공유 메모리 조사");
+    return;
+}
+```
+
+---
+
+## [FSM-②] `updateIdle()` — 귀환 조건 전체 제거
+
+### 원인 분석
+
+```cpp
+// 변경 전
+if (group->hasValidMemory(room.getTickCount()))
+    return;  // 구역 밖 메모리만 있음 — 자연 만료 대기
+// 유효 메모리 없음 + 스폰에서 이탈해 있으면 귀환
+if (isOutsideActivityZone() || Vec3::distanceSq(position_, spawnPos_) > 1.f * 1.f)
+    transitionTo(NpcState::Return, "메모리 만료, 귀환");  // ← dead
+```
+
+[FSM-①]과 같은 이유로, Idle 상태의 NPC는 항상 `position_ == spawnPos_`다.
+- `isOutsideActivityZone()` → 항상 false
+- `Vec3::distanceSq(position_, spawnPos_) > 1.f` → 항상 false (값 = 0)
+
+두 조건 모두 false이므로 OR 전체가 false. 이 전이는 구조적으로 도달 불가.
+
+### 수정
+
+```cpp
+// 변경 후
+if (group->hasValidMemory(room.getTickCount()))
+    return;  // 구역 밖 메모리만 있음 — 자연 만료 대기
+// 이하 제거
+```
+
+---
+
+## [FSM-③] `updateInvestigate()` — `groupId_ < 0` 삼항 분기 제거 + 이유 메시지 수정
+
+### 원인 분석
+
+```cpp
+// 변경 전
+NpcGroup* group = (groupId_ >= 0) ? room.getNpcGroup(groupId_) : nullptr;
+...
+if (!mem) {
+    transitionTo(NpcState::Return, "메모리 만료, 귀환");  // ← group==null 시 이유 오류
+    return;
+}
+```
+
+Investigate에 진입 가능한 경로는 두 곳뿐이고, 모두 `groupId_ >= 0` 조건으로 보호되어 있다.
+
+```cpp
+// updateIdle()
+if (groupId_ >= 0) { ... transitionTo(NpcState::Investigate, ...); }
+
+// updateChase()
+if (!isOutsideActivityZone() && groupId_ >= 0) { ... transitionTo(NpcState::Investigate, ...); }
+```
+
+따라서 Investigate 상태의 NPC는 항상 `groupId_ >= 0`이고, `: nullptr` 분기는 절대 실행되지 않는다.
+`group == nullptr`이 되는 유일한 케이스는 그룹 해체인데, 이때 "메모리 만료, 귀환" 메시지는 실제 원인과 다르다.
+
+### 수정
+
+```cpp
+// 변경 후
+NpcGroup* group = room.getNpcGroup(groupId_);  // 삼항 제거
+...
+if (!mem) {
+    transitionTo(NpcState::Return, group ? "메모리 만료, 귀환" : "그룹 해체, 귀환");
+    return;
+}
+```
+
+---

@@ -33,6 +33,10 @@ struct Vec3 {
         return (a - b).length();
     }
 
+    static float distanceSq(const Vec3& a, const Vec3& b) {
+        return (a - b).lengthSq();
+    }
+
     static Vec3 lerp(const Vec3& a, const Vec3& b, float t) {
         return a + (b - a) * t;
     }

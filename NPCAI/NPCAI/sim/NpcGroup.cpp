@@ -90,7 +90,7 @@ const SharedTargetMemory* NpcGroup::getBestMemoryInsideActivityArea(uint32_t cur
 // ─── isInsideActivityArea ─────────────────────────────────────────────────────
 
 bool NpcGroup::isInsideActivityArea(const Vec3& pos) const {
-    return Vec3::distance(pos, activityCenter_) <= activityRadius_;
+    return Vec3::distanceSq(pos, activityCenter_) <= activityRadius_ * activityRadius_;
 }
 
 // ─── clearMemory ─────────────────────────────────────────────────────────────

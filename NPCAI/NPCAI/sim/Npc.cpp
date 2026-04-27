@@ -44,7 +44,10 @@ Npc::Npc(const std::string& name, const Vec3& pos, const NpcConfig& cfg)
     , returnSpeedMult_(cfg.returnSpeedMult)
     , activityZoneCenter_(pos)
     , activityZoneRadius_(cfg.activityZoneRadius)
-{}
+    , logPrefix_("NPC:" + name)
+{
+    nearbyCache_.reserve(16);
+}
 
 // ─── 접근자 ───────────────────────────────────────────────────────────────────
 
@@ -131,17 +134,11 @@ void Npc::updateIdle(float dt, Room& room) {
         NpcGroup* group = room.getNpcGroup(groupId_);
         if (group) {
             if (group->getBestMemoryInsideActivityArea(room.getTickCount())) {
-                if (isOutsideActivityZone())
-                    transitionTo(NpcState::Return, "활동 구역 이탈 (조사 중단)");
-                else
-                    transitionTo(NpcState::Investigate, "공유 메모리 조사");
+                transitionTo(NpcState::Investigate, "공유 메모리 조사");
                 return;
             }
             if (group->hasValidMemory(room.getTickCount()))
                 return;  // 구역 밖 메모리만 있음 — 자연 만료 대기
-            // 유효 메모리 없음 + 스폰에서 이탈해 있으면 귀환
-            if (isOutsideActivityZone() || Vec3::distance(position_, spawnPos_) > 1.f)
-                transitionTo(NpcState::Return, "메모리 만료, 귀환");
         }
     }
 }
@@ -156,7 +153,7 @@ void Npc::updateChase(float dt, Room& room) {
         if (newBest && newBest->getId() != targetId_) {
             char buf[64];
             std::snprintf(buf, sizeof(buf), "retarget -> %s", newBest->getName().c_str());
-            Logger::get().log("NPC:" + name_, buf);
+            Logger::get().log(logPrefix_, buf);
             targetId_ = newBest->getId();
         }
     }
@@ -191,14 +188,15 @@ void Npc::updateChase(float dt, Room& room) {
         }
     }
 
-    float dist = Vec3::distance(position_, target->getPosition());
-    if (dist <= attackRange_) {
+    if (Vec3::distanceSq(position_, target->getPosition()) <= attackRange_ * attackRange_) {
         transitionTo(NpcState::AttackWindup, "in attack range");
         return;
     }
 
     Vec3 chaseDir = (target->getPosition() - position_).normalized();
-    Vec3 sepForce = calcSeparationForce(room);
+    nearbyCache_.clear();
+    room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
+    Vec3 sepForce = calcSeparationForce(nearbyCache_);
     Vec3 moveDir  = (chaseDir + sepForce * separationWeight_).normalized();
     facing_   = moveDir;
     position_ += moveDir * (moveSpeed_ * dt);
@@ -219,7 +217,9 @@ void Npc::updateAttackWindup(float dt, Room& room) {
         return;
     }
 
-    Vec3 sep = calcSeparationForce(room);
+    nearbyCache_.clear();
+    room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
+    Vec3 sep = calcSeparationForce(nearbyCache_);
     if (sep.length() > 0.1f)
         facing_ = (facing_ + sep * 0.3f).normalized();
 
@@ -231,7 +231,7 @@ void Npc::updateAttackWindup(float dt, Room& room) {
             char buf[128];
             std::snprintf(buf, sizeof(buf), "hit %s for %.0f  (hp=%.1f)",
                 target->getName().c_str(), attackDamage_, target->getHp());
-            Logger::get().log("NPC:" + name_, buf);
+            Logger::get().log(logPrefix_, buf);
 
             if (!target->isAlive()) {
                 targetId_ = 0;
@@ -244,7 +244,7 @@ void Npc::updateAttackWindup(float dt, Room& room) {
             char buf[128];
             std::snprintf(buf, sizeof(buf), "missed %s (dist=%.1f > range=%.1f)",
                 target->getName().c_str(), dist, attackRange_);
-            Logger::get().log("NPC:" + name_, buf);
+            Logger::get().log(logPrefix_, buf);
             transitionTo(NpcState::AttackRecover, "swung and missed");
         }
     }
@@ -265,13 +265,15 @@ void Npc::updateAttackRecover(float dt, Room& room) {
         return;
     }
 
-    Vec3 sep = calcSeparationForce(room);
+    nearbyCache_.clear();
+    room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
+    Vec3 sep = calcSeparationForce(nearbyCache_);
     if (sep.length() > 0.1f)
         position_ += sep * (separationWeight_ * 0.3f * moveSpeed_ * dt);
 
     recoverTimer_ += dt;
     if (recoverTimer_ >= attackRecoverTime_) {
-        if (isOvercrowded(room)) {
+        if (isOvercrowded(nearbyCache_)) {
             Vec3 toTarget  = (target->getPosition() - position_).normalized();
             repositionDir_ = (id_ % 2 == 0)
                 ? Vec3{  toTarget.z, 0.f, -toTarget.x }
@@ -279,8 +281,7 @@ void Npc::updateAttackRecover(float dt, Room& room) {
             transitionTo(NpcState::Reposition, "overcrowded after recover");
             return;
         }
-        float dist = Vec3::distance(position_, target->getPosition());
-        if (dist <= attackRange_)
+        if (Vec3::distanceSq(position_, target->getPosition()) <= attackRange_ * attackRange_)
             transitionTo(NpcState::AttackWindup, "recover done, in range");
         else
             transitionTo(NpcState::Chase, "recover done, out of range");
@@ -310,15 +311,16 @@ void Npc::updateReturn(float dt, Room& room) {
         }
     }
 
-    float distToHome = Vec3::distance(position_, spawnPos_);
-    if (distToHome < 0.3f) {
+    if (Vec3::distanceSq(position_, spawnPos_) < 0.3f * 0.3f) {
         position_ = spawnPos_;
         transitionTo(NpcState::Idle, "reached home");
         return;
     }
 
     Vec3 homeDir = (spawnPos_ - position_).normalized();
-    Vec3 sep     = calcSeparationForce(room);
+    nearbyCache_.clear();
+    room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
+    Vec3 sep     = calcSeparationForce(nearbyCache_);
     Vec3 moveDir = (homeDir + sep * (separationWeight_ * 0.25f)).normalized();
     facing_   = moveDir;
     position_ += moveDir * (moveSpeed_ * returnSpeedMult_ * dt);
@@ -345,9 +347,11 @@ void Npc::updateReposition(float dt, Room& room) {
         return;
     }
 
-    if (!isOvercrowded(room)) {
-        float dist = Vec3::distance(position_, target->getPosition());
-        if (dist <= attackRange_)
+    nearbyCache_.clear();
+    room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
+
+    if (!isOvercrowded(nearbyCache_)) {
+        if (Vec3::distanceSq(position_, target->getPosition()) <= attackRange_ * attackRange_)
             transitionTo(NpcState::AttackWindup, "reposition done, in range");
         else
             transitionTo(NpcState::Chase, "reposition done, chasing");
@@ -355,7 +359,7 @@ void Npc::updateReposition(float dt, Room& room) {
     }
 
     Vec3 toTarget = (target->getPosition() - position_).normalized();
-    Vec3 sep      = calcSeparationForce(room);
+    Vec3 sep      = calcSeparationForce(nearbyCache_);
     Vec3 moveDir  = (toTarget + repositionDir_ * 0.8f + sep * separationWeight_).normalized();
     facing_    = moveDir;
     position_ += moveDir * (moveSpeed_ * dt);
@@ -389,12 +393,12 @@ void Npc::updateInvestigate(float dt, Room& room) {
         return;
     }
 
-    NpcGroup* group = (groupId_ >= 0) ? room.getNpcGroup(groupId_) : nullptr;
+    NpcGroup* group = room.getNpcGroup(groupId_);
     const SharedTargetMemory* mem = group
         ? group->getBestMemoryInsideActivityArea(room.getTickCount())
         : nullptr;
     if (!mem) {
-        transitionTo(NpcState::Return, "메모리 만료, 귀환");
+        transitionTo(NpcState::Return, group ? "메모리 만료, 귀환" : "그룹 해체, 귀환");
         return;
     }
 
@@ -439,30 +443,15 @@ float Npc::evaluateTargetScore(const Player* p, Room& room) const {
     return score;
 }
 
-// ─── selectBestTarget ─────────────────────────────────────────────────────────
-
-Player* Npc::selectBestTarget(Room& room) const {
-    auto    players   = room.getLivingPlayers();
-    Player* best      = nullptr;
-    float   bestScore = -999.f;
-    for (Player* p : players) {
-        float s = evaluateTargetScore(p, room);
-        if (s > bestScore) { bestScore = s; best = p; }
-    }
-    return best;
-}
-
 // ─── selectBestVisibleTarget ─────────────────────────────────────────────────
 
 Player* Npc::selectBestVisibleTarget(Room& room) const {
-    Player* best      = nullptr;
-    float   bestScore = -999.f;
+    NpcGroup* group   = (groupId_ >= 0) ? room.getNpcGroup(groupId_) : nullptr;
+    Player*   best    = nullptr;
+    float     bestScore = -999.f;
     for (Player* p : room.getLivingPlayers()) {
-        if (Vec3::distance(position_, p->getPosition()) > detectionRange_) continue;
-        if (groupId_ >= 0) {
-            NpcGroup* group = room.getNpcGroup(groupId_);
-            if (group && !group->isInsideActivityArea(p->getPosition())) continue;
-        }
+        if (Vec3::distanceSq(position_, p->getPosition()) > detectionRange_ * detectionRange_) continue;
+        if (group && !group->isInsideActivityArea(p->getPosition())) continue;
         float s = evaluateTargetScore(p, room);
         if (s > bestScore) { bestScore = s; best = p; }
     }
@@ -471,10 +460,7 @@ Player* Npc::selectBestVisibleTarget(Room& room) const {
 
 // ─── calcSeparationForce ──────────────────────────────────────────────────────
 
-Vec3 Npc::calcSeparationForce(Room& room) const {
-    std::vector<Vec3> nearby;
-    room.findNearbyNpcPositions(position_, separationRadius_, id_, nearby);
-
+Vec3 Npc::calcSeparationForce(const std::vector<Vec3>& nearby) const {
     Vec3 force{ 0.f, 0.f, 0.f };
     for (const Vec3& op : nearby) {
         Vec3  away = position_ - op;
@@ -485,7 +471,7 @@ Vec3 Npc::calcSeparationForce(Room& room) const {
             continue;
         }
         float strength = 1.f - (d / separationRadius_);
-        force += away.normalized() * strength;
+        force += (away / d) * strength;
     }
     return force;
 }
@@ -493,15 +479,18 @@ Vec3 Npc::calcSeparationForce(Room& room) const {
 // ─── isOutsideActivityZone ───────────────────────────────────────────────────
 
 bool Npc::isOutsideActivityZone() const {
-    return Vec3::distance(position_, activityZoneCenter_) > activityZoneRadius_;
+    return Vec3::distanceSq(position_, activityZoneCenter_) > activityZoneRadius_ * activityZoneRadius_;
 }
 
 // ─── isOvercrowded ────────────────────────────────────────────────────────────
 
-bool Npc::isOvercrowded(Room& room) const {
-    std::vector<Vec3> nearby;
-    room.findNearbyNpcPositions(position_, separationRadius_ * 0.7f, id_, nearby);
-    return static_cast<int>(nearby.size()) >= overlapThreshold_;
+bool Npc::isOvercrowded(const std::vector<Vec3>& nearby) const {
+	float checkRadius = separationRadius_ * 0.7f;
+    int   count       = 0;
+    for ( const Vec3& pos : nearby )
+        if ( Vec3::distanceSq( position_, pos ) < checkRadius * checkRadius )
+            ++count;
+    return count >= overlapThreshold_;
 }
 
 // ─── dump ─────────────────────────────────────────────────────────────────────
