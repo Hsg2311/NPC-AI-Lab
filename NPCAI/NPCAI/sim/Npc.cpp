@@ -108,15 +108,7 @@ void Npc::transitionTo(NpcState next, const char* reason) {
 // ─── Idle ─────────────────────────────────────────────────────────────────────
 
 void Npc::updateIdle(float dt, Room& room) {
-    auto    players   = room.getLivingPlayers();
-    Player* best      = nullptr;
-    float   bestScore = -999.f;
-
-    for (Player* p : players) {
-        if (Vec3::distance(position_, p->getPosition()) > detectionRange_) continue;
-        float s = evaluateTargetScore(p, room);
-        if (s > bestScore) { bestScore = s; best = p; }
-    }
+    Player* best = selectBestVisibleTarget(room);
     if (best) {
         targetId_ = best->getId();
         // 그룹에 시야 보고
@@ -138,19 +130,15 @@ void Npc::updateIdle(float dt, Room& room) {
     if (groupId_ >= 0) {
         NpcGroup* group = room.getNpcGroup(groupId_);
         if (group) {
-            const SharedTargetMemory* mem = group->getBestMemory(room.getTickCount());
-            if (mem) {
-                if (isOutsideActivityZone()) {
+            if (group->getBestMemoryInsideActivityArea(room.getTickCount())) {
+                if (isOutsideActivityZone())
                     transitionTo(NpcState::Return, "활동 구역 이탈 (조사 중단)");
-                } 
-                else if (!group->isInsideActivityArea(mem->lastKnownPosition)) {
-                    // 메모리 위치가 구역 밖 — Idle 유지 (메모리 자연 만료 대기)
-                } 
-                else {
+                else
                     transitionTo(NpcState::Investigate, "공유 메모리 조사");
-                }
                 return;
             }
+            if (group->hasValidMemory(room.getTickCount()))
+                return;  // 구역 밖 메모리만 있음 — 자연 만료 대기
             // 유효 메모리 없음 + 스폰에서 이탈해 있으면 귀환
             if (isOutsideActivityZone() || Vec3::distance(position_, spawnPos_) > 1.f)
                 transitionTo(NpcState::Return, "메모리 만료, 귀환");
@@ -164,7 +152,7 @@ void Npc::updateChase(float dt, Room& room) {
     targetEvalTimer_ -= dt;
     if (targetEvalTimer_ <= 0.f) {
         targetEvalTimer_ = TARGET_EVAL_INTERVAL;
-        Player* newBest = selectBestTarget(room);
+        Player* newBest = selectBestVisibleTarget(room);
         if (newBest && newBest->getId() != targetId_) {
             char buf[64];
             std::snprintf(buf, sizeof(buf), "retarget -> %s", newBest->getName().c_str());
@@ -179,12 +167,9 @@ void Npc::updateChase(float dt, Room& room) {
         // 그룹 메모리 위치가 활동 구역 내에 있으면 조사로 전환
         if (!isOutsideActivityZone() && groupId_ >= 0) {
             NpcGroup* group = room.getNpcGroup(groupId_);
-            if (group) {
-                const SharedTargetMemory* mem = group->getBestMemory(room.getTickCount());
-                if (mem && group->isInsideActivityArea(mem->lastKnownPosition)) {
-                    transitionTo(NpcState::Investigate, "target lost, 조사 시작");
-                    return;
-                }
+            if (group && group->getBestMemoryInsideActivityArea(room.getTickCount())) {
+                transitionTo(NpcState::Investigate, "target lost, 조사 시작");
+                return;
             }
         }
         transitionTo(NpcState::Return, "target lost");
@@ -306,9 +291,15 @@ void Npc::updateAttackRecover(float dt, Room& room) {
 
 void Npc::updateReturn(float dt, Room& room) {
     if (canReAggroOnReturn_ && !isOutsideActivityZone()) {
-        Player* candidate = selectBestTarget(room);
-        if (candidate &&
-            Vec3::distance(position_, candidate->getPosition()) <= detectionRange_) {
+        Player* candidate = selectBestVisibleTarget(room);
+        if (candidate) {
+            // 재어그로 시 메모리 갱신 — 다음 틱 프리앰블에서 구역 재진입 인식
+            if (groupId_ >= 0) {
+                NpcGroup* group = room.getNpcGroup(groupId_);
+                if (group)
+                    group->reportSight(id_, candidate->getId(), candidate->getPosition(),
+                                       room.getTickCount());
+            }
             targetId_ = candidate->getId();
             char buf[64];
             std::snprintf(buf, sizeof(buf), "re-aggro on %s dist=%.1f",
@@ -375,14 +366,7 @@ void Npc::updateReposition(float dt, Room& room) {
 void Npc::updateInvestigate(float dt, Room& room) {
     // 직접 감지 성공 시 Chase로 전환
     {
-        auto    players   = room.getLivingPlayers();
-        Player* best      = nullptr;
-        float   bestScore = -999.f;
-        for (Player* p : players) {
-            if (Vec3::distance(position_, p->getPosition()) > detectionRange_) continue;
-            float s = evaluateTargetScore(p, room);
-            if (s > bestScore) { bestScore = s; best = p; }
-        }
+        Player* best = selectBestVisibleTarget(room);
         if (best) {
             targetId_ = best->getId();
             if (groupId_ >= 0) {
@@ -406,13 +390,11 @@ void Npc::updateInvestigate(float dt, Room& room) {
     }
 
     NpcGroup* group = (groupId_ >= 0) ? room.getNpcGroup(groupId_) : nullptr;
-    const SharedTargetMemory* mem = group ? group->getBestMemory(room.getTickCount()) : nullptr;
+    const SharedTargetMemory* mem = group
+        ? group->getBestMemoryInsideActivityArea(room.getTickCount())
+        : nullptr;
     if (!mem) {
         transitionTo(NpcState::Return, "메모리 만료, 귀환");
-        return;
-    }
-    if (!group->isInsideActivityArea(mem->lastKnownPosition)) {
-        transitionTo(NpcState::Return, "조사 목표 구역 이탈");
         return;
     }
 
@@ -464,6 +446,23 @@ Player* Npc::selectBestTarget(Room& room) const {
     Player* best      = nullptr;
     float   bestScore = -999.f;
     for (Player* p : players) {
+        float s = evaluateTargetScore(p, room);
+        if (s > bestScore) { bestScore = s; best = p; }
+    }
+    return best;
+}
+
+// ─── selectBestVisibleTarget ─────────────────────────────────────────────────
+
+Player* Npc::selectBestVisibleTarget(Room& room) const {
+    Player* best      = nullptr;
+    float   bestScore = -999.f;
+    for (Player* p : room.getLivingPlayers()) {
+        if (Vec3::distance(position_, p->getPosition()) > detectionRange_) continue;
+        if (groupId_ >= 0) {
+            NpcGroup* group = room.getNpcGroup(groupId_);
+            if (group && !group->isInsideActivityArea(p->getPosition())) continue;
+        }
         float s = evaluateTargetScore(p, room);
         if (s > bestScore) { bestScore = s; best = p; }
     }

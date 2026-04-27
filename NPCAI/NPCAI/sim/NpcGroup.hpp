@@ -38,8 +38,9 @@ public:
                      const Vec3& pos, uint32_t currentTick);
 
     // ── 메모리 쿼리 ───────────────────────────────────────────────────────────
-    bool                      hasValidMemory(uint32_t currentTick) const;
-    const SharedTargetMemory* getBestMemory (uint32_t currentTick) const;
+    bool                      hasValidMemory                 (uint32_t currentTick) const;
+    const SharedTargetMemory* getBestMemory                  (uint32_t currentTick) const;
+    const SharedTargetMemory* getBestMemoryInsideActivityArea(uint32_t currentTick) const;
 
     // ── 활동 구역 경계 판정 ───────────────────────────────────────────────────
     bool isInsideActivityArea(const Vec3& pos) const;

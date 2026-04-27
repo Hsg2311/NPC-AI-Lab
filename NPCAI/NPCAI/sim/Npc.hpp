@@ -82,6 +82,7 @@ private:
     // ── 헬퍼 ──────────────────────────────────────────────────────────────────
     Actor*  resolveTarget           (Room& room) const;
     Player* selectBestTarget        (Room& room) const;
+    Player* selectBestVisibleTarget (Room& room) const;
     float   evaluateTargetScore     (const Player* p, Room& room) const;
     Vec3    calcSeparationForce     (Room& room) const;
     bool    isOutsideActivityZone   () const;

@@ -229,6 +229,142 @@ struct SharedTargetMemory {
 
 플레이어당 슬롯 1개 (`MaxPlayerCount = 4`). 기본 유효 기간 180 틱 (≈ 3초 @ 60fps).
 
+### 메모리 상세 동작
+
+#### 저장 구조
+
+```cpp
+// NpcGroup.hpp
+static constexpr int MaxPlayerCount = 4;
+std::array<SharedTargetMemory, MaxPlayerCount> memories_{};
+```
+
+슬롯 4개짜리 고정 배열. 플레이어 1명당 슬롯 1개를 사용하며, `playerId`로 식별한다.
+
+#### 1. 등록/갱신 — `reportSight()`
+
+```cpp
+void NpcGroup::reportSight(uint32_t npcId, uint32_t playerId,
+                            const Vec3& pos, uint32_t currentTick) {
+    // 1단계: 해당 playerId의 기존 슬롯 탐색
+    int slot = -1;
+    for (int i = 0; i < MaxPlayerCount; ++i) {
+        if (memories_[i].valid && memories_[i].playerId == playerId) {
+            slot = i; break;
+        }
+    }
+    // 2단계: 없으면 빈 슬롯 확보
+    if (slot == -1) {
+        for (int i = 0; i < MaxPlayerCount; ++i) {
+            if (!memories_[i].valid) { slot = i; break; }
+        }
+    }
+    if (slot == -1) return;  // 슬롯 부족 (플레이어 5명 이상이면 발생)
+
+    auto& m             = memories_[slot];
+    m.playerId          = playerId;
+    m.reporterNpcId     = npcId;
+    m.lastKnownPosition = pos;
+    m.lastSeenTick      = currentTick;
+    m.expireTick        = currentTick + memoryDurationTick_;  // 기본 180틱 ≈ 3초
+    m.valid             = true;
+}
+```
+
+NPC가 플레이어를 직접 감지했을 때 `Npc.cpp`의 4곳에서 호출된다.
+
+| 호출 위치 | 시점 |
+|---|---|
+| `updateIdle()` | 직접 감지 → Chase 전환 직전 |
+| `updateChase()` | 매 틱 추격 중 |
+| `updateReturn()` | re-aggro 직전 (메모리 갱신 목적, Troubleshooting [15] 참고) |
+| `updateInvestigate()` | 직접 감지 → Chase 전환 직전 |
+
+같은 `playerId`의 기존 슬롯이 있으면 **덮어쓴다** (신규 슬롯 생성 없음). `expireTick`이 매번 `currentTick + 180`으로 갱신되므로 NPC가 계속 보는 한 만료되지 않는다.
+
+#### 2. 관리(만료 처리) — `update()`
+
+```cpp
+void NpcGroup::update(uint32_t currentTick) {
+    for (auto& m : memories_) {
+        if (m.valid && currentTick > m.expireTick)
+            m = SharedTargetMemory{};  // 슬롯 초기화
+    }
+}
+```
+
+`Room::tick()`에서 **NPC 업데이트 전**에 호출된다. `currentTick > expireTick`이면 해당 슬롯을 기본값으로 리셋(`valid = false`, `playerId = 0`)해 빈 슬롯으로 돌려놓는다. `reportSight()`가 불리지 않으면 180틱 뒤 자동 만료된다.
+
+#### 3. 쿼리 — `getBestMemory()` / `getBestMemoryInsideActivityArea()`
+
+```cpp
+// 유효한 메모리 중 가장 최근 것 반환 (위치 무관)
+const SharedTargetMemory* NpcGroup::getBestMemory(uint32_t currentTick) const {
+    const SharedTargetMemory* best = nullptr;
+    for (const auto& m : memories_) {
+        if (!m.valid || currentTick > m.expireTick) continue;
+        if (!best || m.lastSeenTick > best->lastSeenTick)
+            best = &m;
+    }
+    return best;
+}
+
+// 구역 안에 위치한 메모리 중 가장 최근 것만 반환
+const SharedTargetMemory* NpcGroup::getBestMemoryInsideActivityArea(uint32_t currentTick) const {
+    // getBestMemory()와 동일하나 아래 필터 추가
+    if (!isInsideActivityArea(m.lastKnownPosition)) continue;
+    ...
+}
+```
+
+둘 다 `nullptr`을 반환할 수 있다. "아직 유효하지만 구역 밖"인 메모리는 `getBestMemory()`만 반환하고, `getBestMemoryInsideActivityArea()`는 걸러낸다.
+
+**`||` 단락 평가 동작:**
+
+```cpp
+if (!best || m.lastSeenTick > best->lastSeenTick)
+    best = &m;
+```
+
+| `best` 상태 | `!best` | 오른쪽 평가 여부 |
+|---|---|---|
+| `nullptr` (첫 유효 슬롯) | `true` | 건너뜀 — 어차피 전체가 `true` |
+| 이미 설정됨 | `false` | 실행 — `lastSeenTick` 비교해서 결정 |
+
+풀어서 쓰면:
+
+```cpp
+if (best == nullptr) {
+    best = &m;                               // 첫 유효 슬롯은 무조건 채택
+} else if (m.lastSeenTick > best->lastSeenTick) {
+    best = &m;                               // 더 최근 슬롯이면 교체
+}
+```
+
+#### 4. 삭제 — `clearMemory()`
+
+```cpp
+void NpcGroup::clearMemory() {
+    for (auto& m : memories_) m = SharedTargetMemory{};
+}
+```
+
+전체 슬롯을 즉시 초기화한다. 현재 코드에서는 호출하는 곳이 없다. Troubleshooting [14]에서 업데이트 순서 경쟁 조건을 일으킨 원인이었으므로 제거됐고, 만료는 `update()`의 자연 소멸에 맡긴다.
+
+#### 흐름 요약
+
+```
+NPC가 플레이어 감지
+  └─ reportSight()  →  슬롯 등록/갱신, expireTick = now + 180
+
+매 틱 Room::tick()
+  └─ NpcGroup::update()  →  expireTick 초과 슬롯 자동 소멸
+
+NPC 상태 판단 시
+  ├─ getBestMemory()                    →  구역 무관, 가장 최근 메모리
+  └─ getBestMemoryInsideActivityArea()  →  구역 안 메모리만
+```
+
 ### NpcGroup 라이프사이클
 
 ```

@@ -74,6 +74,19 @@ const SharedTargetMemory* NpcGroup::getBestMemory(uint32_t currentTick) const {
     return best;
 }
 
+// ─── getBestMemoryInsideActivityArea ─────────────────────────────────────────
+
+const SharedTargetMemory* NpcGroup::getBestMemoryInsideActivityArea(uint32_t currentTick) const {
+    const SharedTargetMemory* best = nullptr;
+    for (const auto& m : memories_) {
+        if (!m.valid || currentTick > m.expireTick) continue;
+        if (!isInsideActivityArea(m.lastKnownPosition)) continue;
+        if (!best || m.lastSeenTick > best->lastSeenTick)
+            best = &m;
+    }
+    return best;
+}
+
 // ─── isInsideActivityArea ─────────────────────────────────────────────────────
 
 bool NpcGroup::isInsideActivityArea(const Vec3& pos) const {
