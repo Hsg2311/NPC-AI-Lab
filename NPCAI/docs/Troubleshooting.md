@@ -1574,6 +1574,92 @@ force += (away / d) * strength;        // sqrt 추가 없음
 
 ---
 
+## [17] TacticalNpc 간 separation force 미적용
+
+**증상:**
+
+같은 Squad 소속 TacticalNpc들, 다른 Squad 소속 TacticalNpc들, TacticalNpc와 PlatoonLeader 사이에 separation force가 전혀 작용하지 않아 NPC들이 같은 위치에 겹쳐서 이동했다.
+
+**원인:**
+
+두 곳에서 `tacticalNpcs_`를 누락했다.
+
+**① `rebuildSpatialGrid()` — `tacticalNpcs_` 미등록**
+
+```cpp
+// Room.cpp (변경 전)
+void Room::rebuildSpatialGrid() {
+    spatialGrid_.clear();
+    for (const auto& [id, npc] : npcs_) {   // ← 기존 Npc만 등록
+        ...
+        spatialGrid_[gridKey(cx, cz)].push_back(id);
+    }
+    // tacticalNpcs_는 그리드에 전혀 없음
+}
+```
+
+TacticalNpc의 ID가 `spatialGrid_`에 등록되지 않았으므로,
+TacticalNpc가 `findNearbyNpcPositions()`를 호출해도 다른 TacticalNpc를 찾을 수 없었다.
+
+**② `findNearbyNpcPositions()` — ID 조회를 `npcs_`에서만 수행**
+
+```cpp
+// Room.cpp (변경 전)
+for (uint32_t npcId : it->second) {
+    if (npcId == excludeId) continue;
+    auto nit = npcs_.find(npcId);             // ← npcs_에만 조회
+    if (nit == npcs_.end() || ...) continue;  // TacticalNpc ID는 항상 miss
+    ...
+}
+```
+
+그리드에 TacticalNpc ID가 등록되더라도 위치 조회 시 `npcs_`에서만 찾으므로
+항상 miss가 발생해 결과에 포함되지 않았다.
+
+**수정 (`sim/Room.cpp`):**
+
+```cpp
+// rebuildSpatialGrid() — tacticalNpcs_ 루프 추가
+void Room::rebuildSpatialGrid() {
+    spatialGrid_.clear();
+    for (const auto& [id, npc] : npcs_) {
+        if (!npc->isAlive()) continue;
+        ...
+        spatialGrid_[gridKey(cx, cz)].push_back(id);
+    }
+    for (const auto& [id, npc] : tacticalNpcs_) {  // ← 추가
+        if (!npc->isAlive()) continue;
+        Vec3 pos = npc->getPosition();
+        int  cx  = static_cast<int>(std::floor(pos.x / GRID_CELL_SIZE));
+        int  cz  = static_cast<int>(std::floor(pos.z / GRID_CELL_SIZE));
+        spatialGrid_[gridKey(cx, cz)].push_back(id);
+    }
+}
+
+// findNearbyNpcPositions() — npcs_ miss 시 tacticalNpcs_ fallback
+for (uint32_t npcId : it->second) {
+    if (npcId == excludeId) continue;
+    const Actor* actor = nullptr;
+    auto nit = npcs_.find(npcId);
+    if (nit != npcs_.end()) {
+        actor = nit->second.get();
+    } else {
+        auto tit = tacticalNpcs_.find(npcId);    // ← fallback 추가
+        if (tit != tacticalNpcs_.end())
+            actor = tit->second.get();
+    }
+    if (!actor || !actor->isAlive()) continue;
+    const Vec3& pos = actor->getPosition();
+    if (Vec3::distanceSq(from, pos) < radius * radius)
+        out.push_back(pos);
+}
+```
+
+이제 `npcs_`와 `tacticalNpcs_` 양쪽이 모두 그리드에 등록되고, 위치 조회도 양쪽을 탐색한다.
+결과적으로 기존 Npc ↔ TacticalNpc, TacticalNpc ↔ TacticalNpc (Squad 내/간), TacticalNpc ↔ PlatoonLeader 모두 상호 separation force가 작용한다.
+
+---
+
 ## [Opt-⑤] selectBestTarget() 데드코드 제거
 
 > 대상 파일: `sim/Npc.hpp`, `sim/Npc.cpp`

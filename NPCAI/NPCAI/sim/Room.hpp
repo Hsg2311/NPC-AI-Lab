@@ -2,6 +2,7 @@
 #include "DummyPlayerController.hpp"
 #include "DebugSnapshot.hpp"
 #include "NpcGroup.hpp"
+#include "TacticalSquad.hpp"
 #include <unordered_map>
 #include <memory>
 #include <cstdint>
@@ -13,6 +14,8 @@ namespace sim {
 class Actor;
 class Player;
 class Npc;
+class TacticalNpc;
+class PlatoonLeader;
 
 class Room {
 public:
@@ -53,6 +56,12 @@ public:
                               uint32_t memoryDurationTick = 180);
     NpcGroup* getNpcGroup(int groupId);
 
+    // ── 전술 NPC 시스템 ───────────────────────────────────────────────────────
+    void addTacticalNpc (std::shared_ptr<TacticalNpc> npc);
+    void addTacticalSquad(std::unique_ptr<TacticalSquad> squad);
+    // PlatoonLeader는 addTacticalNpc로 추가 후 이 함수로 리더 등록
+    void registerPlatoonLeader(PlatoonLeader* leader);
+
 private:
     // ── 틱별 캐시 재구성 ──────────────────────────────────────────────────────
     void rebuildLivingPlayersCache(); // F: getLivingPlayers 반복 할당 제거
@@ -83,6 +92,11 @@ private:
 
     DummyPlayerController dummyCtrl_{};
     std::vector<std::unique_ptr<NpcGroup>> npcGroups_{};
+
+    // 전술 NPC 시스템
+    std::unordered_map<uint32_t, std::shared_ptr<TacticalNpc>> tacticalNpcs_{};
+    std::vector<std::unique_ptr<TacticalSquad>>                 tacticalSquads_{};
+    std::vector<PlatoonLeader*>                                  platoonLeaders_{};  // 비소유
 };
 
 } // namespace sim

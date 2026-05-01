@@ -8,6 +8,21 @@ namespace viz {
 // ─── 색상 테이블 ─────────────────────────────────────────────────────────────
 // NpcState int 값: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Return 5=Reposition 6=Dead 7=Investigate
 
+// TacticalNpcState int 값: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Flank 5=AlternateWait 6=Return 7=Dead
+COLORREF Renderer::tacticalStateColor(int state) {
+    switch (state) {
+        case 0: return RGB(140, 140, 140);  // Idle          - 회색
+        case 1: return RGB(220,  50,  50);  // Chase         - 빨간색
+        case 2: return RGB(255, 140,   0);  // AttackWindup  - 주황색
+        case 3: return RGB(160,  70,   0);  // AttackRecover - 진한 주황색
+        case 4: return RGB(  0, 200, 220);  // Flank         - 청록색
+        case 5: return RGB( 50,  80, 220);  // AlternateWait - 파란색
+        case 6: return RGB( 50, 200,  80);  // Return        - 초록색
+        case 7: return RGB( 40,  40,  40);  // Dead          - 거의 검정
+    }
+    return RGB(255, 255, 255);
+}
+
 COLORREF Renderer::npcStateColor(int state) {
     switch (state) {
         case 0: return RGB(140, 140, 140);  // Idle          - 회색
@@ -448,6 +463,135 @@ void Renderer::drawHUD(HDC hdc, int w, int h,
     DeleteObject(font);
 }
 
+// ─── drawTacticalNpc ─────────────────────────────────────────────────────────
+
+void Renderer::drawTacticalNpc(HDC hdc, int w, int h,
+                                 const sim::DebugTacticalNpcEntry& tnpc,
+                                 const sim::DebugSnapshot& snap) {
+    POINT    center = worldToScreen(tnpc.x,     tnpc.z,     w, h);
+    POINT    home   = worldToScreen(tnpc.homeX, tnpc.homeZ, w, h);
+    COLORREF col    = tacticalStateColor(tnpc.state);
+
+    // ── 홈 마커 (X) ─────────────────────────────────────────────────────────
+    {
+        COLORREF hcol = tnpc.alive ? RGB(80, 50, 100) : RGB(40, 40, 50);
+        drawHomeMarker(hdc, home, hcol);
+    }
+
+    // ── 공격 범위 원 ─────────────────────────────────────────────────────────
+    if (tnpc.alive) {
+        int  atkPx  = static_cast<int>(tnpc.attackRange * camera_.scale);
+        HPEN pen    = CreatePen(PS_SOLID, 1, RGB(180, 40, 40));
+        HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, pen));
+        drawCircleOutline(hdc, center, atkPx);
+        SelectObject(hdc, oldPen);
+        DeleteObject(pen);
+    }
+
+    // ── Flank 상태: NPC → 슬롯 목적지 점선 ────────────────────────────────
+    if (tnpc.alive && tnpc.state == 4 /* Flank */) {
+        POINT slotPt = worldToScreen(tnpc.slotX, tnpc.slotZ, w, h);
+        HPEN pen    = CreatePen(PS_DOT, 1, RGB(0, 200, 220));
+        HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, pen));
+        MoveToEx(hdc, center.x, center.y, nullptr);
+        LineTo  (hdc, slotPt.x, slotPt.y);
+        // 목적지 마커 (작은 원)
+        SelectObject(hdc, oldPen);
+        DeleteObject(pen);
+        HPEN mp = CreatePen(PS_SOLID, 1, RGB(0, 180, 200));
+        HPEN op = static_cast<HPEN>(SelectObject(hdc, mp));
+        drawCircleOutline(hdc, slotPt, 5);
+        SelectObject(hdc, op);
+        DeleteObject(mp);
+    }
+
+    // ── 타겟 선 ──────────────────────────────────────────────────────────────
+    if (tnpc.alive && tnpc.targetId != 0) {
+        for (const auto& p : snap.players) {
+            if (p.id != tnpc.targetId) continue;
+            POINT from = worldToScreen(tnpc.x, tnpc.z, w, h);
+            POINT to   = worldToScreen(p.x,   p.z,   w, h);
+            HPEN pen    = CreatePen(PS_DOT, 1, RGB(255, 200, 60));
+            HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, pen));
+            MoveToEx(hdc, from.x, from.y, nullptr);
+            LineTo  (hdc, to.x,   to.y);
+            SelectObject(hdc, oldPen);
+            DeleteObject(pen);
+            break;
+        }
+    }
+
+    // ── 몸체 원 (Leader는 두 겹) ─────────────────────────────────────────────
+    {
+        COLORREF bodyCol    = tnpc.alive ? col : RGB(35, 35, 35);
+        COLORREF outlineCol = tnpc.alive
+            ? RGB(std::min(255, GetRValue(col) + 60),
+                  std::min(255, GetGValue(col) + 60),
+                  std::min(255, GetBValue(col) + 60))
+            : RGB(70, 70, 70);
+        int radius = tnpc.isLeader ? 12 : 9;
+        drawFilledCircle(hdc, center, radius, bodyCol, outlineCol);
+
+        if (tnpc.isLeader && tnpc.alive) {
+            // 외곽 링
+            HPEN pen    = CreatePen(PS_SOLID, 2, RGB(255, 220, 80));
+            HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, pen));
+            drawCircleOutline(hdc, center, radius + 5);
+            SelectObject(hdc, oldPen);
+            DeleteObject(pen);
+        }
+    }
+
+    // ── Windup / Recover 진행 바 ────────────────────────────────────────────
+    if (tnpc.alive && (tnpc.state == 2 || tnpc.state == 3)) {
+        float    progress = (tnpc.state == 2) ? tnpc.windupProgress : tnpc.recoverProgress;
+        const int BAR_W   = 20;
+        const int BAR_H   = 4;
+        int bx = center.x - BAR_W / 2;
+        int by = center.y - 22;
+
+        RECT     bgR = { bx, by, bx + BAR_W, by + BAR_H };
+        HBRUSH   bg  = CreateSolidBrush(RGB(40, 40, 40));
+        FillRect(hdc, &bgR, bg);
+        DeleteObject(bg);
+
+        int fillW = static_cast<int>(BAR_W * progress);
+        if (fillW > 0) {
+            COLORREF fc  = (tnpc.state == 2) ? RGB(255, 160, 0) : RGB(100, 55, 0);
+            RECT     fR  = { bx, by, bx + fillW, by + BAR_H };
+            HBRUSH   fb  = CreateSolidBrush(fc);
+            FillRect(hdc, &fR, fb);
+            DeleteObject(fb);
+        }
+    }
+
+    // ── 방향 화살표 ─────────────────────────────────────────────────────────
+    if (tnpc.alive && (std::fabsf(tnpc.dirX) + std::fabsf(tnpc.dirZ)) > 0.05f) {
+        POINT tip = {
+            static_cast<LONG>(center.x + tnpc.dirX * 18.f),
+            static_cast<LONG>(center.y + tnpc.dirZ * 18.f)
+        };
+        drawArrow(hdc, center, tip, col);
+    }
+
+    // ── 레이블 ──────────────────────────────────────────────────────────────
+    {
+        static const char* stateNames[] = {
+            "Idle","Chase","Windup","Recover","Flank","AltWait","Return","Dead"
+        };
+        const char* sname = (tnpc.state >= 0 && tnpc.state < 8)
+            ? stateNames[tnpc.state] : "?";
+        char label[80];
+        std::snprintf(label, sizeof(label), "%s%s [%s]",
+            tnpc.isLeader ? "[L]" : "", tnpc.name.c_str(), sname);
+
+        SetTextColor(hdc, tnpc.alive ? col : RGB(70, 70, 70));
+        SetBkMode   (hdc, TRANSPARENT);
+        TextOutA    (hdc, center.x - 28, center.y + 14,
+                     label, static_cast<int>(std::strlen(label)));
+    }
+}
+
 // ─── render (공개 진입점) ────────────────────────────────────────────────────
 
 void Renderer::render(HDC hdc, int clientW, int clientH,
@@ -458,6 +602,9 @@ void Renderer::render(HDC hdc, int clientW, int clientH,
 
     for (const auto& npc : snapshot.npcs) {
         drawNpc(hdc, clientW, clientH, npc, snapshot);
+    }
+    for (const auto& tnpc : snapshot.tacticalNpcs) {
+        drawTacticalNpc(hdc, clientW, clientH, tnpc, snapshot);
     }
     for (const auto& p : snapshot.players) {
         drawPlayer(hdc, clientW, clientH, p);

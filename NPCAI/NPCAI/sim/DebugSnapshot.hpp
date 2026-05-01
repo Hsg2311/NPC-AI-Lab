@@ -60,12 +60,37 @@ struct DebugGroupEntry {
     float memoryZ{ 0.f };
 };
 
+// 상태: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Flank 5=AlternateWait 6=Return 7=Dead
+struct DebugTacticalNpcEntry {
+    int         id{ 0 };
+    float       x{ 0.f };
+    float       z{ 0.f };
+    float       dirX{ 1.f };
+    float       dirZ{ 0.f };
+    int         state{ 0 };
+    int         targetId{ 0 };
+    std::string name;
+    float       hp{ 0.f };
+    float       maxHp{ 100.f };
+    float       attackRange{ 0.f };
+    bool        alive{ true };
+    float       homeX{ 0.f };
+    float       homeZ{ 0.f };
+    float       windupProgress{ 0.f };
+    float       recoverProgress{ 0.f };
+    int         squadId{ -1 };
+    bool        isLeader{ false };
+    float       slotX{ 0.f };  // Flank 상태 목적지 (시각화용)
+    float       slotZ{ 0.f };
+};
+
 struct DebugSnapshot {
-    uint64_t                      tick{ 0 };
-    bool                          paused{ false };
-    std::vector<DebugPlayerEntry> players;
-    std::vector<DebugNpcEntry>    npcs;
-    std::vector<DebugGroupEntry>  groups;
+    uint64_t                           tick{ 0 };
+    bool                               paused{ false };
+    std::vector<DebugPlayerEntry>      players;
+    std::vector<DebugNpcEntry>         npcs;
+    std::vector<DebugGroupEntry>       groups;
+    std::vector<DebugTacticalNpcEntry> tacticalNpcs;
 };
 
 } // namespace sim

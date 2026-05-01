@@ -1,5 +1,5 @@
 ﻿#include "Application.hpp"
-#include "../sim/ScenarioSharedSight.hpp"
+#include "../sim/ScenarioTactical.hpp"
 #include <cstdio>
 
 namespace viz {
@@ -47,7 +47,7 @@ bool Application::init(HINSTANCE hInst, int nCmdShow) {
         return false;
     }
 
-    scenario_ = std::make_unique<sim::ScenarioSharedSight>();
+    scenario_ = std::make_unique<sim::ScenarioTactical>();
     scenario_->setup(room_);
     controlledPlayer_ = scenario_->controlledPlayer();
 

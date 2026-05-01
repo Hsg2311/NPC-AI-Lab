@@ -1,6 +1,6 @@
 # NPCAI Project — TODO
 
-> 마지막 갱신: 2026-04-26 (NpcGroup 시야 공유 시스템 추가)
+> 마지막 갱신: 2026-05-01 (전술 NPC 시스템 — PlatoonLeader / TacticalSquad / TacticalNpc 1단계 구현)
 
 ---
 
@@ -140,26 +140,46 @@ NPC 개별 행동 AI를 FSM에서 Behavior Tree(BT)로 전환하는 방안을 �
 
 ## 미완료 / 다음 단계
 
+### [v4] 전술 NPC 시스템 — 2단계
+
+#### TacticalNpc FSM 보완
+
+- [ ] **Confused 방황 구현** — 현재는 Idle 전이로 대체. `confusedTimer_` 기반 랜덤 방황 후 Idle.
+- [ ] **AlternateAttack 검증** — `SquadOrderType::AlternateAttack` 명령 경로 ScenarioTactical에서 확인
+- [ ] **Return 중 재어그로 차단 확인** — TacticalNpc의 Return은 명령 구동이므로 자율 재어그로 없음 (의도된 동작 확인)
+
+#### TacticalSquad 슬롯 갱신 최적화
+
+- [ ] **Flank 슬롯 갱신 주기 제어** — 현재 매 틱 재계산. 타겟 이동 임계값(0.5u 이상) 초과 시에만 갱신으로 변경
+- [ ] **멤버 수 변화 시 슬롯 재배분** — 멤버 사망 후 남은 멤버에게 슬롯 재분배
+
+#### PlatoonLeader 전술 고도화
+
+- [ ] **전투 효율 기반 전술 전환** — 살아있는 Squad 멤버 비율 < 임계값이면 Retreat 명령
+- [ ] **primary target 변경 쿨다운** — 빠른 교체로 인한 슬롯 진동 방지 (TARGET_CHANGE_COOLDOWN)
+- [ ] **Engage → Flank 조건부 전환** — Squad 1개라도 초기 Engage 후 타이머 기반 FlankLeft 전환
+
+#### 시각화 개선
+
+- [ ] **Squad 연결선** — Squad 멤버 간 얇은 선으로 소속 표시
+- [ ] **Flank 슬롯 갱신 시 깜빡임 방지** — 슬롯 좌표 보간 처리
+- [ ] **TacticalNpc 상태 범례** — HUD에 TacticalNpcState 색상 범례 별도 추가 (현재 Npc 범례만 있음)
+
 ### [v3] DummyPlayerController 패턴 확장
 
 - [ ] `PatrolCircle` — 반경 R의 원 궤도 순환 이동
 - [ ] `WanderRandom` — 일정 반경 내 랜덤 이동 (seed 고정 가능)
-- [ ] `StandStill(Idle)` — 웨이포인트 없는 경우를 명시적 패턴으로 정리
 
 ### [v3] NPC 추가 개선
 
 - [ ] **Respawn** — `updateDead()`에 respawnTimer 추가, Dead → Idle 전이
 - [ ] **HP 회복** — Return 상태에서 spawnPos 복귀 중 hp 점진 회복
 - [ ] **공격 받기** — 현재 NPC는 데미지를 받지 않음; Player 공격 이벤트 인터페이스 추가
-- [ ] **Confused state** — 플레이어 갑작스러운 소멸(로그아웃 시뮬레이션) 시 짧은 혼란 상태
-- [ ] **Ranged NPC** — 원거리 공격 (attackRange > meleeRange, AttackWindup 중 이동 없음 유지)
 
 ### [v3] 시각화 추가 개선
 
 - [ ] **HP 바** — 각 actor 아래 체력 게이지 표시
 - [ ] **카메라 pan/zoom** — 마우스 드래그(pan), 휠(zoom)으로 Camera 조정
-- [ ] **Actor 선택** — 클릭 시 해당 actor 정보 사이드 패널 표시
-- [ ] **로그 오버레이** — 최근 N개 상태 전이 로그를 창 오른쪽에 표시 (Logger 출력 미러링)
 - [ ] **시뮬레이션 속도 조절** — `+` / `-` 키로 tick rate 배율 변경 (×0.5 / ×1 / ×2 / ×4)
 
 ### [v4] 이벤트 / 로그 개선
@@ -178,16 +198,20 @@ NPCAI/
     Logger.hpp / Logger.cpp
     Actor.hpp / Actor.cpp
     Player.hpp / Player.cpp
-    Npc.hpp / Npc.cpp                       ← 7-state FSM, activityZone, separation, score target, reposition, groupId
+    Npc.hpp / Npc.cpp                       ← 8-state FSM (Investigate 포함), activityZone, separation, groupId
     NpcGroup.hpp / NpcGroup.cpp             ← 시야 공유 그룹 (SharedTargetMemory, reportSight, getBestMemory)
+    TacticalNpc.hpp / TacticalNpc.cpp       ← Actor 직접 상속, 명령 구동 8-state FSM (Flank 포함), detectionRange 없음
+    TacticalSquad.hpp / TacticalSquad.cpp   ← 코디네이터 (SquadOrder → 슬롯 계산 → TacticalCommand 발행)
+    PlatoonLeader.hpp / PlatoonLeader.cpp   ← TacticalNpc 상속, evaluateTactics(), 점수 기반 타겟 선택
     DummyPlayerController.hpp / .cpp
-    Room.hpp / Room.cpp                     ← getLivingPlayers, findNearbyNpcPositions, countNpcsTargeting, createNpcGroup
-    DebugSnapshot.hpp                       ← activityZone, groupId, DebugGroupEntry 포함
+    Room.hpp / Room.cpp                     ← tacticalNpcs_/tacticalSquads_/platoonLeaders_ 추가, tick 7a-7c
+    DebugSnapshot.hpp                       ← DebugTacticalNpcEntry, DebugGroupEntry 포함
     Scenario.hpp                            ← 시나리오 추상 베이스 클래스
     ScenarioSoloNpc.hpp / .cpp              ← 독립 NPC 시나리오
-    ScenarioSharedSight.hpp / .cpp          ← 시야 공유 그룹 NPC 시나리오 (활성 시나리오)
+    ScenarioSharedSight.hpp / .cpp          ← 시야 공유 그룹 NPC 시나리오
+    ScenarioTactical.hpp / .cpp             ← 전술 NPC 시나리오 (Boss + Squad A/B) ← 현재 활성
   viz/
-    Renderer.hpp / Renderer.cpp             ← 7-color legend, home marker, progress bar, drawGroups
+    Renderer.hpp / Renderer.cpp             ← drawTacticalNpc(), tacticalStateColor(), drawGroups
     Application.hpp / Application.cpp       ← Scenario 시스템
   mathUtil.hpp               (기존 DirectXMath 수학 라이브러리, 독립 유지)
   main.cpp
@@ -637,3 +661,141 @@ NPC끼리 명령을 내리지 않고, 감지 정보만 공유해 자연스러운
 
 - [o] `groupColor(groupId)` 색상 테이블 (G0 청록 / G1 황금 / G2 보라 / G3 연두)
 - [o] `drawGroups()` — 그룹 활동 구역 원, `G0`/`G1` 레이블, 공유 메모리 위치 `×` 마커
+
+---
+
+## 갱신: 2026-05-01 — 전술 NPC 시스템 1단계 구현
+
+### 배경
+
+NpcGroup이 시야 공유만 담당하는 수준에서 한 단계 올라, 물리적 지휘관(PlatoonLeader)이
+Squad들에게 포위/협공 전술 명령을 내리는 계층형 전술 AI를 구현했다.
+
+기존 `Npc` 클래스는 건드리지 않고, `Actor`를 직접 상속하는 별도 클래스 계층으로 분리했다.
+
+### 설계 원칙
+
+- **TacticalNpc**: `detectionRange` 없음. 플레이어를 스스로 감지하지 않는다. 보스 룸 고정 배치 전제.
+  활성화는 오직 `TacticalSquad` 명령(EngageTarget / FlankTarget 등)에 의존.
+  전투 중 `AttackWindup/Recover` 사이클은 자율.
+- **TacticalSquad**: 비(非)Actor 코디네이터. `SquadOrder`를 소비해 슬롯을 계산하고
+  각 멤버에게 `TacticalCommand`를 발행한다.
+- **PlatoonLeader**: `TacticalNpc` 상속. 자체 전투 FSM + `evaluateTactics()` 겸행.
+  보스 맵 전체를 활동 구역으로 간주해 `activationRange` 없이 항상 전체 플레이어를 인식한다.
+  플레이어 선택은 거리 + HP 가중 점수 기반.
+
+### 신규: `sim/TacticalNpc.hpp/.cpp`
+
+- [o] `Actor` 직접 상속 (Npc와 별개 계층)
+- [o] 8개 상태: `Idle / Chase / AttackWindup / AttackRecover / Flank / AlternateWait / Return / Dead`
+- [o] `TacticalCommand` 구조체 — `EngageTarget / FlankTarget / AlternateWait / Retreat / Idle / Confused`
+- [o] `receiveCommand()` — `TacticalSquad`가 호출, `pendingCmd_` 에 저장
+- [o] `consumePendingCommand()` — 매 틱 최우선 소비, 상태 전이 트리거
+- [o] `detectionRange_` 없음 — `Idle` 상태에서 자율 감지 없이 순수 대기
+- [o] Flank 상태: `assignedSlot_` (월드 좌표) 방향으로 이동 → 도착 시 Chase 또는 AttackWindup
+- [o] `calcSeparationForce()` — 인접 TacticalNpc 분리력 (chase/flank/return 이동 시 적용)
+- [o] `getAssignedSlot()`, `getWindupProgress()`, `getRecoverProgress()` — 렌더러용 접근자
+
+### 신규: `sim/TacticalSquad.hpp/.cpp`
+
+- [o] `SquadOrderType` — `Idle / Engage / FlankLeft / FlankRight / Encircle / AlternateAttack / Retreat`
+- [o] `SquadOrder` 구조체 — `targetId / sectorAngle / sectorSpan / attackTurn / totalTurns / approachRadius / leaderPos`
+- [o] `receiveOrder()` — PlatoonLeader가 매 평가 주기 호출
+- [o] `update()` — `removeDeadMembers()` → `pushCommandsToMembers()`
+- [o] `calcFlankSlots()` — 리더→타겟 방향 기준 좌/우 수직 벡터로 슬롯 계산
+  ```
+  FlankLeft:  dir = normalize(target - leader),  side = (dir.z, 0, -dir.x)
+              slot_i = target + side × radius + dir × (i × spacing)
+  FlankRight: 동일, side = (-dir.z, 0, dir.x)
+  ```
+- [o] `calcEncircleSlots()` — `sectorAngle ± sectorSpan/2` 범위에서 균등 분산
+  ```
+  slot_i = target + {cos(start + arc×i), 0, sin(start + arc×i)} × radius
+  arc = sectorSpan / (count - 1)
+  ```
+- [o] `AlternateAttack` — `i % totalTurns == attackTurn` 조건으로 공격자/대기자 분배
+- [o] `pushConfusedToMembers()` — PlatoonLeader 사망 시 멤버 전체에 Confused 명령
+
+### 신규: `sim/PlatoonLeader.hpp/.cpp`
+
+- [o] `TacticalNpc` 상속 (전투 FSM + 지휘 겸행)
+- [o] `addSquad(TacticalSquad*)` — Squad 등록 (비소유 참조)
+- [o] `evaluateTactics()` — TACTIC_INTERVAL(1초) 주기 호출
+  ```
+  Squad 0개:   모든 Squad에 Idle
+  Squad 1개:   Engage (정면 공격)
+  Squad 2개:   FlankLeft + FlankRight (좌우 협공)
+  Squad 3개+:  Encircle (360° / squad수 로 각도 배분)
+  ```
+- [o] `selectPrimaryTarget()` — 전체 생존 플레이어 대상 점수 기반 선택
+  ```
+  score = distScore × 0.5 + hpScore × 0.5
+  distScore = 1 / (1 + dist)          -- 가까울수록 높음
+  hpScore   = 1 - (hp / maxHp)        -- HP 낮을수록 높음
+  ```
+- [o] 사망 시 `deathReported_` 플래그로 1회만 `pushConfusedToMembers()` 호출
+- [o] 자체 전투 FSM: `pendingCmd_`를 틱마다 `None`으로 차단해 Squad 명령이 리더에게 간섭하지 않도록
+
+### 신규: `sim/ScenarioTactical.hpp/.cpp`
+
+- [o] P1 시작: `(-10, 0, 0)` — 화살표키 조작
+- [o] Boss(PlatoonLeader): `(15, 0, 0)`, HP 200
+- [o] Squad A 2명 — SoldierA1/A2: `(12, 0, -3)`, `(12, 0, -6)` (좌측 배치)
+- [o] Squad B 2명 — SoldierB1/B2: `(12, 0, 3)`, `(12, 0, 6)` (우측 배치)
+- [o] Application에서 ScenarioSharedSight 대신 ScenarioTactical 활성
+
+### 수정: `sim/Room.hpp/.cpp`
+
+- [o] 멤버 추가:
+  ```cpp
+  unordered_map<uint32_t, shared_ptr<TacticalNpc>>  tacticalNpcs_
+  vector<unique_ptr<TacticalSquad>>                  tacticalSquads_
+  vector<PlatoonLeader*>                             platoonLeaders_  // 비소유
+  ```
+- [o] `addTacticalNpc()`, `addTacticalSquad()`, `registerPlatoonLeader()` 추가
+- [o] `findActorById()` — `tacticalNpcs_` 맵도 검색하도록 확장
+- [o] `tick()` 순서 확장:
+  ```
+  7-a. updatePlatoonLeaders(dt)    -- evaluateTactics + 자체 전투 FSM
+  7-b. updateTacticalSquads(dt)    -- 슬롯 계산 + TacticalCommand 발행
+  7-c. updateTacticalNpcMembers(dt) -- 멤버(비 Leader) FSM 실행
+  ```
+- [o] `buildSnapshot()` — `tacticalNpcs_` 순회하여 `DebugTacticalNpcEntry` 채움
+
+### 수정: `sim/DebugSnapshot.hpp`
+
+- [o] `DebugTacticalNpcEntry` 신규:
+  ```
+  id, x, z, dirX, dirZ, state(TacticalNpcState int),
+  targetId, name, hp, maxHp, attackRange, alive,
+  homeX, homeZ, windupProgress, recoverProgress,
+  squadId, isLeader, slotX, slotZ  -- Flank 목적지 좌표
+  ```
+- [o] `DebugSnapshot::tacticalNpcs` 벡터 추가
+
+### 수정: `viz/Renderer.hpp/.cpp`
+
+- [o] `tacticalStateColor(int state)` 신규 — TacticalNpcState 색상 테이블:
+  ```
+  Idle(0)          RGB(140,140,140)  회색
+  Chase(1)         RGB(220, 50, 50)  빨간색
+  AttackWindup(2)  RGB(255,140,  0)  주황색
+  AttackRecover(3) RGB(160, 70,  0)  진한 주황색
+  Flank(4)         RGB(  0,200,220)  청록색
+  AlternateWait(5) RGB( 50, 80,220)  파란색
+  Return(6)        RGB( 50,200, 80)  초록색
+  Dead(7)          RGB( 40, 40, 40)  거의 검정
+  ```
+- [o] `drawTacticalNpc()` 신규:
+  - Leader: 원 두 겹 (반경 12 + 외곽 링 5px, 황금색)
+  - 비리더: 반경 9 원
+  - Flank 상태: NPC → 슬롯 목적지 점선 + 슬롯 마커 원
+  - 타겟 선: NPC → 플레이어 노란 점선
+  - Windup/Recover 진행 바
+  - 레이블: `[L]Boss [Chase]` 형식 (리더 앞 `[L]` 접두사)
+- [o] `render()` — `snapshot.tacticalNpcs` 순회 후 `drawTacticalNpc()` 호출
+
+### 수정: `NPCAI.vcxproj`
+
+- [o] ClInclude: `TacticalNpc.hpp`, `TacticalSquad.hpp`, `PlatoonLeader.hpp`, `ScenarioTactical.hpp` 추가
+- [o] ClCompile: `TacticalNpc.cpp`, `TacticalSquad.cpp`, `PlatoonLeader.cpp`, `ScenarioTactical.cpp` 추가

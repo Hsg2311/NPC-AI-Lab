@@ -34,6 +34,7 @@ private:
     void drawGrid(HDC hdc, int w, int h);
     void drawGroups(HDC hdc, int w, int h, const sim::DebugSnapshot& snap);
     void drawNpc(HDC hdc, int w, int h, const sim::DebugNpcEntry& npc, const sim::DebugSnapshot& snap);
+    void drawTacticalNpc(HDC hdc, int w, int h, const sim::DebugTacticalNpcEntry& tnpc, const sim::DebugSnapshot& snap);
     void drawPlayer(HDC hdc, int w, int h, const sim::DebugPlayerEntry& p);
     void drawTargetLine(HDC hdc, int w, int h, const sim::DebugNpcEntry& npc, const sim::DebugSnapshot& snap);
     void drawHUD(HDC hdc, int w, int h, const sim::DebugSnapshot& snap);
@@ -45,6 +46,7 @@ private:
     void drawHomeMarker(HDC hdc, POINT center, COLORREF col);
 
     static COLORREF npcStateColor(int state);
+    static COLORREF tacticalStateColor(int state);
 };
 
 } // namespace viz

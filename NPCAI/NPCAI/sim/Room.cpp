@@ -2,6 +2,9 @@
 #include "Actor.hpp"
 #include "Player.hpp"
 #include "Npc.hpp"
+#include "TacticalNpc.hpp"
+#include "TacticalSquad.hpp"
+#include "PlatoonLeader.hpp"
 #include "Logger.hpp"
 #include <iostream>
 #include <iomanip>
@@ -26,16 +29,31 @@ void Room::addActor(std::shared_ptr<Actor> actor) {
         npcs_[n->getId()] = std::move(n);
 }
 
+void Room::addTacticalNpc(std::shared_ptr<TacticalNpc> npc) {
+    tacticalNpcs_[npc->getId()] = std::move(npc);
+}
+
+void Room::addTacticalSquad(std::unique_ptr<TacticalSquad> squad) {
+    tacticalSquads_.push_back(std::move(squad));
+}
+
+void Room::registerPlatoonLeader(PlatoonLeader* leader) {
+    platoonLeaders_.push_back(leader);
+}
+
 // ─── tick ─────────────────────────────────────────────────────────────────────
 // 업데이트 순서:
 //   1. 로거 틱 카운터 동기화
-//   2. DummyPlayerController  -> 이동 목표 할당
-//   3. 생존한 모든 Player     -> 이동 실행
-//   4. 모든 NpcGroup          -> 메모리 만료 슬롯 정리
-//   5. 캐시 재구성             -> aggroCount_ / spatialGrid_
-//   6. 모든 NPC               -> AI 실행
-//   7. 틱 카운터 증가
-//   8. 주기적 스냅샷 출력
+//   2. DummyPlayerController   → 이동 목표 할당
+//   3. 생존한 모든 Player      → 이동 실행
+//   4. 모든 NpcGroup           → 메모리 만료 슬롯 정리
+//   5. 캐시 재구성              → livingPlayers / aggroCount_ / spatialGrid_
+//   6. 모든 NPC                → AI 실행
+//   7. PlatoonLeader           → evaluateTactics + 자체 전투 FSM
+//   8. TacticalSquad           → 슬롯 계산 + 멤버 명령 발행
+//   9. TacticalNpc 멤버        → 명령 소비 + FSM 실행
+//  10. 틱 카운터 증가
+//  11. 주기적 스냅샷 출력
 
 void Room::tick(float dt) {
     Logger::get().setTick(tickCount_);
@@ -56,6 +74,19 @@ void Room::tick(float dt) {
     for (auto& [id, npc] : npcs_)
         npc->update(dt, *this);
 
+    // 전술 NPC 시스템: PlatoonLeader → TacticalSquad → TacticalNpc 멤버 순서
+    for (auto* leader : platoonLeaders_)
+        leader->update(dt, *this);
+
+    for (auto& sq : tacticalSquads_)
+        sq->update(dt, *this);
+
+    for (auto& [id, tnpc] : tacticalNpcs_) {
+        // PlatoonLeader는 위에서 이미 업데이트됨
+        if (tnpc->typeName() != std::string("PlatoonLeader"))
+            tnpc->update(dt, *this);
+    }
+
     ++tickCount_;
 
     if (dumpInterval_ > 0 && (tickCount_ % dumpInterval_) == 0)
@@ -69,6 +100,8 @@ Actor* Room::findActorById(uint32_t id) const {
     if (it != players_.end()) return it->second.get();
     auto it2 = npcs_.find(id);
     if (it2 != npcs_.end()) return it2->second.get();
+    auto it3 = tacticalNpcs_.find(id);
+    if (it3 != tacticalNpcs_.end()) return it3->second.get();
     return nullptr;
 }
 
@@ -116,9 +149,17 @@ void Room::findNearbyNpcPositions(const Vec3& from, float radius,
             if (it == spatialGrid_.end()) continue;
             for (uint32_t npcId : it->second) {
                 if (npcId == excludeId) continue;
+                const Actor* actor = nullptr;
                 auto nit = npcs_.find(npcId);
-                if (nit == npcs_.end() || !nit->second->isAlive()) continue;
-                const Vec3& pos = nit->second->getPosition();
+                if (nit != npcs_.end()) {
+                    actor = nit->second.get();
+                } else {
+                    auto tit = tacticalNpcs_.find(npcId);
+                    if (tit != tacticalNpcs_.end())
+                        actor = tit->second.get();
+                }
+                if (!actor || !actor->isAlive()) continue;
+                const Vec3& pos = actor->getPosition();
                 if (Vec3::distanceSq(from, pos) < radius * radius)
                     out.push_back(pos);
             }
@@ -154,6 +195,13 @@ void Room::rebuildAggroCount() {
 void Room::rebuildSpatialGrid() {
     spatialGrid_.clear();
     for (const auto& [id, npc] : npcs_) {
+        if (!npc->isAlive()) continue;
+        Vec3 pos = npc->getPosition();
+        int  cx  = static_cast<int>(std::floor(pos.x / GRID_CELL_SIZE));
+        int  cz  = static_cast<int>(std::floor(pos.z / GRID_CELL_SIZE));
+        spatialGrid_[gridKey(cx, cz)].push_back(id);
+    }
+    for (const auto& [id, npc] : tacticalNpcs_) {
         if (!npc->isAlive()) continue;
         Vec3 pos = npc->getPosition();
         int  cx  = static_cast<int>(std::floor(pos.x / GRID_CELL_SIZE));
@@ -277,6 +325,34 @@ DebugSnapshot Room::buildSnapshot() const {
             g.memoryZ   = mem->lastKnownPosition.z;
         }
         snap.groups.push_back(g);
+    }
+
+    for (const auto& [id, tnpc] : tacticalNpcs_) {
+        Vec3 pos    = tnpc->getPosition();
+        Vec3 facing = tnpc->getFacing();
+        Vec3 slot   = tnpc->getAssignedSlot();
+        DebugTacticalNpcEntry e;
+        e.id             = static_cast<int>(tnpc->getId());
+        e.x              = pos.x;
+        e.z              = pos.z;
+        e.dirX           = facing.x;
+        e.dirZ           = facing.z;
+        e.state          = static_cast<int>(tnpc->getState());
+        e.targetId       = static_cast<int>(tnpc->getTargetId());
+        e.name           = tnpc->getName();
+        e.hp             = tnpc->getHp();
+        e.maxHp          = tnpc->getMaxHp();
+        e.attackRange    = tnpc->getAttackRange();
+        e.alive          = tnpc->isAlive();
+        e.homeX          = tnpc->getSpawnPos().x;
+        e.homeZ          = tnpc->getSpawnPos().z;
+        e.windupProgress = tnpc->getWindupProgress();
+        e.recoverProgress= tnpc->getRecoverProgress();
+        e.squadId        = tnpc->getSquadId();
+        e.isLeader       = (tnpc->typeName() == std::string("PlatoonLeader"));
+        e.slotX          = slot.x;
+        e.slotZ          = slot.z;
+        snap.tacticalNpcs.push_back(e);
     }
 
     return snap;

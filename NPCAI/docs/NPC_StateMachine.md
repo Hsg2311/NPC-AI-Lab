@@ -1,15 +1,17 @@
 # NPC AI 상태 전이 문서
 
 ## 목차
-1. [NPC 상태 머신](#1-npc-상태-머신)
-2. [주요 파라미터](#2-주요-파라미터)
+1. [NPC 상태 머신 (기존 Npc 클래스)](#1-npc-상태-머신-기존-npc-클래스)
+2. [NPC 주요 파라미터](#2-npc-주요-파라미터)
+3. [NpcGroup 시야 공유 시스템](#3-npcgroup-시야-공유-시스템)
+4. [전술 NPC 시스템 (TacticalNpc / TacticalSquad / PlatoonLeader)](#4-전술-npc-시스템)
 
-> **2026-04-26:** Squad / Platoon 계층 전면 제거. 모든 NPC는 단독 행동(standalone).
-> 구 2~4절(분대 / 소대 / 연동 메커니즘) 삭제.
+> **2026-04-26:** Squad / Platoon 계층 전면 제거. 모든 Npc 클래스 인스턴스는 단독 행동(standalone).
+> **2026-05-01:** 전술 NPC 시스템 추가 (섹션 4). 기존 Npc 클래스는 변경 없음.
 
 ---
 
-## 1. NPC 상태 머신
+## 1. NPC 상태 머신 (기존 Npc 클래스)
 
 ### 상태 목록 (`NpcState`)
 
@@ -129,7 +131,7 @@ NPC는 windupTimer 완료까지 스윙을 commit. 타겟이 이탈해도 취소�
 
 ---
 
-## 2. 주요 파라미터
+## 2. NPC 주요 파라미터
 
 ### NPC 파라미터 (`NpcConfig`)
 
@@ -204,6 +206,8 @@ Return → Chase               : detectionRange 내 플레이어 재감지 (canR
 Return → Idle                : dist to spawnPos < 0.3
 Dead   → (none)              : terminal
 ```
+
+---
 
 ---
 
@@ -417,3 +421,368 @@ NPC를 그룹에 연결하려면 `setGroupId()`와 `NpcGroup::addMember()` 양�
 | 그룹 활동 구역 원 | 그룹별 색상 실선 (G0 청록 / G1 황금 / G2 보라 / G3 연두) |
 | `G0` / `G1` 레이블 | 구역 원 위쪽 |
 | 공유 메모리 위치 마커 | `×` (hasMemory == true 시 표시) |
+
+---
+
+## 4. 전술 NPC 시스템 (TacticalNpc / TacticalSquad / PlatoonLeader)
+
+### 개요
+
+보스 룸처럼 고정된 전투 공간을 위한 **명령 구동 전술 AI 계층**이다.
+기존 `Npc` 클래스는 건드리지 않으며, `Actor`를 직접 상속하는 별도 클래스 계층으로 분리된다.
+
+**핵심 설계 원칙:**
+- `TacticalNpc`는 `detectionRange` 없음 — 플레이어를 스스로 감지하지 않는다.
+- 활성화는 오직 `PlatoonLeader` 명령에만 의존한다.
+- 전투 개시 이후 Attack 사이클(Windup/Recover)은 자율적으로 반복한다.
+- `PlatoonLeader`는 전투 + 지휘를 겸행한다.
+
+### 클래스 계층
+
+```
+Actor
+├── Player
+├── Npc              ← 기존 (변경 없음)
+└── TacticalNpc      ← 신규: Squad 명령 소비 + FSM
+    └── PlatoonLeader ← TacticalNpc 상속: 전투 FSM + evaluateTactics()
+
+TacticalSquad        ← 비(非) Actor 코디네이터
+  SquadOrder 수신 (from PlatoonLeader)
+  → TacticalCommand 발행 (to TacticalNpc members)
+```
+
+---
+
+### TacticalNpc 상태 머신
+
+#### 상태 목록 (`TacticalNpcState`)
+
+| 값 | 상태 | 설명 |
+|---|---|---|
+| 0 | `Idle` | 명령 대기. 자율 감지 없음. 명령이 올 때까지 아무것도 하지 않음. |
+| 1 | `Chase` | `EngageTarget` 명령 후 타겟 추격. 분리 힘 블렌드 적용. |
+| 2 | `AttackWindup` | 공격 선딜. 이동 없음. `windupTimer_` 완료 시 hit/miss 판정. 타겟 이탈해도 취소 없음. |
+| 3 | `AttackRecover` | 공격 후딜. 약한 separation drift 허용. `recoverTimer_` 완료 후 재공격 또는 Chase. |
+| 4 | `Flank` | `FlankTarget` 명령. `assignedSlot_`(월드 좌표) 위치까지 이동. 도착 후 Chase 또는 AttackWindup. |
+| 5 | `AlternateWait` | 교대 공격에서 자기 순번이 아닌 대기 상태. 다음 EngageTarget 명령 수신 시 전환. |
+| 6 | `Return` | `Retreat` 명령 또는 타겟 소실 시 `spawnPos_`로 귀환. |
+| 7 | `Dead` | 종단 상태. |
+
+#### 상태 전이 다이어그램
+
+```
+                          (명령: EngageTarget)
+              ┌──────────────────────────────────────┐
+              │                                      │
+     ┌────────▼────────┐         (명령: Retreat)     │
+     │      IDLE       │◄──────────────────── RETURN ┘
+     └────────┬────────┘                      ▲
+              │ (명령: EngageTarget)           │ 스폰 위치 도달 (dist < 0.3)
+              │ (명령: FlankTarget)  ──► FLANK ─┤
+              ▼                                │ 슬롯 도달 + 사정거리 이탈
+     ┌────────────────┐                        │
+  ┌─►│     CHASE      │◄───────────────────────┘
+  │  └───────┬────────┘
+  │           │ dist ≤ attackRange
+  │           ▼
+  │  ┌────────────────┐
+  │  │ ATTACK WINDUP  │  windupTimer 완료
+  │  └───────┬────────┘──── hit(범위 내) or miss(범위 밖) ──►┐
+  │           │                                              │
+  │           │                                    ┌─────────▼────────┐
+  │           │                                    │ ATTACK RECOVER   │
+  │           │                                    └────────┬─────────┘
+  │           │ recoverTimer 완료                           │
+  │           │  dist ≤ attackRange ───────────────────────►│
+  └─────────── dist > attackRange ◄────────────────────────┘
+
+AlternateWait: 명령 대기 → 다음 EngageTarget 수신 시 Chase로 전환
+Dead: 종단 상태 (alive_ == false)
+```
+
+#### 자율 전이 (상태 내부 판단)
+
+| 현재 상태 | 전이 대상 | 조건 |
+|---|---|---|
+| `Chase` | `AttackWindup` | `dist ≤ attackRange_` |
+| `Chase` | `Idle` | 타겟 소실/사망 |
+| `AttackWindup` | `AttackRecover` | `windupTimer_ ≥ attackWindupTime_` |
+| `AttackWindup` | `Idle` | 타겟 소실/사망 (windup 도중) |
+| `AttackRecover` | `AttackWindup` | `recoverTimer_` 완료 && `dist ≤ attackRange_` |
+| `AttackRecover` | `Chase` | `recoverTimer_` 완료 && `dist > attackRange_` |
+| `AttackRecover` | `Idle` | 타겟 소실/사망 (recover 도중) |
+| `Flank` | `AttackWindup` | `assignedSlot_` 도달(dist < 0.5) && `dist to target ≤ attackRange_` |
+| `Flank` | `Chase` | `assignedSlot_` 도달(dist < 0.5) && `dist to target > attackRange_` |
+| `Flank` | `Idle` | 타겟 소실/사망 (Flank 도중) |
+| `AlternateWait` | `Idle` | 타겟 소실/사망 |
+| `Return` | `Idle` | `dist to spawnPos_ < 0.3` |
+| `Dead` | — | 종단 상태 (alive_ == false 감지 즉시) |
+
+#### 명령 구동 전이 (TacticalSquad → TacticalNpc)
+
+매 틱 `update()` 진입부에서 `pendingCmd_`를 소비한다. 명령은 어느 상태에서도 즉시 적용된다.
+
+| 명령 타입 | 전이 대상 | 부수 효과 |
+|---|---|---|
+| `EngageTarget` | `Chase` | `targetId_` 갱신 |
+| `FlankTarget` | `Flank` | `targetId_` + `assignedSlot_`(월드 좌표) 갱신 |
+| `AlternateWait` | `AlternateWait` | `targetId_` 갱신 |
+| `Retreat` | `Return` | — |
+| `Idle` | `Idle` | `targetId_ = 0` |
+| `Confused` | `Idle` | `targetId_ = 0` (PlatoonLeader 사망 시 발행) |
+
+#### TacticalNpcConfig 파라미터
+
+| 파라미터 | 기본값 | 효과 |
+|---|---|---|
+| `maxHp` | 100.0 | 최대 HP |
+| `moveSpeed` | 4.0 | 이동 속도 (units/s) |
+| `attackRange` | 2.0 | 공격 사정거리 |
+| `attackDamage` | 15.0 | 타격 데미지 |
+| `attackWindupTime` | 0.4s | 공격 선딜 시간 |
+| `attackRecoverTime` | 0.8s | 공격 후딜 시간 |
+| `separationRadius` | 3.0 | 충돌 회피 감지 반경 |
+| `separationWeight` | 0.5 | 분리 힘 강도 (이동 방향 대비 블렌드 비율) |
+
+**`detectionRange` 없음** — TacticalNpc는 플레이어를 스스로 감지하지 않는다.
+Return 상태에서도 재어그로 없음.
+
+#### Return 이동 특성
+
+`Return` 상태에서 이동 속도는 `moveSpeed_ * 2.0`이 적용된다. 분리 힘은 `separationWeight * 0.25` 배율로 약화된다.
+
+---
+
+### TacticalSquad
+
+Squad는 비(非) Actor 코디네이터다. 소속 TacticalNpc들의 ID만 보관하며, PlatoonLeader의 `SquadOrder`를 받아 슬롯을 계산하고 각 NPC에 `TacticalCommand`를 발행한다.
+
+#### SquadOrder 타입 (`SquadOrderType`)
+
+| 타입 | 설명 |
+|---|---|
+| `Idle` | 전투 해제. 멤버 전체에 Idle 명령. |
+| `Engage` | 정면 공격. 멤버 전체에 EngageTarget 명령. |
+| `FlankLeft` | 좌측 측면 기동. 멤버에게 FlankTarget 명령 + 좌측 슬롯 좌표. |
+| `FlankRight` | 우측 측면 기동. 멤버에게 FlankTarget 명령 + 우측 슬롯 좌표. |
+| `Encircle` | 포위. 지정된 섹터 각도 범위 내 슬롯에 FlankTarget 발행. |
+| `AlternateAttack` | 교대 공격. `attackTurn` 순번에 해당하는 멤버만 EngageTarget, 나머지 AlternateWait. |
+| `Retreat` | 후퇴. 멤버 전체에 Retreat 명령. |
+
+#### SquadOrder 필드
+
+```cpp
+struct SquadOrder {
+    SquadOrderType type        = SquadOrderType::Idle;
+    uint32_t       targetId    = 0;
+    float          sectorAngle = 0.f;   // Encircle: 이 Squad의 섹터 중심 각도 (라디안)
+    float          sectorSpan  = 0.f;   // Encircle: 섹터 폭 (라디안)
+    int            attackTurn  = 0;     // AlternateAttack: 공격 순번 (0부터)
+    int            totalTurns  = 1;     // AlternateAttack: 전체 순번 수
+    float          approachRadius = 5.f; // Flank/Encircle: 타겟 기준 접근 반경
+    Vec3           leaderPos   = {};    // FlankLeft/Right: 방향 계산용 리더 위치
+};
+```
+
+#### 슬롯 계산
+
+**FlankLeft/Right:**
+```
+dir  = normalize(targetPos − leaderPos)          // 리더→타겟 방향
+side = (+dir.z, 0, −dir.x)                       // 좌측 수직 (XZ 평면)
+     = (−dir.z, 0, +dir.x)                       // 우측 수직
+spacing = memberAttackRange + 1.5
+
+slot[i] = targetPos
+         + side    * approachRadius
+         + dir     * (i * spacing)                // 타겟에 가까운 멤버 순서
+```
+
+**Encircle (멤버 2명 이상):**
+```
+arc   = sectorSpan / (count − 1)
+start = sectorAngle − sectorSpan * 0.5
+
+slot[i] = targetPos + { cos(start + arc*i), 0, sin(start + arc*i) } * approachRadius
+```
+멤버 1명이면 `{ cos(sectorAngle), 0, sin(sectorAngle) } * approachRadius`로 단일 슬롯.
+
+#### update() 처리 순서
+
+1. `removeDeadMembers()` — `findActorById(id)->isAlive()` 검사, 사망 NPC ID 제거
+2. 새 명령(`orderDirty_`)이 있거나 Flank/Encircle 유형이면 `pushCommandsToMembers()` 호출
+3. `pushCommandsToMembers()` 내에서 타겟 위치를 매 틱 재조회 → 슬롯 갱신 (타겟 이동 반영)
+
+Flank/Encircle 유형은 `orderDirty_` 없이도 매 틱 슬롯을 재계산해 이동 중인 타겟을 추적한다.
+
+#### PlatoonLeader 사망 처리
+
+```cpp
+void TacticalSquad::pushConfusedToMembers(Room& room) {
+    // 소속 멤버 전체에 Confused 명령 발행
+}
+```
+
+PlatoonLeader의 `update()`에서 `alive_`가 false로 바뀌는 틱에 `deathReported_` 플래그로 1회만 호출된다. Confused 명령을 받은 TacticalNpc는 즉시 `Idle`로 전환된다.
+
+---
+
+### PlatoonLeader
+
+`TacticalNpc`를 상속하며 전투 FSM과 Squad 지휘를 겸행한다.
+
+#### 핵심 설계
+
+- **전투 겸행**: 자체 Chase/AttackWindup/AttackRecover 사이클을 동시에 실행한다.
+- **명령 간섭 차단**: 매 틱 `pendingCmd_.type = None` 설정 후 `TacticalNpc::update()` 호출 → TacticalSquad의 명령이 리더 자신의 FSM에 영향을 주지 않는다.
+- **항상 플레이어 인식**: 보스 룸 = 전체 활동 구역. `detectionRange` 없이 `room.getLivingPlayers()` 전부 평가.
+
+#### evaluateTactics() — 전술 평가 (1초 주기)
+
+```
+1. selectPrimaryTarget(room)  →  점수 기반 primary 선택
+2. 살아있는 Squad 수에 따른 전술 결정:
+   Squad 1개  →  Engage  (정면 공격)
+   Squad 2개  →  FlankLeft + FlankRight  (좌/우 협공)
+   Squad 3개+ →  Encircle  (360° / N 균등 분할, sectorAngle = span * i)
+3. 각 Squad에 SquadOrder 발행 (receiveOrder)
+4. 리더 자신: targetId_ 갱신, Idle/Return 상태이면 Chase로 전환
+```
+
+플레이어 없음 또는 활성 Squad 없음: 전체 Squad에 Idle 명령, 리더 자신도 Idle/Return 유지.
+
+#### 플레이어 점수 함수
+
+```cpp
+float score = distScore * 0.5f + hpScore * 0.5f;
+
+distScore = 1.0f / (1.0f + dist)     // 가까울수록 높음
+hpScore   = 1.0f - (hp / maxHp)      // HP 낮을수록 높음
+```
+
+최고 점수 플레이어 → `primaryTargetId_`.
+
+#### PlatoonLeader 파라미터 상수
+
+| 상수 | 값 | 설명 |
+|---|---|---|
+| `TACTIC_INTERVAL` | 1.0s | evaluateTactics() 호출 주기 |
+| `APPROACH_RADIUS` | 4.5 | 슬롯 배치 반경 (타겟 기준) |
+
+---
+
+### 명령 흐름
+
+```
+PlatoonLeader::evaluateTactics()   (매 1초)
+  │
+  │  SquadOrder { type, targetId, leaderPos, sectorAngle, approachRadius, ... }
+  ▼
+TacticalSquad::receiveOrder()
+  │
+  │  슬롯 계산 (매 틱, FlankLeft/Right/Encircle은 타겟 이동 반영)
+  │
+  │  TacticalCommand { type, targetId, slotOffset }
+  ▼
+TacticalNpc::receiveCommand()   →  pendingCmd_ 저장
+  │
+  ▼
+TacticalNpc::update() 진입부
+  └─ consumePendingCommand()  →  상태 전이
+```
+
+**Room::tick() 내 업데이트 순서:**
+
+```
+7a. updatePlatoonLeaders(dt)
+    — PlatoonLeader::update(): evaluateTactics() + 자체 전투 FSM
+7b. updateTacticalSquads(dt)
+    — TacticalSquad::update(): 사망 멤버 제거 + 슬롯 재계산 + TacticalCommand 발행
+7c. updateTacticalNpcMembers(dt)
+    — TacticalNpc::update(): pendingCmd_ 소비 + FSM 실행
+    — PlatoonLeader는 typeName() 검사로 이 단계에서 제외 (7a에서 이미 처리됨)
+```
+
+---
+
+### Room API (전술 NPC)
+
+| 메서드 | 설명 |
+|---|---|
+| `addTacticalNpc(shared_ptr<TacticalNpc>)` | TacticalNpc 등록. `actors_`와 `tacticalNpcs_` 양쪽에 추가. |
+| `addTacticalSquad(unique_ptr<TacticalSquad>)` | Squad 등록. Room이 소유. 반환 포인터는 Room 생존 기간 유효. |
+| `registerPlatoonLeader(PlatoonLeader*)` | 리더 포인터를 `platoonLeaders_` 에 등록 (비소유). |
+| `findActorById(id)` | `tacticalNpcs_`도 포함해 검색. |
+
+TacticalNpc는 `actors_`와 `tacticalNpcs_` **양쪽**에 동시 등록되어 `findActorById()`와 전술 전용 반복 모두 지원한다.
+
+---
+
+### DebugSnapshot 확장
+
+```cpp
+struct DebugTacticalNpcEntry {
+    uint32_t    id;
+    float       x, z;
+    float       dirX, dirZ;
+    int         state;           // TacticalNpcState int 값
+    uint32_t    targetId;
+    std::string name;
+    float       hp, maxHp;
+    float       attackRange;
+    bool        alive;
+    float       homeX, homeZ;
+    float       windupProgress;  // [0,1] — 렌더러 프로그레스 바용
+    float       recoverProgress; // [0,1]
+    int         squadId;
+    bool        isLeader;
+    float       slotX, slotZ;   // Flank 상태 목적지
+};
+
+// DebugSnapshot에 추가
+std::vector<DebugTacticalNpcEntry> tacticalNpcs;
+```
+
+---
+
+### 시각화 (Renderer)
+
+#### 상태별 색상 (`tacticalStateColor`)
+
+| 상태 | 색상 | RGB |
+|---|---|---|
+| `Idle(0)` | 회색 | (128, 128, 128) |
+| `Chase(1)` | 빨강 | (220, 50, 50) |
+| `AttackWindup(2)` | 주황 | (255, 165, 0) |
+| `AttackRecover(3)` | 진주황 | (200, 100, 0) |
+| `Flank(4)` | 청록 | (0, 200, 220) |
+| `AlternateWait(5)` | 파랑 | (50, 80, 220) |
+| `Return(6)` | 초록 | (50, 180, 50) |
+| `Dead(7)` | 거의 검정 | (40, 40, 40) |
+
+#### drawTacticalNpc() 시각화 요소
+
+| 요소 | 조건 | 설명 |
+|---|---|---|
+| 상태 색상 원 | 항상 | 상태에 따른 색상 원형 |
+| 이중 링 (금색) | `isLeader == true` | 외곽 링(반경+5px)을 금색(255,200,0)으로 추가 표시 |
+| 점선 (슬롯 방향) | `state == Flank(4)` | NPC → `assignedSlot_` 방향 점선 |
+| 타겟 방향 선 | `targetId != 0` | NPC → 타겟 연결선 |
+| Windup/Recover 바 | 해당 상태 시 | 진행 상황 표시 바 |
+| `[L]` 접두사 레이블 | `isLeader == true` | 이름 앞에 리더 표시 |
+
+---
+
+### 시나리오 (ScenarioTactical)
+
+```
+P1 (HumanControl)  at (-10, 0, 0)
+Boss (PlatoonLeader, HP=200)  at (15, 0, 0)
+  Squad A: SoldierA1(12,0,-3)  SoldierA2(12,0,-6)   squadId=0
+  Squad B: SoldierB1(12,0, 3)  SoldierB2(12,0, 6)   squadId=1
+```
+
+Squad 2개이므로 PlatoonLeader는 FlankLeft + FlankRight를 발행한다.
+- Squad A → 좌측 측면 기동(cyan)
+- Squad B → 우측 측면 기동(cyan)
+- Boss → 정면 Chase + Attack
