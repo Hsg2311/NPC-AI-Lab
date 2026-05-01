@@ -252,6 +252,7 @@ Dead   → (none)              : terminal
 | 길이 | `\|v\| = √(x² + y² + z²)` |
 | 정규화 | `v̂ = v / \|v\|` (분모 < 1e-6 시 영벡터 반환) |
 | 거리 | `dist(a, b) = \|a − b\|` |
+| 거리²  | `distSq(a, b) = \|a − b\|²` (sqrt 없음 — 범위 비교 전용) |
 | 내적 | `a · b = ax·bx + ay·by + az·bz` |
 | 선형 보간 | `lerp(a, b, t) = a + (b − a) × t` |
 
@@ -273,74 +274,99 @@ position += facing × step       // step ≥ dist 이면 position = target으로
 ### 3. NPC 타겟 점수 함수 (`sim/Npc.cpp` — `evaluateTargetScore`)
 
 ```
-score = (1 − dist / chaseRange) × 50    // 거리 점수: 가까울수록 최대 50점
-      + 20                               // 현재 타겟 유지 히스테리시스
-      + 15                               // dist ≤ attackRange 이면 사거리 내 보너스
-      − aggro × 8                        // 해당 플레이어를 이미 추적 중인 NPC 수 × 패널티
+score = (1 − dist / activityZoneRadius × 2) × 50   // 거리 점수: 가까울수록 최대 50점
+      + 20                                           // 현재 타겟 유지 히스테리시스
+      + 15                                           // dist ≤ attackRange 이면 사거리 내 보너스
+      − aggro × 8                                    // 해당 플레이어를 추적 중인 NPC 수 × 패널티
 ```
 
 Chase 상태에서 0.5초(`TARGET_EVAL_INTERVAL`) 주기로 재평가된다.
 
 ---
 
-### 4. Separation Force (`sim/Npc.cpp` — `calcSeparationForce`)
+### 4. Separation Force — Npc (`sim/Npc.cpp` — `calcSeparationForce`)
 
 `separationRadius` 내 인접 NPC 각각에 대해 반발 벡터를 누적한다:
 
 ```
 // 일반 경우 (d ≥ 1e-4)
 strength = 1 − (d / separationRadius)    // 선형 감쇠: 가까울수록 강함
-force   += normalize(pos − neighbor) × strength
+force   += (pos − neighbor) / d × strength
 
 // 완전 겹침 (d < 1e-4) — 결정론적 방향
 angle  = id × 1.2 rad
 force += { cos(angle), 0, sin(angle) }
 ```
 
-**합성 이동 벡터:**
+**Chase/Reposition 합성 이동 벡터:**
 
 ```
 moveDir = normalize(chaseDir + sepForce × separationWeight)
 ```
 
-Return 상태에서는 separation 영향을 25%로 감소:
+**Return 상태** — separation 영향 25%로 감소:
 
 ```
-moveDir = normalize(homeDir + sep × separationWeight × 0.25)
+moveDir = normalize(homeDir + sep × (separationWeight × 0.25))
+```
+
+**AttackRecover** — 이동 없이 drift만 허용 (약 30% 강도):
+
+```
+position += sep × (separationWeight × 0.3 × moveSpeed × dt)
 ```
 
 ---
 
-### 5. Reposition 슬롯 위치 (`sim/Npc.cpp` — `calcRepositionTarget`)
+### 5. Separation Force — TacticalNpc (`sim/TacticalNpc.cpp` — `calcSeparationForce`)
 
-**황금각(Golden Angle)** 기반으로 NPC id마다 균등 분산:
+반발 벡터 누적 공식은 Npc와 동일하다. 합성 방식이 다르다.
+
+**수직 성분 분리 (Chase / Flank 상태):**
+
+추격·이동 방향(moveAxisDir)과 **평행한 성분을 제거**하고 수직 성분만 분리력으로 사용한다.
+역방향 이동 없이 옆으로만 밀어내는 효과를 얻는다:
 
 ```
-angle  = id × 2.399963 rad    // ≈ 137.508°, 피보나치 수열 극한 2π(1 − 1/φ)
-slot.x = target.x + cos(angle) × repositionRadius
-slot.z = target.z + sin(angle) × repositionRadius
+sepPerp = sep − moveAxisDir × (sep · moveAxisDir)
+moveDir = normalize(moveAxisDir + sepPerp × separationWeight)
 ```
 
-연속된 정수를 원 위에 매핑할 때 가장 균등하게 분산되는 각도다.
-`repositionRadius ≥ separationRadius × 0.7` 조건으로 슬롯 간 진동을 방지한다.
+- `moveAxisDir`이 chaseDir이면 추격 방향 기준 수직, slotDir이면 슬롯 이동 방향 기준 수직.
+- `sep · moveAxisDir < 0` (역방향 성분)이 완전히 제거되어 NPC가 후진하지 않는다.
+- 기본 `separationWeight = 1.5` (수직 성분만 사용하므로 Npc의 0.5보다 크게 설정).
+
+**AttackRecover** — Npc와 동일하게 drift만 허용 (30% 강도):
+
+```
+position += sep × (separationWeight × 0.3 × moveSpeed × dt)
+```
+
+**공간 분할 그리드** — `Npc`와 `TacticalNpc` 모두 `rebuildSpatialGrid()`에 등록되어
+`findNearbyNpcPositions()`에서 상호 감지된다 (클래스 경계를 넘어 분리력이 작용).
 
 ---
 
-### 6. Windup / Recover 진행도 (`sim/Npc.cpp`)
+### 6. Reposition 이동 (`sim/Npc.cpp` — `updateReposition`)
+
+황금각 기반 고정 슬롯 방식은 2026-04-22에 제거됐다.
+현재는 타겟 방향 + 수직 이탈 방향 블렌드로 군집을 탈출하면서 타겟을 추적한다:
+
+```
+toTarget     = normalize(target.pos − position)
+repositionDir = perpendicular(toTarget, id)   // id 홀수→좌측, id 짝수→우측
+moveDir      = normalize(toTarget + repositionDir × 0.8)
+```
+
+`REPOSITION_TIMEOUT(1.5s)` 초과 시 Chase로 강제 전환한다.
+
+---
+
+### 7. Windup / Recover 진행도 (`sim/Npc.cpp`, `sim/TacticalNpc.cpp`)
 
 ```
 windupProgress  = clamp(windupTimer  / attackWindupTime,  0, 1)
 recoverProgress = clamp(recoverTimer / attackRecoverTime, 0, 1)
-```
-
----
-
-### 7. AttackRecover 중 separation drift
-
-Windup과 달리 이동을 완전히 막지 않고, 일반 이동의 약 30% 강도로 drift를 허용한다:
-
-```
-position += sep × (separationWeight × 0.3 × moveSpeed × dt)
 ```
 
 ---
@@ -369,7 +395,7 @@ R = tip − (nx×2s − ny×s,  ny×2s + nx×s)
 
 ---
 
-### 10. Progress Bar 채우기 (`viz/Renderer.cpp` — `drawNpc`)
+### 10. Progress Bar 채우기 (`viz/Renderer.cpp`)
 
 ```
 fillWidth = floor(BAR_W × progress)    // BAR_W = 20 px
@@ -377,15 +403,68 @@ fillWidth = floor(BAR_W × progress)    // BAR_W = 20 px
 
 ---
 
+### 11. PlatoonLeader 플레이어 점수 (`sim/PlatoonLeader.cpp` — `evaluatePlayerScore`)
+
+```
+distScore = 1 / (1 + dist)         // 가까울수록 높음, 거리=0이면 최대 1.0
+hpScore   = 1 − (hp / maxHp)       // HP 낮을수록 높음, 사망 직전이면 최대 1.0
+score     = distScore × 0.5 + hpScore × 0.5
+```
+
+전체 생존 플레이어 중 최고 점수 → `primaryTargetId_`. `TACTIC_INTERVAL(1.0s)` 주기로 평가.
+
+---
+
+### 12. FlankLeft / FlankRight 슬롯 (`sim/TacticalSquad.cpp` — `calcFlankSlots`)
+
+```
+dir  = normalize(targetPos − leaderPos)        // 리더 → 타겟 방향
+side = (+dir.z, 0, −dir.x)                    // XZ 평면 좌측 수직 (FlankLeft)
+     = (−dir.z, 0, +dir.x)                    // XZ 평면 우측 수직 (FlankRight)
+spacing = memberAttackRange + 1.5
+
+slot[i] = targetPos
+         + side    × approachRadius
+         + dir     × (i × spacing)            // 타겟에 가까운 순서 배치
+```
+
+`approachRadius`(기본 4.5)가 타겟 기준 측면 거리, `spacing`이 멤버 간 전후 간격을 결정한다.
+
+---
+
+### 13. Encircle 슬롯 (`sim/TacticalSquad.cpp` — `calcEncircleSlots`)
+
+Squad마다 섹터(sectorAngle ± sectorSpan/2) 안에 멤버를 균등 배치한다:
+
+```
+// 멤버 2명 이상
+arc   = sectorSpan / (count − 1)
+start = sectorAngle − sectorSpan × 0.5
+
+slot[i] = targetPos + { cos(start + arc×i), 0, sin(start + arc×i) } × approachRadius
+
+// 멤버 1명
+slot[0] = targetPos + { cos(sectorAngle), 0, sin(sectorAngle) } × approachRadius
+```
+
+PlatoonLeader가 Squad N개에 대해 `sectorAngle = (2π / N) × i`, `sectorSpan = 2π / N`를 배분해
+360° 포위를 구성한다.
+
+---
+
 ### 전체 수식 한눈에 보기
 
 ```
-[이동]        position  += normalize(chaseDir + sep×w) × speed × dt
-[분산 강도]   strength   = 1 − d / separationRadius
-[타겟 점수]   score      = (1 − d/range)×50 + hyst + bonus − aggro×8
-[황금각 슬롯] angle      = id × 2.399963,  slot = target + {cos, sin} × r
-[좌표 변환]   screenX    = W/2 + (worldX − centerX) × scale
-[진행도]      progress   = clamp(timer / totalTime, 0, 1)
+[Npc 이동]        moveDir = normalize(chaseDir + sep × w)
+[TactNpc 이동]    sepPerp = sep − axis × (sep·axis)
+                  moveDir = normalize(axis + sepPerp × w)
+[분산 강도]       strength = 1 − d / separationRadius
+[Npc 타겟 점수]   score    = (1−d/range)×50 + 20 + 15 − aggro×8
+[PL 타겟 점수]    score    = 1/(1+d)×0.5 + (1−hp/maxHp)×0.5
+[Flank 슬롯]      slot[i]  = target + side×r + dir×(i×spacing)
+[Encircle 슬롯]   slot[i]  = target + {cos(start+arc×i), sin(start+arc×i)} × r
+[좌표 변환]       screenX  = W/2 + (worldX − centerX) × scale
+[진행도]          progress = clamp(timer / totalTime, 0, 1)
 ```
 
 ---

@@ -29,18 +29,18 @@ void ScenarioTactical::setup(Room& room) {
     // ── 전술 NPC 설정 ─────────────────────────────────────────────────────────
     TacticalNpcConfig cfg;
     cfg.maxHp             = 120.f;
-    cfg.moveSpeed         = 4.5f;
+    cfg.moveSpeed         = 6.5f;
     cfg.attackRange       = 2.f;
     cfg.attackDamage      = 12.f;
     cfg.attackWindupTime  = 0.35f;
     cfg.attackRecoverTime = 0.75f;
-    cfg.separationRadius  = 3.f;
-    cfg.separationWeight  = 0.5f;
+    cfg.separationRadius  = 6.f;
+    cfg.separationWeight  = 1.5f;
 
     TacticalNpcConfig leaderCfg = cfg;
     leaderCfg.maxHp       = 200.f;
+    leaderCfg.moveSpeed   = 5.5f;
     leaderCfg.attackRange = 2.5f;
-    leaderCfg.moveSpeed   = 3.5f;
 
     // ── PlatoonLeader ─────────────────────────────────────────────────────────
     auto leaderPtr = std::make_shared<PlatoonLeader>("Boss", Vec3{ 15.f, 0.f, 0.f }, leaderCfg);

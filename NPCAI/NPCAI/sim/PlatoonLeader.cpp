@@ -8,8 +8,6 @@
 
 namespace sim {
 
-static constexpr float PI = 3.14159265f;
-
 PlatoonLeader::PlatoonLeader(const std::string& name, const Vec3& pos,
                              const TacticalNpcConfig& cfg)
     : TacticalNpc(name, pos, cfg)
@@ -85,43 +83,12 @@ void PlatoonLeader::evaluateTactics(Room& room) {
         }
     }
 
-    int squadCount = static_cast<int>(liveSquads.size());
-
-    if (squadCount == 1) {
-        // Squad 1개: 정면 Engage
+    // 모든 Squad: 정면 Engage
+    for (auto* sq : liveSquads) {
         SquadOrder ord;
         ord.type     = SquadOrderType::Engage;
         ord.targetId = primary->getId();
-        liveSquads[0]->receiveOrder(ord);
-
-    } else if (squadCount == 2) {
-        // Squad 2개: 좌/우 협공
-        SquadOrder ordL, ordR;
-        ordL.type          = SquadOrderType::FlankLeft;
-        ordL.targetId      = primary->getId();
-        ordL.leaderPos     = position_;
-        ordL.approachRadius = APPROACH_RADIUS;
-
-        ordR.type          = SquadOrderType::FlankRight;
-        ordR.targetId      = primary->getId();
-        ordR.leaderPos     = position_;
-        ordR.approachRadius = APPROACH_RADIUS;
-
-        liveSquads[0]->receiveOrder(ordL);
-        liveSquads[1]->receiveOrder(ordR);
-
-    } else {
-        // Squad 3개+: 포위 (360° 균등 분할)
-        float sectorSpan  = (2.f * PI) / static_cast<float>(squadCount);
-        for (int i = 0; i < squadCount; ++i) {
-            SquadOrder ord;
-            ord.type          = SquadOrderType::Encircle;
-            ord.targetId      = primary->getId();
-            ord.sectorAngle   = sectorSpan * static_cast<float>(i);
-            ord.sectorSpan    = sectorSpan;
-            ord.approachRadius = APPROACH_RADIUS;
-            liveSquads[i]->receiveOrder(ord);
-        }
+        sq->receiveOrder(ord);
     }
 }
 

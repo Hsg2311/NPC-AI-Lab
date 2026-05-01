@@ -158,8 +158,11 @@ void TacticalNpc::updateChase(float dt, Room& room) {
     Vec3 chaseDir = (target->getPosition() - position_).normalized();
     nearbyCache_.clear();
     room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
-    Vec3 sep     = calcSeparationForce(nearbyCache_);
-    Vec3 moveDir = (chaseDir + sep * separationWeight_).normalized();
+    Vec3 sep = calcSeparationForce(nearbyCache_);
+
+    // 추격 방향과 수직인 성분만 사용 — 역방향 이동 없이 옆으로만 밀어냄
+    Vec3 sepPerp = sep - chaseDir * sep.dot(chaseDir);
+    Vec3 moveDir = (chaseDir + sepPerp * separationWeight_).normalized();
     facing_   = moveDir;
     position_ += moveDir * (moveSpeed_ * dt);
 }
@@ -249,8 +252,11 @@ void TacticalNpc::updateFlank(float dt, Room& room) {
     Vec3 slotDir = (assignedSlot_ - position_).normalized();
     nearbyCache_.clear();
     room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
-    Vec3 sep     = calcSeparationForce(nearbyCache_);
-    Vec3 moveDir = (slotDir + sep * separationWeight_).normalized();
+    Vec3 sep = calcSeparationForce(nearbyCache_);
+
+    // 슬롯 이동 방향과 수직인 성분만 사용
+    Vec3 sepPerp = sep - slotDir * sep.dot(slotDir);
+    Vec3 moveDir = (slotDir + sepPerp * separationWeight_).normalized();
     facing_   = moveDir;
     position_ += moveDir * (moveSpeed_ * dt);
 }
