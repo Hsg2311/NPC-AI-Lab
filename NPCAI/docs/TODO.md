@@ -1,6 +1,6 @@
 # NPCAI Project — TODO
 
-> 마지막 갱신: 2026-05-01 (전술 NPC 시스템 — PlatoonLeader / TacticalSquad / TacticalNpc 1단계 구현)
+> 마지막 갱신: 2026-05-02 (separation force 리팩토링 — Actor 통합, 수직 투영 통일, AttackRecover 체반경 하드 push)
 
 ---
 
@@ -48,12 +48,13 @@
 
 - [o] **AttackWindup** — 공격 전 준비 단계 (회피 가능한 공격 모션)
   - [o] `windupTimer_` 누적, 완료 시 사거리 체크 → hit(데미지) or miss (둘 다 AttackRecover 전이)
-  - [o] Windup 중 **위치 이동 없음** — separation force는 `facing_`만 조정
+  - [o] Windup 중 **위치 이동 없음**, **separation force 미적용** — 스윙 commit 중 방향 고정
   - [o] 타겟이 도망쳐도 스윙 취소 없음 — NPC가 끝까지 commit
   - [o] `transitionTo()` 진입 시 `windupTimer_ = 0` 리셋 (entry timer reset 패턴)
 - [o] **AttackRecover** — 공격 후 경직 단계
-  - [o] `recoverTimer_` 누적, 경직 중 약한 separation drift 허용 (`weight × 0.3 × speed × dt`)
-  - [o] 완료 시 `isOvercrowded()` 판단 → Reposition 또는 Chase/AttackWindup 전이
+  - [o] `recoverTimer_` 누적, 경직 중 **체반경(BODY_RADIUS=0.8) 기반 하드 충돌 push**만 허용
+    - `BODY_RADIUS × 2` 소반경 쿼리 → 실제 겹침 시에만 `push.normalized() × speed × 0.15 × dt`
+  - [o] 완료 시 `separationRadius_` 풀 쿼리 1회 → `isOvercrowded()` 판단 → Reposition 또는 Chase/AttackWindup 전이
   - [o] `transitionTo()` 진입 시 `recoverTimer_ = 0` 리셋
 - [o] **Reposition** — 과밀 탈출 비켜서기
   - [o] 진입 시 수직 방향 계산 (`repositionDir_`): 홀수 id → 왼쪽, 짝수 id → 오른쪽
@@ -63,11 +64,24 @@
 
 #### Separation Force
 
-- [o] `calcSeparationForce()` — `findNearbyNpcPositions(separationRadius_)` 반경 내 NPC 반발
-  - [o] 거리 비례 강도: `strength = 1 - (d / separationRadius_)`
-  - [o] 완전 겹침(< 1e-4) 처리: id 기반 결정론적 밀어냄 방향 (`cosf(id × 1.2)`)
-- [o] Chase: `moveDir = (chaseDir + sepForce × separationWeight_).normalized()`
-- [o] Return 중에는 separation 영향 감소 (`× 0.25`)
+- [o] `Actor::calcSeparationForce(separationRadius, nearby)` — `Actor` protected 메서드로 통합, `Npc` / `TacticalNpc` 공유
+  - [o] 거리 비례 강도: `strength = 1 - (d / separationRadius)`
+  - [o] 완전 겹침(d < 1e-4) 처리: id 기반 결정론적 방향 (`cosf(id × 1.2)`)
+- [o] **수직 투영(Perpendicular Projection)** — 이동 방향과 평행한 분리 성분을 제거하고 수직 성분만 사용
+  - `sepPerp = sep - primaryDir × (sep · primaryDir)`
+  - 역방향 이동 없이 옆으로만 밀어냄, `primaryDir`는 상태마다 다름
+
+| 클래스 | 상태 | 적용 방식 |
+|---|---|---|
+| Npc | Chase | 수직 투영 (`primaryDir = chaseDir`) |
+| Npc | AttackWindup | 미적용 (스윙 commit 중 방향 고정) |
+| Npc | AttackRecover | 위치 drift (`sep × weight × 0.3 × speed × dt`) |
+| Npc | Return | 수직 투영 (`primaryDir = homeDir`) |
+| Npc | Reposition | 복합 블렌드에 전체 벡터 합산 |
+| TacticalNpc | Chase | 수직 투영 (`primaryDir = chaseDir`) |
+| TacticalNpc | AttackRecover | 위치 drift (`sep × weight × 0.3 × speed × dt`) |
+| TacticalNpc | Flank | 수직 투영 (`primaryDir = slotDir`) |
+| TacticalNpc | Return | 수직 투영 (`primaryDir = homeDir`) |
 
 #### Home Position + Return 개선
 
@@ -284,9 +298,10 @@ Chase 상태에서 0.5초(`TARGET_EVAL_INTERVAL`) 주기로 재평가된다.
 
 ---
 
-### 4. Separation Force — Npc (`sim/Npc.cpp` — `calcSeparationForce`)
+### 4. Separation Force (`sim/Actor.cpp` — `Actor::calcSeparationForce`)
 
-`separationRadius` 내 인접 NPC 각각에 대해 반발 벡터를 누적한다:
+`separationRadius` 내 인접 NPC 각각에 대해 반발 벡터를 누적한다.
+`Npc` / `TacticalNpc` 공통 구현 (`Actor` protected 메서드).
 
 ```
 // 일반 경우 (d ≥ 1e-4)
@@ -298,52 +313,52 @@ angle  = id × 1.2 rad
 force += { cos(angle), 0, sin(angle) }
 ```
 
-**Chase/Reposition 합성 이동 벡터:**
-
-```
-moveDir = normalize(chaseDir + sepForce × separationWeight)
-```
-
-**Return 상태** — separation 영향 25%로 감소:
-
-```
-moveDir = normalize(homeDir + sep × (separationWeight × 0.25))
-```
-
-**AttackRecover** — 이동 없이 drift만 허용 (약 30% 강도):
-
-```
-position += sep × (separationWeight × 0.3 × moveSpeed × dt)
-```
+**공간 분할 그리드** — `Npc`와 `TacticalNpc` 모두 `rebuildSpatialGrid()`에 등록되어
+`findNearbyNpcPositions()`에서 상호 감지된다 (클래스 경계를 넘어 분리력이 작용).
 
 ---
 
-### 5. Separation Force — TacticalNpc (`sim/TacticalNpc.cpp` — `calcSeparationForce`)
+### 5. Separation Force 상태별 적용 방식
 
-반발 벡터 누적 공식은 Npc와 동일하다. 합성 방식이 다르다.
+**수직 투영(Perpendicular Projection) — 이동 방향이 명확한 상태:**
 
-**수직 성분 분리 (Chase / Flank 상태):**
-
-추격·이동 방향(moveAxisDir)과 **평행한 성분을 제거**하고 수직 성분만 분리력으로 사용한다.
-역방향 이동 없이 옆으로만 밀어내는 효과를 얻는다:
+추격·이동 방향(`primaryDir`)과 평행한 분리 성분을 제거하고 수직 성분만 사용한다.
+역방향 이동 없이 옆으로만 밀어내는 효과를 얻는다.
 
 ```
-sepPerp = sep − moveAxisDir × (sep · moveAxisDir)
-moveDir = normalize(moveAxisDir + sepPerp × separationWeight)
+sepPerp = sep − primaryDir × (sep · primaryDir)
+moveDir = normalize(primaryDir + sepPerp × separationWeight)
 ```
 
-- `moveAxisDir`이 chaseDir이면 추격 방향 기준 수직, slotDir이면 슬롯 이동 방향 기준 수직.
-- `sep · moveAxisDir < 0` (역방향 성분)이 완전히 제거되어 NPC가 후진하지 않는다.
-- 기본 `separationWeight = 1.5` (수직 성분만 사용하므로 Npc의 0.5보다 크게 설정).
+**체반경 하드 충돌 push — AttackRecover:**
 
-**AttackRecover** — Npc와 동일하게 drift만 허용 (30% 강도):
+`separationRadius_` 전체 소프트 drift 대신, 실제 몸 크기에 해당하는 소반경만 쿼리해
+겹쳤을 때만 최소한의 반발을 적용한다. `isOvercrowded()` 체크는 timer 만료 시 풀 쿼리로 수행.
 
 ```
-position += sep × (separationWeight × 0.3 × moveSpeed × dt)
+// per-tick (겹침 방지)
+queryRadius = BODY_RADIUS × 2   // BODY_RADIUS = 0.8
+push        = calcSeparationForce(queryRadius, nearby)
+position   += push.normalized() × moveSpeed × 0.15 × dt   (push.length > 0.1 시에만)
+
+// timer 만료 시 (Reposition 판정용)
+fullQuery   = findNearbyNpcPositions(separationRadius_)
+isOvercrowded(fullQuery) → Reposition
 ```
 
-**공간 분할 그리드** — `Npc`와 `TacticalNpc` 모두 `rebuildSpatialGrid()`에 등록되어
-`findNearbyNpcPositions()`에서 상호 감지된다 (클래스 경계를 넘어 분리력이 작용).
+**상태별 적용 표:**
+
+| 클래스 | 상태 | primaryDir | 방식 |
+|---|---|---|---|
+| Npc | Chase | `chaseDir` | 수직 투영 |
+| Npc | AttackWindup | — | 미적용 (스윙 commit 중 방향 고정) |
+| Npc | AttackRecover | — | 체반경 하드 push (BODY_RADIUS=0.8) |
+| Npc | Return | `homeDir` | 수직 투영 |
+| Npc | Reposition | — | 복합 블렌드 (`toTarget + repositionDir × 0.8 + sep × weight`) |
+| TacticalNpc | Chase | `chaseDir` | 수직 투영 |
+| TacticalNpc | AttackRecover | — | 체반경 하드 push (BODY_RADIUS=0.8) |
+| TacticalNpc | Flank | `slotDir` | 수직 투영 |
+| TacticalNpc | Return | `homeDir` | 수직 투영 |
 
 ---
 
@@ -455,10 +470,10 @@ PlatoonLeader가 Squad N개에 대해 `sectorAngle = (2π / N) × i`, `sectorSpa
 ### 전체 수식 한눈에 보기
 
 ```
-[Npc 이동]        moveDir = normalize(chaseDir + sep × w)
-[TactNpc 이동]    sepPerp = sep − axis × (sep·axis)
-                  moveDir = normalize(axis + sepPerp × w)
-[분산 강도]       strength = 1 − d / separationRadius
+[공통 분산 강도]   strength = 1 − d / separationRadius
+[수직 투영 이동]   sepPerp = sep − axis × (sep·axis)
+                  moveDir = normalize(axis + sepPerp × w)   // Chase, Flank, Return
+[body push]       position += push.normalized() × speed × 0.15 × dt  // AttackRecover (BODY_RADIUS=0.8)
 [Npc 타겟 점수]   score    = (1−d/range)×50 + 20 + 15 − aggro×8
 [PL 타겟 점수]    score    = 1/(1+d)×0.5 + (1−hp/maxHp)×0.5
 [Flank 슬롯]      slot[i]  = target + side×r + dir×(i×spacing)

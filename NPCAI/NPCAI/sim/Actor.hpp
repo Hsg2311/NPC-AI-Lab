@@ -2,6 +2,7 @@
 #include "Vec3.hpp"
 #include <string>
 #include <cstdint>
+#include <vector>
 
 namespace sim {
 
@@ -38,6 +39,8 @@ protected:
     float hp_;
     float maxHp_;
     bool alive_{ true };
+
+    Vec3 calcSeparationForce(float separationRadius, const std::vector<Vec3>& nearby) const;
 
 private:
     static uint32_t nextId_;

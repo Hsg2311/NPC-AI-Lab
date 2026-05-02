@@ -2,6 +2,8 @@
 #include "Logger.hpp"
 #include <sstream>
 #include <iomanip>
+#include <cmath>
+#include <vector>
 
 namespace sim {
 
@@ -20,6 +22,25 @@ void Actor::takeDamage(float dmg) {
         alive_ = false;
         Logger::get().log(std::string(typeName()) + ":" + name_, "DEAD (hp depleted)");
     }
+}
+
+// ─── calcSeparationForce ──────────────────────────────────────────────────────
+
+Vec3 Actor::calcSeparationForce(float separationRadius,
+                                 const std::vector<Vec3>& nearby) const {
+    Vec3 force{ 0.f, 0.f, 0.f };
+    for (const Vec3& op : nearby) {
+        Vec3  away = position_ - op;
+        float d    = away.length();
+        if (d < 1e-4f) {
+            float a = static_cast<float>(id_) * 1.2f;
+            force += Vec3{ std::cosf(a), 0.f, std::sinf(a) };
+            continue;
+        }
+        float strength = 1.f - (d / separationRadius);
+        force += (away / d) * strength;
+    }
+    return force;
 }
 
 std::string Actor::dump() const {

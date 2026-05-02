@@ -158,7 +158,7 @@ void TacticalNpc::updateChase(float dt, Room& room) {
     Vec3 chaseDir = (target->getPosition() - position_).normalized();
     nearbyCache_.clear();
     room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
-    Vec3 sep = calcSeparationForce(nearbyCache_);
+    Vec3 sep = calcSeparationForce(separationRadius_, nearbyCache_);
 
     // 추격 방향과 수직인 성분만 사용 — 역방향 이동 없이 옆으로만 밀어냄
     Vec3 sepPerp = sep - chaseDir * sep.dot(chaseDir);
@@ -212,11 +212,12 @@ void TacticalNpc::updateAttackRecover(float dt, Room& room) {
         return;
     }
 
+    constexpr float BODY_RADIUS = 0.8f;
     nearbyCache_.clear();
-    room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
-    Vec3 sep = calcSeparationForce(nearbyCache_);
-    if (sep.length() > 0.1f)
-        position_ += sep * (separationWeight_ * 0.3f * moveSpeed_ * dt);
+    room.findNearbyNpcPositions(position_, BODY_RADIUS * 2.f, id_, nearbyCache_);
+    Vec3 push = calcSeparationForce(BODY_RADIUS * 2.f, nearbyCache_);
+    if (push.length() > 0.1f)
+        position_ += push.normalized() * (moveSpeed_ * 0.15f * dt);
 
     recoverTimer_ += dt;
     if (recoverTimer_ >= attackRecoverTime_) {
@@ -252,7 +253,7 @@ void TacticalNpc::updateFlank(float dt, Room& room) {
     Vec3 slotDir = (assignedSlot_ - position_).normalized();
     nearbyCache_.clear();
     room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
-    Vec3 sep = calcSeparationForce(nearbyCache_);
+    Vec3 sep = calcSeparationForce(separationRadius_, nearbyCache_);
 
     // 슬롯 이동 방향과 수직인 성분만 사용
     Vec3 sepPerp = sep - slotDir * sep.dot(slotDir);
@@ -285,8 +286,9 @@ void TacticalNpc::updateReturn(float dt, Room& room) {
     Vec3 homeDir = (spawnPos_ - position_).normalized();
     nearbyCache_.clear();
     room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
-    Vec3 sep     = calcSeparationForce(nearbyCache_);
-    Vec3 moveDir = (homeDir + sep * (separationWeight_ * 0.25f)).normalized();
+    Vec3 sep     = calcSeparationForce(separationRadius_, nearbyCache_);
+    Vec3 sepPerp = sep - homeDir * sep.dot(homeDir);
+    Vec3 moveDir = (homeDir + sepPerp * separationWeight_).normalized();
     facing_   = moveDir;
     position_ += moveDir * (moveSpeed_ * 2.f * dt);
 }
@@ -305,24 +307,6 @@ Actor* TacticalNpc::resolveTarget(Room& room) const {
     Actor* a = room.findActorById(targetId_);
     if (!a || !a->isAlive()) return nullptr;
     return a;
-}
-
-// ─── calcSeparationForce ──────────────────────────────────────────────────────
-
-Vec3 TacticalNpc::calcSeparationForce(const std::vector<Vec3>& nearby) const {
-    Vec3 force{ 0.f, 0.f, 0.f };
-    for (const Vec3& op : nearby) {
-        Vec3  away = position_ - op;
-        float d    = away.length();
-        if (d < 1e-4f) {
-            float a = static_cast<float>(id_) * 1.2f;
-            force += Vec3{ std::cosf(a), 0.f, std::sinf(a) };
-            continue;
-        }
-        float strength = 1.f - (d / separationRadius_);
-        force += (away / d) * strength;
-    }
-    return force;
 }
 
 // ─── dump ─────────────────────────────────────────────────────────────────────

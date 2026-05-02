@@ -196,8 +196,9 @@ void Npc::updateChase(float dt, Room& room) {
     Vec3 chaseDir = (target->getPosition() - position_).normalized();
     nearbyCache_.clear();
     room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
-    Vec3 sepForce = calcSeparationForce(nearbyCache_);
-    Vec3 moveDir  = (chaseDir + sepForce * separationWeight_).normalized();
+    Vec3 sep     = calcSeparationForce(separationRadius_, nearbyCache_);
+    Vec3 sepPerp = sep - chaseDir * sep.dot(chaseDir);
+    Vec3 moveDir = (chaseDir + sepPerp * separationWeight_).normalized();
     facing_   = moveDir;
     position_ += moveDir * (moveSpeed_ * dt);
 }
@@ -216,12 +217,6 @@ void Npc::updateAttackWindup(float dt, Room& room) {
         transitionTo(NpcState::Return, "활동 구역 이탈");
         return;
     }
-
-    nearbyCache_.clear();
-    room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
-    Vec3 sep = calcSeparationForce(nearbyCache_);
-    if (sep.length() > 0.1f)
-        facing_ = (facing_ + sep * 0.3f).normalized();
 
     windupTimer_ += dt;
     if (windupTimer_ >= attackWindupTime_) {
@@ -265,14 +260,17 @@ void Npc::updateAttackRecover(float dt, Room& room) {
         return;
     }
 
+    constexpr float BODY_RADIUS = 0.8f;
     nearbyCache_.clear();
-    room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
-    Vec3 sep = calcSeparationForce(nearbyCache_);
-    if (sep.length() > 0.1f)
-        position_ += sep * (separationWeight_ * 0.3f * moveSpeed_ * dt);
+    room.findNearbyNpcPositions(position_, BODY_RADIUS * 2.f, id_, nearbyCache_);
+    Vec3 push = calcSeparationForce(BODY_RADIUS * 2.f, nearbyCache_);
+    if (push.length() > 0.1f)
+        position_ += push.normalized() * (moveSpeed_ * 0.15f * dt);
 
     recoverTimer_ += dt;
     if (recoverTimer_ >= attackRecoverTime_) {
+        nearbyCache_.clear();
+        room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
         if (isOvercrowded(nearbyCache_)) {
             Vec3 toTarget  = (target->getPosition() - position_).normalized();
             repositionDir_ = (id_ % 2 == 0)
@@ -320,8 +318,9 @@ void Npc::updateReturn(float dt, Room& room) {
     Vec3 homeDir = (spawnPos_ - position_).normalized();
     nearbyCache_.clear();
     room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
-    Vec3 sep     = calcSeparationForce(nearbyCache_);
-    Vec3 moveDir = (homeDir + sep * (separationWeight_ * 0.25f)).normalized();
+    Vec3 sep     = calcSeparationForce(separationRadius_, nearbyCache_);
+    Vec3 sepPerp = sep - homeDir * sep.dot(homeDir);
+    Vec3 moveDir = (homeDir + sepPerp * separationWeight_).normalized();
     facing_   = moveDir;
     position_ += moveDir * (moveSpeed_ * returnSpeedMult_ * dt);
 }
@@ -359,7 +358,7 @@ void Npc::updateReposition(float dt, Room& room) {
     }
 
     Vec3 toTarget = (target->getPosition() - position_).normalized();
-    Vec3 sep      = calcSeparationForce(nearbyCache_);
+    Vec3 sep      = calcSeparationForce(separationRadius_, nearbyCache_);
     Vec3 moveDir  = (toTarget + repositionDir_ * 0.8f + sep * separationWeight_).normalized();
     facing_    = moveDir;
     position_ += moveDir * (moveSpeed_ * dt);
@@ -456,24 +455,6 @@ Player* Npc::selectBestVisibleTarget(Room& room) const {
         if (s > bestScore) { bestScore = s; best = p; }
     }
     return best;
-}
-
-// ─── calcSeparationForce ──────────────────────────────────────────────────────
-
-Vec3 Npc::calcSeparationForce(const std::vector<Vec3>& nearby) const {
-    Vec3 force{ 0.f, 0.f, 0.f };
-    for (const Vec3& op : nearby) {
-        Vec3  away = position_ - op;
-        float d    = away.length();
-        if (d < 1e-4f) {
-            float a = static_cast<float>(id_) * 1.2f;
-            force += Vec3{ std::cosf(a), 0.f, std::sinf(a) };
-            continue;
-        }
-        float strength = 1.f - (d / separationRadius_);
-        force += (away / d) * strength;
-    }
-    return force;
 }
 
 // ─── isOutsideActivityZone ───────────────────────────────────────────────────

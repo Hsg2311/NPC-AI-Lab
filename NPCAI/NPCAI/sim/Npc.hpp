@@ -84,7 +84,6 @@ private:
     Actor*  resolveTarget           (Room& room) const;
     Player* selectBestVisibleTarget (Room& room) const;
     float   evaluateTargetScore     (const Player* p, Room& room) const;
-    Vec3    calcSeparationForce     (const std::vector<Vec3>& nearby) const;
     bool    isOutsideActivityZone   () const;
     bool    isOvercrowded           (const std::vector<Vec3>& nearby) const;
 

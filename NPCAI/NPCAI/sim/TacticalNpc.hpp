@@ -93,7 +93,6 @@ protected:
     // ── 헬퍼 ──────────────────────────────────────────────────────────────────
     void   consumePendingCommand();
     Actor* resolveTarget    (Room& room) const;
-    Vec3   calcSeparationForce(const std::vector<Vec3>& nearby) const;
 
     // ── 데이터 ────────────────────────────────────────────────────────────────
     TacticalNpcState state_{ TacticalNpcState::Idle };
