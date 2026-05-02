@@ -22,6 +22,15 @@
     <Filter Include="sim\room">
       <UniqueIdentifier>{1ab22d7c-12e9-4cf5-a6c5-0d5a939609cf}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sim\Actor\npc">
+      <UniqueIdentifier>{17aa8619-4bbb-46b2-b9ba-205fa02bf695}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sim\Actor\player">
+      <UniqueIdentifier>{f7c024c6-2555-4175-af80-af39ae67e5d9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sim\Actor\tactical npc">
+      <UniqueIdentifier>{b15cae4a-50a6-4dfd-a520-96da88caefeb}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="viz\Application.hpp">
@@ -34,12 +43,6 @@
       <Filter>default</Filter>
     </ClInclude>
     <ClInclude Include="sim\Actor.hpp">
-      <Filter>sim\Actor</Filter>
-    </ClInclude>
-    <ClInclude Include="sim\Npc.hpp">
-      <Filter>sim\Actor</Filter>
-    </ClInclude>
-    <ClInclude Include="sim\Player.hpp">
       <Filter>sim\Actor</Filter>
     </ClInclude>
     <ClInclude Include="sim\DebugSnapshot.hpp">
@@ -66,8 +69,26 @@
     <ClInclude Include="sim\Room.hpp">
       <Filter>sim\room</Filter>
     </ClInclude>
+    <ClInclude Include="sim\Npc.hpp">
+      <Filter>sim\Actor\npc</Filter>
+    </ClInclude>
     <ClInclude Include="sim\NpcGroup.hpp">
-      <Filter>sim\Actor</Filter>
+      <Filter>sim\Actor\npc</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\Player.hpp">
+      <Filter>sim\Actor\player</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\ScenarioTactical.hpp">
+      <Filter>sim\scenario</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\PlatoonLeader.hpp">
+      <Filter>sim\Actor\tactical npc</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\TacticalNpc.hpp">
+      <Filter>sim\Actor\tactical npc</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\TacticalSquad.hpp">
+      <Filter>sim\Actor\tactical npc</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -81,12 +102,6 @@
       <Filter>default</Filter>
     </ClCompile>
     <ClCompile Include="sim\Actor.cpp">
-      <Filter>sim\Actor</Filter>
-    </ClCompile>
-    <ClCompile Include="sim\Npc.cpp">
-      <Filter>sim\Actor</Filter>
-    </ClCompile>
-    <ClCompile Include="sim\Player.cpp">
       <Filter>sim\Actor</Filter>
     </ClCompile>
     <ClCompile Include="sim\DummyPlayerController.cpp">
@@ -104,8 +119,26 @@
     <ClCompile Include="sim\Room.cpp">
       <Filter>sim\room</Filter>
     </ClCompile>
+    <ClCompile Include="sim\Npc.cpp">
+      <Filter>sim\Actor\npc</Filter>
+    </ClCompile>
     <ClCompile Include="sim\NpcGroup.cpp">
-      <Filter>sim\Actor</Filter>
+      <Filter>sim\Actor\npc</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\Player.cpp">
+      <Filter>sim\Actor\player</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\ScenarioTactical.cpp">
+      <Filter>sim\scenario</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\PlatoonLeader.cpp">
+      <Filter>sim\Actor\tactical npc</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\TacticalNpc.cpp">
+      <Filter>sim\Actor\tactical npc</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\TacticalSquad.cpp">
+      <Filter>sim\Actor\tactical npc</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

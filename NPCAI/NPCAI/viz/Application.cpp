@@ -51,6 +51,13 @@ bool Application::init(HINSTANCE hInst, int nCmdShow) {
     scenario_->setup(room_);
     controlledPlayer_ = scenario_->controlledPlayer();
 
+    // 카메라를 플레이어 초기 위치로 맞춤
+    if (controlledPlayer_) {
+        sim::Vec3 pos = controlledPlayer_->getPosition();
+        renderer_.camera().worldCenterX = pos.x;
+        renderer_.camera().worldCenterZ = pos.z;
+    }
+
     // 첫 틱 전에 창이 비어 있지 않도록 초기 스냅샷 빌드
     snapshot_        = room_.buildSnapshot();
     snapshot_.paused = paused_;
@@ -94,6 +101,14 @@ void Application::stepOneTick(HWND hwnd) {
     room_.tick(DT);
     snapshot_        = room_.buildSnapshot();
     snapshot_.paused = paused_;
+
+    // 카메라를 플레이어에게 고정
+    if (controlledPlayer_ && controlledPlayer_->isAlive()) {
+        sim::Vec3 pos = controlledPlayer_->getPosition();
+        renderer_.camera().worldCenterX = pos.x;
+        renderer_.camera().worldCenterZ = pos.z;
+    }
+
     InvalidateRect(hwnd, nullptr, FALSE);
 }
 
