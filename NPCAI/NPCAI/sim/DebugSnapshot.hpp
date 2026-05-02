@@ -20,6 +20,10 @@ struct DebugPlayerEntry {
     float       maxHp{ 100.f };
     bool        alive{ true };
     int         aggroCount{ 0 };  // 이 플레이어를 타겟으로 Chase/Windup/Recover/Reposition 상태인 NPC 수
+    // ── 공격 상태 ────────────────────────────────────────────────────────────
+    int   attackState{ 0 };      // 0=없음 1=준비(Windup) 2=회복(Recover)
+    float attackProgress{ 0.f }; // 0~1, 현재 단계 진행률
+    float attackRange{ 2.5f };
 };
 
 // 상태: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Return 5=Reposition 6=Dead 7=Investigate

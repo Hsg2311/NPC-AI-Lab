@@ -44,6 +44,11 @@ private:
     void drawFilledCircle(HDC hdc, POINT center, int radiusPx, COLORREF fill, COLORREF outline);
     void drawArrow(HDC hdc, POINT from, POINT to, COLORREF col);
     void drawHomeMarker(HDC hdc, POINT center, COLORREF col);
+    // barY: 바 상단 y 좌표 (픽셀), barW: 바 너비
+    void drawHpBar(HDC hdc, POINT center, int barY, float hp, float maxHp, int barW = 28);
+    // 진행 바 (Windup/Recover 공용): fillCol은 채우기 색상
+    void drawProgressBar(HDC hdc, POINT center, int barY, float progress,
+                         COLORREF fillCol, int barW = 20);
 
     static COLORREF npcStateColor(int state);
     static COLORREF tacticalStateColor(int state);

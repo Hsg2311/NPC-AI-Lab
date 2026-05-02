@@ -167,6 +167,29 @@ void Room::findNearbyNpcPositions(const Vec3& from, float radius,
     }
 }
 
+// ─── applyDamageToActorsInRange ──────────────────────────────────────────────
+
+int Room::applyDamageToActorsInRange(const Vec3& center, float radius, float damage) {
+    int   hits     = 0;
+    float radiusSq = radius * radius;
+
+    for (auto& [id, npc] : npcs_) {
+        if (!npc->isAlive()) continue;
+        if (Vec3::distanceSq(center, npc->getPosition()) <= radiusSq) {
+            npc->takeDamage(damage);
+            ++hits;
+        }
+    }
+    for (auto& [id, tnpc] : tacticalNpcs_) {
+        if (!tnpc->isAlive()) continue;
+        if (Vec3::distanceSq(center, tnpc->getPosition()) <= radiusSq) {
+            tnpc->takeDamage(damage);
+            ++hits;
+        }
+    }
+    return hits;
+}
+
 // ─── countNpcsTargeting ──────────────────────────────────────────────────────
 // B: aggroCount_ 캐시 조회 O(1) (rebuildAggroCount()에서 틱당 1회 재구성)
 
@@ -277,10 +300,13 @@ DebugSnapshot Room::buildSnapshot() const {
         e.dirX       = facing.x;
         e.dirZ       = facing.z;
         e.name       = p->getName();
-        e.hp         = p->getHp();
-        e.maxHp      = p->getMaxHp();
-        e.alive      = p->isAlive();
-        e.aggroCount = countNpcsTargeting(p->getId());
+        e.hp             = p->getHp();
+        e.maxHp          = p->getMaxHp();
+        e.alive          = p->isAlive();
+        e.aggroCount     = countNpcsTargeting(p->getId());
+        e.attackState    = p->getAttackState();
+        e.attackProgress = p->getAttackProgress();
+        e.attackRange    = p->getAttackRange();
         snap.players.push_back(e);
     }
 

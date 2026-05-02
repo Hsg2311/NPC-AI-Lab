@@ -103,6 +103,53 @@ void Renderer::drawHomeMarker(HDC hdc, POINT c, COLORREF col) {
     DeleteObject(pen);
 }
 
+void Renderer::drawHpBar(HDC hdc, POINT center, int barY, float hp, float maxHp, int barW) {
+    const int BAR_H = 4;
+    int bx = center.x - barW / 2;
+
+    {
+        RECT   bgR = { bx, barY, bx + barW, barY + BAR_H };
+        HBRUSH bg  = CreateSolidBrush(RGB(40, 40, 40));
+        FillRect(hdc, &bgR, bg);
+        DeleteObject(bg);
+    }
+
+    float ratio = (maxHp > 0.f) ? (hp / maxHp) : 0.f;
+    if (ratio < 0.f) ratio = 0.f;
+    if (ratio > 1.f) ratio = 1.f;
+    int fillW = static_cast<int>(barW * ratio);
+    if (fillW > 0) {
+        COLORREF fc = (ratio > 0.5f) ? RGB(50, 200, 80)
+                    : (ratio > 0.25f) ? RGB(220, 180, 30)
+                    : RGB(220, 50, 50);
+        RECT   fR = { bx, barY, bx + fillW, barY + BAR_H };
+        HBRUSH fb = CreateSolidBrush(fc);
+        FillRect(hdc, &fR, fb);
+        DeleteObject(fb);
+    }
+}
+
+void Renderer::drawProgressBar(HDC hdc, POINT center, int barY, float progress,
+                                COLORREF fillCol, int barW) {
+    const int BAR_H = 4;
+    int bx = center.x - barW / 2;
+
+    {
+        RECT   bgR = { bx, barY, bx + barW, barY + BAR_H };
+        HBRUSH bg  = CreateSolidBrush(RGB(40, 40, 40));
+        FillRect(hdc, &bgR, bg);
+        DeleteObject(bg);
+    }
+
+    int fillW = static_cast<int>(barW * progress);
+    if (fillW > 0) {
+        RECT   fR = { bx, barY, bx + fillW, barY + BAR_H };
+        HBRUSH fb = CreateSolidBrush(fillCol);
+        FillRect(hdc, &fR, fb);
+        DeleteObject(fb);
+    }
+}
+
 // ─── 그룹 색상 테이블 ────────────────────────────────────────────────────────
 
 static COLORREF groupColor(int groupId) {
@@ -305,28 +352,14 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
         drawFilledCircle(hdc, center, 9, bodyCol, outlineCol);
     }
 
-    // ── Windup / Recover 진행 바 (몸체 위 20x4 px) ──────────────────────────
+    // ── HP 바 (항상 표시) ──────────────────────────────────────────────────
+    drawHpBar(hdc, center, center.y - 26, npc.hp, npc.maxHp);
+
+    // ── Windup / Recover 진행 바 ─────────────────────────────────────────────
     if (npc.alive && (npc.state == 2 || npc.state == 3)) {
         float    progress = (npc.state == 2) ? npc.windupProgress : npc.recoverProgress;
-        const int BAR_W   = 20;
-        const int BAR_H   = 4;
-        int bx = center.x - BAR_W / 2;
-        int by = center.y - 18;
-
-        {
-            RECT     bgR = { bx, by, bx + BAR_W, by + BAR_H };
-            HBRUSH   bg  = CreateSolidBrush(RGB(40, 40, 40));
-            FillRect(hdc, &bgR, bg);
-            DeleteObject(bg);
-        }
-        int fillW = static_cast<int>(BAR_W * progress);
-        if (fillW > 0) {
-            COLORREF fc  = (npc.state == 2) ? RGB(255, 160, 0) : RGB(100, 55, 0);
-            RECT     fR  = { bx, by, bx + fillW, by + BAR_H };
-            HBRUSH   fb  = CreateSolidBrush(fc);
-            FillRect(hdc, &fR, fb);
-            DeleteObject(fb);
-        }
+        COLORREF fc       = (npc.state == 2) ? RGB(255, 160, 0) : RGB(100, 55, 0);
+        drawProgressBar(hdc, center, center.y - 18, progress, fc);
     }
 
     // ── 방향 화살표 ─────────────────────────────────────────────────────────
@@ -363,6 +396,16 @@ void Renderer::drawPlayer(HDC hdc, int w, int h,
 
     POINT center = worldToScreen(p.x, p.z, w, h);
 
+    // ── 공격 범위 원 (항상 표시, 얇은 하늘색) ───────────────────────────────
+    {
+        int  atkPx  = static_cast<int>(p.attackRange * camera_.scale);
+        HPEN pen    = CreatePen(PS_SOLID, 1, RGB(60, 140, 220));
+        HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, pen));
+        drawCircleOutline(hdc, center, atkPx);
+        SelectObject(hdc, oldPen);
+        DeleteObject(pen);
+    }
+
     drawFilledCircle(hdc, center, 10,
         RGB( 40,  90, 200),
         RGB(120, 180, 255));
@@ -375,9 +418,18 @@ void Renderer::drawPlayer(HDC hdc, int w, int h,
         drawArrow(hdc, center, tip, RGB(180, 220, 255));
     }
 
+    // ── HP 바 ────────────────────────────────────────────────────────────────
+    drawHpBar(hdc, center, center.y - 20, p.hp, p.maxHp);
+
+    // ── 공격 진행 바 (Windup=하늘색, Recover=남색) ───────────────────────────
+    if (p.attackState != 0) {
+        COLORREF fc = (p.attackState == 1) ? RGB(100, 200, 255) : RGB(40, 80, 180);
+        drawProgressBar(hdc, center, center.y - 14, p.attackProgress, fc);
+    }
+
     SetTextColor(hdc, RGB(140, 200, 255));
     SetBkMode   (hdc, TRANSPARENT);
-    TextOutA    (hdc, center.x - 10, center.y - 24,
+    TextOutA    (hdc, center.x - 10, center.y - 30,
                  p.name.c_str(), static_cast<int>(p.name.size()));
 
     // ── Aggro count (빨간 텍스트로 플레이어 옆에 표시) ──────────────────────
@@ -419,13 +471,18 @@ void Renderer::drawHUD(HDC hdc, int w, int h,
         TextOutA(hdc, 10, 30, msg, static_cast<int>(std::strlen(msg)));
     }
 
-    // 플레이어 어그로 요약
+    // 플레이어 HP + 어그로 요약
     int aggroY = 55;
     for (const auto& p : snap.players) {
-        if (!p.alive) continue;
-        char buf[48];
-        std::snprintf(buf, sizeof(buf), "%s aggro: %d", p.name.c_str(), p.aggroCount);
-        SetTextColor(hdc, RGB(140, 200, 255));
+        char buf[64];
+        if (p.alive) {
+            std::snprintf(buf, sizeof(buf), "%s  HP %.0f/%.0f  aggro:%d",
+                          p.name.c_str(), p.hp, p.maxHp, p.aggroCount);
+            SetTextColor(hdc, RGB(140, 200, 255));
+        } else {
+            std::snprintf(buf, sizeof(buf), "%s  [DEAD]", p.name.c_str());
+            SetTextColor(hdc, RGB(80, 80, 120));
+        }
         TextOutA(hdc, 10, aggroY, buf, static_cast<int>(std::strlen(buf)));
         aggroY += 16;
     }
@@ -542,27 +599,14 @@ void Renderer::drawTacticalNpc(HDC hdc, int w, int h,
         }
     }
 
-    // ── Windup / Recover 진행 바 ────────────────────────────────────────────
+    // ── HP 바 (항상 표시) ──────────────────────────────────────────────────
+    drawHpBar(hdc, center, center.y - 30, tnpc.hp, tnpc.maxHp);
+
+    // ── Windup / Recover 진행 바 ─────────────────────────────────────────────
     if (tnpc.alive && (tnpc.state == 2 || tnpc.state == 3)) {
         float    progress = (tnpc.state == 2) ? tnpc.windupProgress : tnpc.recoverProgress;
-        const int BAR_W   = 20;
-        const int BAR_H   = 4;
-        int bx = center.x - BAR_W / 2;
-        int by = center.y - 22;
-
-        RECT     bgR = { bx, by, bx + BAR_W, by + BAR_H };
-        HBRUSH   bg  = CreateSolidBrush(RGB(40, 40, 40));
-        FillRect(hdc, &bgR, bg);
-        DeleteObject(bg);
-
-        int fillW = static_cast<int>(BAR_W * progress);
-        if (fillW > 0) {
-            COLORREF fc  = (tnpc.state == 2) ? RGB(255, 160, 0) : RGB(100, 55, 0);
-            RECT     fR  = { bx, by, bx + fillW, by + BAR_H };
-            HBRUSH   fb  = CreateSolidBrush(fc);
-            FillRect(hdc, &fR, fb);
-            DeleteObject(fb);
-        }
+        COLORREF fc       = (tnpc.state == 2) ? RGB(255, 160, 0) : RGB(100, 55, 0);
+        drawProgressBar(hdc, center, center.y - 22, progress, fc);
     }
 
     // ── 방향 화살표 ─────────────────────────────────────────────────────────

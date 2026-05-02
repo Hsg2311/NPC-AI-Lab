@@ -38,7 +38,7 @@ bool Application::init(HINSTANCE hInst, int nCmdShow) {
     hwnd_ = CreateWindowExA(
         0,
         "NPCAISimViz",
-        "NPC AI Simulator  |  Arrows = Move   Space = Pause/Resume   S = Step   Esc = Quit",
+        "NPC AI Simulator  |  Arrows = Move   Z = Attack   Space = Pause/Resume   S = Step   Esc = Quit",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
         rc.right - rc.left, rc.bottom - rc.top,
@@ -49,7 +49,7 @@ bool Application::init(HINSTANCE hInst, int nCmdShow) {
         return false;
     }
 
-    scenario_ = std::make_unique<sim::ScenarioSharedSight>();
+    scenario_ = std::make_unique<sim::ScenarioTactical>();
     scenario_->setup(room_);
     controlledPlayer_ = scenario_->controlledPlayer();
 
@@ -98,6 +98,9 @@ void Application::stepOneTick(HWND hwnd) {
             controlledPlayer_->setMoveTarget(pos + dir.normalized() * 100.f);
         else
             controlledPlayer_->setMoveTarget(pos);
+
+        if (keysHeld_[4])
+            controlledPlayer_->requestAttack();   // Z키 공격
     }
 
     room_.tick(DT);
@@ -193,6 +196,7 @@ LRESULT Application::handleMessage(HWND hwnd, UINT msg,
         else if (wParam == VK_DOWN)  { keysHeld_[1] = true; }
         else if (wParam == VK_LEFT)  { keysHeld_[2] = true; }
         else if (wParam == VK_RIGHT) { keysHeld_[3] = true; }
+        else if (wParam == 'Z')      { keysHeld_[4] = true; }
         return 0;
 
     case WM_KEYUP:
@@ -200,6 +204,7 @@ LRESULT Application::handleMessage(HWND hwnd, UINT msg,
         else if (wParam == VK_DOWN)  { keysHeld_[1] = false; }
         else if (wParam == VK_LEFT)  { keysHeld_[2] = false; }
         else if (wParam == VK_RIGHT) { keysHeld_[3] = false; }
+        else if (wParam == 'Z')      { keysHeld_[4] = false; }
         return 0;
 
     // ── 배경 지우기 방지 (직접 채움) ─────────────────────────────────────

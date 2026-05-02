@@ -296,6 +296,7 @@ void TacticalNpc::updateReturn(float dt, Room& room) {
 // ─── Dead ─────────────────────────────────────────────────────────────────────
 
 void TacticalNpc::updateDead() {
+    targetId_ = 0;
     if (state_ != TacticalNpcState::Dead)
         transitionTo(TacticalNpcState::Dead, "hp 0");
 }

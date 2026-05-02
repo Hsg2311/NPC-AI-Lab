@@ -52,8 +52,10 @@ public:
     // ── 소속 멤버 전체에 Confused 명령 발행 (PlatoonLeader 사망 시) ──────────
     void pushConfusedToMembers(Room& room);
 
-private:
+    // PlatoonLeader::evaluateTactics()에서 isEmpty() 평가 전 호출
     void removeDeadMembers(Room& room);
+
+private:
     void pushCommandsToMembers(Room& room);
 
     // ── 슬롯 계산 ─────────────────────────────────────────────────────────────

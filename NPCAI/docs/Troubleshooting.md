@@ -1798,3 +1798,120 @@ if (!mem) {
 ```
 
 ---
+
+# 플레이어 공격 시스템 도입 관련 버그 수정 (2026-05-02)
+
+> 플레이어 Z키 공격(`applyDamageToActorsInRange`) 구현 이후 NPC Dead 상태가
+> `Player::update()` (tick 1단계) 시점에 활성화되는 경로가 추가됐다.
+> 기존 코드는 NPC가 `NPC::update()` 내부에서만 사망한다는 전제하에 작성되어 있어
+> 아래 두 버그가 잠재해 있었다.
+
+---
+
+## [18] `updateDead()` — `targetId_` 클리어 누락
+
+**파일:** `sim/Npc.cpp:416`, `sim/TacticalNpc.cpp:298`
+
+**증상:**
+
+플레이어 공격으로 NPC가 사망하면 같은 틱 내 `NPC::update()` → `updateDead()`가
+Dead 상태로 전환하지만, `targetId_`는 이전 플레이어 ID를 계속 가리켰다.
+
+**원인:**
+
+```cpp
+// 수정 전 — Npc.cpp:416, TacticalNpc.cpp:298
+void Npc::updateDead() {
+    if (state_ != NpcState::Dead)
+        transitionTo(NpcState::Dead, "hp reached 0");
+    // targetId_ 클리어 없음 → 마지막 타겟 ID 잔류
+}
+```
+
+`takeDamage()`로 `alive_=false`가 되는 순간 `targetId_`는 클리어되지 않는다.
+`updateDead()`에서 상태 전환만 처리하고 데이터 정리를 빠뜨렸다.
+
+**방어선 (즉각 오동작 없는 이유):**
+
+`rebuildAggroCount()` (`Room.cpp:203`)가 `!npc->isAlive()` 체크로 dead NPC를
+어그로 카운트에서 제외하므로 `aggroCount_` 오염은 발생하지 않는다.
+
+**수정:**
+
+```cpp
+// 수정 후 — Npc.cpp:416, TacticalNpc.cpp:298
+void Npc::updateDead() {
+    targetId_ = 0;   // ← 추가
+    if (state_ != NpcState::Dead)
+        transitionTo(NpcState::Dead, "hp reached 0");
+}
+```
+
+두 클래스(`Npc`, `TacticalNpc`) 모두 동일하게 적용.
+
+---
+
+## [19] `TacticalSquad::isEmpty()` — dead 멤버 포함한 1틱 오평가
+
+**파일:** `sim/TacticalSquad.hpp:52`, `sim/PlatoonLeader.cpp:54`
+
+**증상:**
+
+플레이어 공격(tick 1)으로 TacticalSquad 전체 멤버가 사망했어도,
+PlatoonLeader가 해당 squad를 "살아있는 squad"로 판단해 Engage 명령을 발행했다.
+
+**원인:**
+
+Room::tick() 업데이트 순서의 불일치:
+
+```
+tick 1  : Player::update() → applyDamageToActorsInRange() → Squad 전체 alive_=false
+tick 7  : PlatoonLeader::update() → evaluateTactics()
+              → sq->isEmpty()           ← memberIds_ 아직 미정리 → false 반환
+              → 빈 squad에 Engage 명령 발행
+tick 8  : TacticalSquad::update() → removeDeadMembers()
+              → memberIds_ 정리 후 pushCommandsToMembers()
+              → memberIds_.empty() → 명령 무시
+```
+
+`isEmpty()`는 `memberIds_.empty()`를 반환하는데, `removeDeadMembers()`가
+`TacticalSquad::update()` (tick 8)에서 실행되므로
+`PlatoonLeader::evaluateTactics()` (tick 7) 시점에는 dead 멤버가 남아 있다.
+
+**방어선 (crash가 없는 이유):**
+
+tick 8의 `removeDeadMembers()` 이후 `pushCommandsToMembers()`가 `memberIds_.empty()`로
+조기 탈출하므로 명령이 실제로 TacticalNpc에게 전달되지는 않는다.
+
+**수정:**
+
+`removeDeadMembers()`를 public으로 노출해 `evaluateTactics()` 첫 줄에서 호출한다.
+
+```cpp
+// TacticalSquad.hpp:52 — public 섹션으로 이동
+void removeDeadMembers(Room& room);
+
+// PlatoonLeader.cpp:54 — evaluateTactics() 첫 줄에 추가
+for (auto* sq : squads_)
+    sq->removeDeadMembers(room);
+// 이후 isEmpty() 평가 → dead 멤버 포함 오판 없음
+```
+
+tick 순서는 유지하고 최소 침습적으로 해결.
+
+---
+
+## 오탐 분석 — 실제 버그가 아닌 이유
+
+플레이어 공격으로 NPC가 tick 1에서 사망하는 경로가 생겼을 때,
+버그처럼 보이지만 기존 방어 코드로 안전하게 처리되는 항목들.
+
+| 항목 | 방어 코드 위치 | 방어 방식 |
+|---|---|---|
+| `aggroCount_` 캐시에 dead NPC 포함 | `Room.cpp:206` (`rebuildAggroCount`) | `!npc->isAlive()` 체크 → dead NPC 제외 |
+| `spatialGrid_` 캐시에 dead NPC 포함 | `Room.cpp:221`, `228` (`rebuildSpatialGrid`) | `!npc->isAlive()` 체크 → dead NPC 제외 |
+| Dead 타겟을 재공격 | `Npc.cpp:424-428`, `TacticalNpc.cpp:306-310` (`resolveTarget`) | `!a->isAlive()` → nullptr 반환 → Idle 전이 |
+| AttackWindup 완료 틱에 dead 타겟 피해 적용 | `Npc.cpp:209`, `TacticalNpc.cpp:173` (windup 완료 후 `resolveTarget` 재호출) | dead면 nullptr → Idle 전이, 피해 미적용 |
+| PlatoonLeader가 dead 플레이어를 primary로 선택 | `PlatoonLeader.cpp:101-109` (`selectPrimaryTarget`) | `getLivingPlayers()` 사용 → 생존 플레이어만 대상 |
+| Dead NPC에게도 `update()` 호출 | `Npc.cpp:68-72`, `TacticalNpc.cpp:113-117` | `!alive_` 조기 탈출 → `updateDead()` 후 즉시 return |
+| TacticalNpc에게 명령 발행 후 해당 틱 내 사망 | `TacticalNpc.cpp:113-117` | `!alive_` 체크가 `consumePendingCommand()` 이전에 위치 → 명령 소비 실행 안 됨 |

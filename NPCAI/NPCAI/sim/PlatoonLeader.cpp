@@ -51,6 +51,10 @@ void PlatoonLeader::update(float dt, Room& room) {
 void PlatoonLeader::evaluateTactics(Room& room) {
     Player* primary = selectPrimaryTarget(room);
 
+    // dead 멤버 먼저 정리 — isEmpty()가 올바른 값을 반환하도록
+    for (auto* sq : squads_)
+        sq->removeDeadMembers(room);
+
     // 살아있는 Squad 목록 수집
     std::vector<TacticalSquad*> liveSquads;
     for (auto* sq : squads_) {

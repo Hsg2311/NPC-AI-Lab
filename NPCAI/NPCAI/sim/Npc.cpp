@@ -414,6 +414,7 @@ void Npc::updateInvestigate(float dt, Room& room) {
 // ─── Dead ─────────────────────────────────────────────────────────────────────
 
 void Npc::updateDead() {
+    targetId_ = 0;
     if (state_ != NpcState::Dead)
         transitionTo(NpcState::Dead, "hp reached 0");
 }

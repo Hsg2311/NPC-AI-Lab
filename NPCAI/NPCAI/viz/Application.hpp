@@ -51,8 +51,8 @@ private:
 
     std::unique_ptr<sim::Scenario> scenario_;
 
-    // keysHeld_: 0=위 1=아래 2=왼쪽 3=오른쪽
-    bool         keysHeld_[4]{};
+    // keysHeld_: 0=위 1=아래 2=왼쪽 3=오른쪽 4=Z(공격)
+    bool         keysHeld_[5]{};
     sim::Player* controlledPlayer_{ nullptr };   // 비소유 포인터, 시나리오에서 설정
 
     static constexpr int TIMER_ID{ 1 };

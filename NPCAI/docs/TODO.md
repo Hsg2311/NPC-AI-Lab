@@ -1,6 +1,6 @@
 # NPCAI Project — TODO
 
-> 마지막 갱신: 2026-05-02 (separation force 리팩토링 — Actor 통합, 수직 투영 통일, AttackRecover 체반경 하드 push)
+> 마지막 갱신: 2026-05-02 (플레이어 공격 시스템 + HP Bar 시각화 + NPC Dead 활성화 + 버그 수정 2건)
 
 ---
 
@@ -188,11 +188,11 @@ NPC 개별 행동 AI를 FSM에서 Behavior Tree(BT)로 전환하는 방안을 �
 
 - [ ] **Respawn** — `updateDead()`에 respawnTimer 추가, Dead → Idle 전이
 - [ ] **HP 회복** — Return 상태에서 spawnPos 복귀 중 hp 점진 회복
-- [ ] **공격 받기** — 현재 NPC는 데미지를 받지 않음; Player 공격 이벤트 인터페이스 추가
+- [o] **공격 받기** — `Room::applyDamageToActorsInRange()` + Player Z키 구현 완료 (2026-05-02)
 
 ### [v3] 시각화 추가 개선
 
-- [ ] **HP 바** — 각 actor 아래 체력 게이지 표시
+- [o] **HP 바** — Player / Npc / TacticalNpc 전체 HP 게이지 구현 완료 (2026-05-02)
 - [ ] **카메라 pan/zoom** — 마우스 드래그(pan), 휠(zoom)으로 Camera 조정
 - [ ] **시뮬레이션 속도 조절** — `+` / `-` 키로 tick rate 배율 변경 (×0.5 / ×1 / ×2 / ×4)
 
@@ -893,3 +893,62 @@ Squad들에게 포위/협공 전술 명령을 내리는 계층형 전술 AI를 �
 
 - [o] ClInclude: `TacticalNpc.hpp`, `TacticalSquad.hpp`, `PlatoonLeader.hpp`, `ScenarioTactical.hpp` 추가
 - [o] ClCompile: `TacticalNpc.cpp`, `TacticalSquad.cpp`, `PlatoonLeader.cpp`, `ScenarioTactical.cpp` 추가
+
+---
+
+## 갱신: 2026-05-02 — 플레이어 공격 시스템 + HP Bar 시각화 + NPC Dead 활성화
+
+### 배경
+
+플레이어가 직접 공격해 NPC를 처치할 수 있는 인터랙티브 전투 시스템을 구현했다.
+공격 입력(Z키), 선딜/후딜 단계, 범위 피해 적용을 포함하며,
+전체 Actor에 HP Bar 시각화를 추가해 전투 상황을 직관적으로 파악할 수 있게 했다.
+플레이어 공격으로 인한 NPC Dead 상태 활성화 과정에서 발견된 버그 2건도 함께 수정했다.
+
+### 수정: `sim/Player.hpp/.cpp`
+
+- [o] `PlayerAttackConfig` 구조체 — `damage(25) / range(5.5) / windupTime(0.2s) / recoverTime(0.3s)`
+- [o] `AttackState` 열거형 — `None / Windup / Recover`
+- [o] `requestAttack()` — 외부(Application)에서 공격 요청; `attackState_ == None`일 때만 진입
+- [o] `update()` — **공격 선딜/후딜 중 이동 차단** (`attackState_ != None`이면 이동 블록 전체 스킵)
+- [o] `updateAttack()` — Windup 완료 시 `applyDamageToActorsInRange()` 호출, Recover 완료 시 `None` 복귀
+- [o] `getAttackState()`, `getAttackProgress()`, `getAttackRange()` — 렌더러용 접근자
+
+### 수정: `sim/Room.hpp/.cpp`
+
+- [o] `applyDamageToActorsInRange(center, radius, damage)` — `npcs_` + `tacticalNpcs_` 순회,
+  alive NPC에 데미지 적용 후 피격 수 반환
+
+### 수정: `sim/DebugSnapshot.hpp`
+
+- [o] `DebugPlayerEntry` 확장 — `attackState(int)`, `attackProgress(float)`, `attackRange(float)` 3필드 추가
+
+### 수정: `viz/Application.hpp/.cpp`
+
+- [o] `keysHeld_[5]` — 인덱스 4 = Z(공격) 키 추가
+- [o] `WM_KEYDOWN / WM_KEYUP` — Z 키 처리 추가
+- [o] `stepOneTick()` — `keysHeld_[4]`가 true면 `controlledPlayer_->requestAttack()` 호출
+- [o] 창 타이틀바에 `Z = Attack` 안내 추가
+
+### 수정: `viz/Renderer.hpp/.cpp`
+
+- [o] `drawHpBar(hdc, center, barY, hp, maxHp)` — HP% 기반 색상(>50% 초록 / 25~50% 노랑 / <25% 빨강) 게이지
+- [o] `drawProgressBar(hdc, center, barY, progress, fillCol)` — 일반 진행 바 (windup/recover 공용)
+- [o] `drawNpc()` — HP 바(center.y − 26) 추가; Windup/Recover 게이지를 `drawProgressBar()`로 리팩토링
+- [o] `drawTacticalNpc()` — HP 바(center.y − 30), Windup/Recover 게이지(center.y − 22) 추가
+- [o] `drawPlayer()`:
+  - 공격 사거리 원 항상 표시 (얇은 파란 원)
+  - HP 바(center.y − 20)
+  - 공격 진행 바(center.y − 14): Windup 주황 / Recover 갈색
+  - 이름 레이블 위치 조정(center.y − 30)
+- [o] `drawHUD()` — 플레이어 HP `%.0f/%.0f` 표시 + `[DEAD]` 태그 추가
+
+### 버그 수정
+
+- [o] **`Npc::updateDead()` targetId_ 잔류** (`Npc.cpp:416`) — Dead 전환 시 `targetId_ = 0` 클리어.
+  플레이어 공격으로 사망한 NPC가 이전 플레이어 ID를 계속 가리키는 데이터 불일치 수정.
+- [o] **`TacticalNpc::updateDead()` 동일 수정** (`TacticalNpc.cpp:298`)
+- [o] **`TacticalSquad::isEmpty()` 타이밍 오류** — `removeDeadMembers()`를 public으로 변경하고
+  `PlatoonLeader::evaluateTactics()` 첫 줄에서 호출. 플레이어 공격으로 Squad 전체가 사망해도
+  PlatoonLeader가 빈 squad에 Engage 명령을 발행하는 1틱 오평가 방지.
+  (`TacticalSquad.hpp:52`, `PlatoonLeader.cpp:54`)
