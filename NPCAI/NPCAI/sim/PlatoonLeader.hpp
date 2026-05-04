@@ -27,16 +27,35 @@ public:
 
 private:
     void evaluateTactics(Room& room);
-    // 점수 기반 primary target 선택 (거리 + HP 가중치)
     Player* selectPrimaryTarget(Room& room) const;
     float   evaluatePlayerScore(const Player* p) const;
+    int     clusterPlayers     (const Room& room) const;
+    Vec3    calcPlayerCentroid (const Room& room) const;
+
+    enum class TacticalPhase { Encircle, Vigilance, DivideAndConquer };
+
+    bool checkTacticsConditions() const;
 
     std::vector<TacticalSquad*> squads_;
-    float                       tacticTimer_{ 0.f };
-    bool                        deathReported_{ false };  // 사망 명령 1회만 발행
+    float                       tacticTimer_     { 0.f };
+    float                       vigilanceElapsed_{ 0.f };
+    TacticalPhase               tacticalPhase_   { TacticalPhase::Encircle };
+    bool                        deathReported_   { false };
 
-    static constexpr float TACTIC_INTERVAL   = 1.f;
-    static constexpr float APPROACH_RADIUS   = 4.5f;  // 슬롯 배치 반경
+    // 전술 발동 조건
+    bool             tacticsUnlocked_    { false };
+    bool             initialSizesSet_    { false };
+    std::vector<int> initialSquadSizes_  {};
+    Vec3             lastEncircleCentroid_{};
+
+    static constexpr float TACTIC_INTERVAL           = 1.f;
+    static constexpr float APPROACH_RADIUS           = 4.5f;
+    static constexpr float VIGILANCE_DURATION        = 5.0f;   // 경계 → 각개격파 전환 시간(초)
+    static constexpr float CLUSTER_RADIUS            = 10.0f;  // 플레이어 분산 판단 반경
+    static constexpr float ENCIRCLE_RADIUS           = 10.0f;  // 포위 섹터 배치 반경
+    static constexpr float TACTIC_HP_THRESHOLD       = 0.70f;  // 리더 HP 70% 이하 시 전술 발동
+    static constexpr float TACTIC_SQUAD_RATIO        = 0.80f;  // 부대원 80% 미만 생존 시 전술 발동
+    static constexpr float ENCIRCLE_RECALC_THRESHOLD = 12.0f;  // 포위 재배치 거리 임계값
 };
 
 } // namespace sim

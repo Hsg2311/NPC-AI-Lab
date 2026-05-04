@@ -20,6 +20,7 @@ static const char* tacticalStateStr(TacticalNpcState s) {
         case TacticalNpcState::AlternateWait: return "AlternateWait";
         case TacticalNpcState::Return:        return "Return";
         case TacticalNpcState::Dead:          return "Dead";
+        case TacticalNpcState::HoldSlot:      return "HoldSlot";
     }
     return "?";
 }
@@ -84,9 +85,16 @@ void TacticalNpc::consumePendingCommand() {
             transitionTo(TacticalNpcState::Chase, "명령: EngageTarget");
             break;
         case TacticalCommandType::FlankTarget:
+            targetId_          = pendingCmd_.targetId;
+            assignedSlot_      = pendingCmd_.slotOffset;
+            slotRefTargetPos_  = pendingCmd_.slotRefTargetPos;
+            abandonDist_       = pendingCmd_.abandonDist;
+            transitionTo(TacticalNpcState::Flank, "명령: FlankTarget");
+            break;
+        case TacticalCommandType::HoldSlot:
             targetId_     = pendingCmd_.targetId;
             assignedSlot_ = pendingCmd_.slotOffset;
-            transitionTo(TacticalNpcState::Flank, "명령: FlankTarget");
+            transitionTo(TacticalNpcState::HoldSlot, "명령: HoldSlot");
             break;
         case TacticalCommandType::AlternateWait:
             targetId_ = pendingCmd_.targetId;
@@ -129,6 +137,7 @@ void TacticalNpc::update(float dt, Room& room) {
         case TacticalNpcState::Flank:         updateFlank        (dt, room); break;
         case TacticalNpcState::AlternateWait: updateAlternateWait(dt, room); break;
         case TacticalNpcState::Return:        updateReturn       (dt, room); break;
+        case TacticalNpcState::HoldSlot:      updateHoldSlot     (dt, room); break;
         case TacticalNpcState::Dead:          /* 종료 상태 */                 break;
     }
 }
@@ -238,6 +247,13 @@ void TacticalNpc::updateFlank(float dt, Room& room) {
         return;
     }
 
+    // 타겟이 슬롯 계산 시점 위치에서 너무 멀어지면 슬롯 포기 → Chase
+    float drift = Vec3::distance(target->getPosition(), slotRefTargetPos_);
+    if (drift > abandonDist_) {
+        transitionTo(TacticalNpcState::Chase, "타겟 이탈, 슬롯 포기");
+        return;
+    }
+
     // assignedSlot_은 이미 월드 좌표
     float distToSlot = Vec3::distance(position_, assignedSlot_);
     if (distToSlot < 0.5f) {
@@ -256,6 +272,30 @@ void TacticalNpc::updateFlank(float dt, Room& room) {
     Vec3 sep = calcSeparationForce(separationRadius_, nearbyCache_);
 
     // 슬롯 이동 방향과 수직인 성분만 사용
+    Vec3 sepPerp = sep - slotDir * sep.dot(slotDir);
+    Vec3 moveDir = (slotDir + sepPerp * separationWeight_).normalized();
+    facing_   = moveDir;
+    position_ += moveDir * (moveSpeed_ * dt);
+}
+
+// ─── HoldSlot ─────────────────────────────────────────────────────────────────
+// 슬롯까지 이동 후 대기. 타겟이 범위 내여도 공격하지 않는다 (경계 상태).
+
+void TacticalNpc::updateHoldSlot(float dt, Room& room) {
+    Actor* target = resolveTarget(room);
+    if (!target) {
+        targetId_ = 0;
+        transitionTo(TacticalNpcState::Idle, "타겟 소실 (HoldSlot 중)");
+        return;
+    }
+
+    float distToSlot = Vec3::distance(position_, assignedSlot_);
+    if (distToSlot < 0.5f) return;  // 슬롯 도착 — 제자리 유지
+
+    Vec3 slotDir = (assignedSlot_ - position_).normalized();
+    nearbyCache_.clear();
+    room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
+    Vec3 sep     = calcSeparationForce(separationRadius_, nearbyCache_);
     Vec3 sepPerp = sep - slotDir * sep.dot(slotDir);
     Vec3 moveDir = (slotDir + sepPerp * separationWeight_).normalized();
     facing_   = moveDir;

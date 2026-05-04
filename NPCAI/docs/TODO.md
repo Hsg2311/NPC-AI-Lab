@@ -1,6 +1,6 @@
 # NPCAI Project — TODO
 
-> 마지막 갱신: 2026-05-02 (플레이어 공격 시스템 + HP Bar 시각화 + NPC Dead 활성화 + 버그 수정 2건)
+> 마지막 갱신: 2026-05-04 (홉 고블린 전술 3종 구현 — HoldSlot 상태, DenseHold/DenseAdvance/WedgeCharge, PlatoonLeader 조건부 전술 발동)
 
 ---
 
@@ -156,28 +156,28 @@ NPC 개별 행동 AI를 FSM에서 Behavior Tree(BT)로 전환하는 방안을 �
 
 ### [v4] 전술 NPC 시스템 — 2단계
 
-#### TacticalNpc FSM 보완
+#### 구현 완료 (2026-05-04)
 
+- [o] **HoldSlot(8) 상태** — 슬롯까지 이동 후 제자리 유지. 타겟이 범위 내여도 공격 않음. 노란색(255,220,0).
+- [o] **slotRefTargetPos_ + abandonDist_** — FlankTarget 수신 시 타겟 위치 저장. Flank 이동 중 타겟이 abandonDist_ 초과 이탈 시 Chase 전환.
+- [o] **DenseHold 명령** — 멤버 centroid 기준 직사각형 그리드 슬롯 계산 → HoldSlot 명령 발행.
+- [o] **DenseAdvance 명령** — sectorPos 기준 직사각형 그리드 슬롯 계산 → FlankTarget 명령 발행.
+- [o] **WedgeCharge 명령** — V자 대형. 타겟 추적이므로 매 틱 슬롯 재계산. FlankTarget 발행.
+- [o] **슬롯 갱신 정책 개선** — FlankLeft/Right/Encircle/DenseHold/DenseAdvance는 명령 수신 시 1회만 계산 (기존 매 틱 → 변경). WedgeCharge만 매 틱 유지.
+- [o] **전술 발동 조건** — `tacticsUnlocked_` 단방향 플래그. 리더 HP 70% 이하 또는 어느 Squad든 초기 인원의 80% 미만 생존 시 활성화. 활성 전에는 Engage만 발행.
+- [o] **TacticalPhase 3단계 전술** — `Encircle(포위) → Vigilance(경계) → DivideAndConquer(각개격파)` 자동 전환.
+- [o] **clusterPlayers()** — 플레이어 O(N²) 연결 컴포넌트. 반경 10 내 군집화. 2개 이상 군집 = 분산 상태.
+- [o] **포위 재발행 쓰로틀** — `lastEncircleCentroid_` + `ENCIRCLE_RECALC_THRESHOLD(12)`. 플레이어 centroid 이동 거리 초과 시에만 DenseAdvance 재발행 (Chase→Flank 루프 방지).
+- [o] **ScenarioTactical 재구성** — P1(0,0,0) + Boss(25,0,0) + Squad A/B/C 각 4명 (총 13명).
+
+#### 미구현 — 다음 단계
+
+- [ ] **전술 이동 속도 부스트** — Flank/HoldSlot 상태에서 `moveSpeed * TACTICAL_SPEED_MULT(2.0)` 적용. (`docs/NextSession_TacticalSpeedCooldown.md` 참고)
+- [ ] **전술 쿨타임** — 전술 활성 10초 후 8초간 Engage 복귀, 이후 재활성. (`docs/NextSession_TacticalSpeedCooldown.md` 참고)
 - [ ] **Confused 방황 구현** — 현재는 Idle 전이로 대체. `confusedTimer_` 기반 랜덤 방황 후 Idle.
-- [ ] **AlternateAttack 검증** — `SquadOrderType::AlternateAttack` 명령 경로 ScenarioTactical에서 확인
-- [ ] **Return 중 재어그로 차단 확인** — TacticalNpc의 Return은 명령 구동이므로 자율 재어그로 없음 (의도된 동작 확인)
-
-#### TacticalSquad 슬롯 갱신 최적화
-
-- [ ] **Flank 슬롯 갱신 주기 제어** — 현재 매 틱 재계산. 타겟 이동 임계값(0.5u 이상) 초과 시에만 갱신으로 변경
-- [ ] **멤버 수 변화 시 슬롯 재배분** — 멤버 사망 후 남은 멤버에게 슬롯 재분배
-
-#### PlatoonLeader 전술 고도화
-
-- [ ] **전투 효율 기반 전술 전환** — 살아있는 Squad 멤버 비율 < 임계값이면 Retreat 명령
-- [ ] **primary target 변경 쿨다운** — 빠른 교체로 인한 슬롯 진동 방지 (TARGET_CHANGE_COOLDOWN)
-- [ ] **Engage → Flank 조건부 전환** — Squad 1개라도 초기 Engage 후 타이머 기반 FlankLeft 전환
-
-#### 시각화 개선
-
-- [ ] **Squad 연결선** — Squad 멤버 간 얇은 선으로 소속 표시
-- [ ] **Flank 슬롯 갱신 시 깜빡임 방지** — 슬롯 좌표 보간 처리
+- [ ] **전투 효율 기반 Retreat** — 살아있는 Squad 멤버 비율 < 임계값이면 전체 Retreat 명령
 - [ ] **TacticalNpc 상태 범례** — HUD에 TacticalNpcState 색상 범례 별도 추가 (현재 Npc 범례만 있음)
+- [ ] **Squad 연결선** — Squad 멤버 간 얇은 선으로 소속 표시
 
 ### [v3] DummyPlayerController 패턴 확장
 
@@ -223,7 +223,7 @@ NPCAI/
     Scenario.hpp                            ← 시나리오 추상 베이스 클래스
     ScenarioSoloNpc.hpp / .cpp              ← 독립 NPC 시나리오
     ScenarioSharedSight.hpp / .cpp          ← 시야 공유 그룹 NPC 시나리오
-    ScenarioTactical.hpp / .cpp             ← 전술 NPC 시나리오 (Boss + Squad A/B) ← 현재 활성
+    ScenarioTactical.hpp / .cpp             ← 전술 NPC 시나리오 (Boss + Squad A/B/C 각 4명) ← 현재 활성
   viz/
     Renderer.hpp / Renderer.cpp             ← drawTacticalNpc(), tacticalStateColor(), drawGroups
     Application.hpp / Application.cpp       ← Scenario 시스템
@@ -893,6 +893,55 @@ Squad들에게 포위/협공 전술 명령을 내리는 계층형 전술 AI를 �
 
 - [o] ClInclude: `TacticalNpc.hpp`, `TacticalSquad.hpp`, `PlatoonLeader.hpp`, `ScenarioTactical.hpp` 추가
 - [o] ClCompile: `TacticalNpc.cpp`, `TacticalSquad.cpp`, `PlatoonLeader.cpp`, `ScenarioTactical.cpp` 추가
+
+---
+
+## 갱신: 2026-05-04 — 홉 고블린 전술 3종 구현
+
+### 배경
+
+홉 고블린 설계 문서에 정의된 포위(가)/경계(나)/각개격파(다) 3가지 전술을 구현했다.
+기본 Engage → 조건 충족 → 전술 발동의 흐름으로 동작하며,
+플레이어 집합/분산 상태를 감지해 자동으로 전술을 전환한다.
+
+### 수정: `sim/TacticalNpc.hpp/.cpp`
+
+- [o] `TacticalNpcState::HoldSlot = 8` 추가 — 슬롯까지 이동 후 공격 없이 대기 (경계 상태)
+- [o] `TacticalCommandType::HoldSlot` 추가
+- [o] `TacticalCommand` 구조체에 `slotRefTargetPos`, `abandonDist` 필드 추가
+- [o] `TacticalNpc` 데이터 멤버: `slotRefTargetPos_{}`, `abandonDist_{ 15.f }` 추가
+- [o] `updateFlank()`: 이동 중 매 틱 `drift > abandonDist_` 체크 → Chase 전환 (슬롯 포기)
+- [o] `updateHoldSlot()` 구현 — 슬롯 이동 후 제자리 유지, 공격 전환 없음
+
+### 수정: `sim/TacticalSquad.hpp/.cpp`
+
+- [o] `SquadOrderType`에 `DenseHold / DenseAdvance / WedgeCharge` 추가
+- [o] `SquadOrder`에 `Vec3 sectorPos` 필드 추가 (DenseAdvance용 섹터 월드 좌표)
+- [o] `calcDenseSlots(center, forward, count)` — 직사각형 그리드 슬롯 계산
+  - `cols = ceil(sqrt(count))`, `spacing = max(attackRange * 0.8, 1.2)`
+- [o] `calcWedgeSlots(targetPos, fromPos, count)` — V자 쐐기 대형 슬롯 계산
+  - 행 i에 (i+1)명 배치, `spacing = max(attackRange * 1.2, 1.5)`, 행 간격 `spacing * 1.5`
+- [o] `pushCommandsToMembers()`: DenseHold/DenseAdvance/WedgeCharge case 추가
+- [o] `update()` 갱신 정책 변경 — WedgeCharge만 매 틱. 나머지 명령은 `orderDirty_` 시 1회.
+
+### 수정: `sim/PlatoonLeader.hpp/.cpp`
+
+- [o] `TacticalPhase` 열거형 추가 — `Encircle / Vigilance / DivideAndConquer`
+- [o] 멤버 추가: `tacticalPhase_`, `vigilanceElapsed_`, `tacticsUnlocked_`, `initialSizesSet_`, `initialSquadSizes_`, `lastEncircleCentroid_`
+- [o] 상수 추가: `VIGILANCE_DURATION(5s)`, `CLUSTER_RADIUS(10)`, `ENCIRCLE_RADIUS(10)`, `TACTIC_HP_THRESHOLD(0.70)`, `TACTIC_SQUAD_RATIO(0.80)`, `ENCIRCLE_RECALC_THRESHOLD(12)`
+- [o] `checkTacticsConditions()` — 리더 HP 70% 이하 또는 Squad 생존율 80% 미만
+- [o] `clusterPlayers(room)` — O(N²) 연결 컴포넌트 카운트 (CLUSTER_RADIUS=10)
+- [o] `calcPlayerCentroid(room)` — 생존 플레이어 평균 위치
+- [o] `evaluateTactics()` 전면 재작성 — 조건부 발동 + 3단계 TacticalPhase 전환 로직
+
+### 수정: `sim/ScenarioTactical.cpp`
+
+- [o] 시나리오 재구성: P1(0,0,0) + Boss(25,0,0) + Squad A/B/C 각 4명 (총 13명)
+  - Squad A (4명): (22,0,-8~-12), Squad B (4명): (26-28,0,±2), Squad C (4명): (22,0,5~12)
+
+### 수정: `viz/Renderer.cpp`
+
+- [o] `tacticalStateColor()` — `case 8: return RGB(255, 220, 0)` (HoldSlot 노란색) 추가
 
 ---
 

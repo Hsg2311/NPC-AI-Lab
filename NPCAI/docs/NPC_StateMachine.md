@@ -8,6 +8,7 @@
 
 > **2026-04-26:** Squad / Platoon 계층 전면 제거. 모든 Npc 클래스 인스턴스는 단독 행동(standalone).
 > **2026-05-01:** 전술 NPC 시스템 추가 (섹션 4). 기존 Npc 클래스는 변경 없음.
+> **2026-05-04:** 홉 고블린 전술 3종 구현 — HoldSlot(8) 상태 추가, DenseHold/DenseAdvance/WedgeCharge 명령 추가, PlatoonLeader 전술 조건부 발동·3단계 전환 로직 구현.
 
 ---
 
@@ -463,10 +464,11 @@ TacticalSquad        ← 비(非) Actor 코디네이터
 | 1 | `Chase` | `EngageTarget` 명령 후 타겟 추격. 분리 힘 블렌드 적용. |
 | 2 | `AttackWindup` | 공격 선딜. 이동 없음. `windupTimer_` 완료 시 hit/miss 판정. 타겟 이탈해도 취소 없음. |
 | 3 | `AttackRecover` | 공격 후딜. 약한 separation drift 허용. `recoverTimer_` 완료 후 재공격 또는 Chase. |
-| 4 | `Flank` | `FlankTarget` 명령. `assignedSlot_`(월드 좌표) 위치까지 이동. 도착 후 Chase 또는 AttackWindup. |
+| 4 | `Flank` | `FlankTarget` 명령. `assignedSlot_`(월드 좌표) 위치까지 이동. 도착 후 Chase 또는 AttackWindup. 타겟이 `abandonDist_` 이상 이탈하면 슬롯 포기 → Chase. |
 | 5 | `AlternateWait` | 교대 공격에서 자기 순번이 아닌 대기 상태. 다음 EngageTarget 명령 수신 시 전환. |
 | 6 | `Return` | `Retreat` 명령 또는 타겟 소실 시 `spawnPos_`로 귀환. |
 | 7 | `Dead` | 종단 상태. |
+| 8 | `HoldSlot` | `DenseHold` 명령. `assignedSlot_` 위치까지 이동 후 제자리 유지. 타겟이 범위 내여도 공격하지 않음 (경계 상태). |
 
 #### 상태 전이 다이어그램
 
@@ -513,7 +515,9 @@ Dead: 종단 상태 (alive_ == false)
 | `AttackRecover` | `Idle` | 타겟 소실/사망 (recover 도중) |
 | `Flank` | `AttackWindup` | `assignedSlot_` 도달(dist < 0.5) && `dist to target ≤ attackRange_` |
 | `Flank` | `Chase` | `assignedSlot_` 도달(dist < 0.5) && `dist to target > attackRange_` |
+| `Flank` | `Chase` | 이동 중 타겟이 `slotRefTargetPos_`에서 `abandonDist_` 이상 이탈 (슬롯 포기) |
 | `Flank` | `Idle` | 타겟 소실/사망 (Flank 도중) |
+| `HoldSlot` | `Idle` | 타겟 소실/사망 |
 | `AlternateWait` | `Idle` | 타겟 소실/사망 |
 | `Return` | `Idle` | `dist to spawnPos_ < 0.3` |
 | `Dead` | — | 종단 상태 (alive_ == false 감지 즉시) |
@@ -525,7 +529,8 @@ Dead: 종단 상태 (alive_ == false)
 | 명령 타입 | 전이 대상 | 부수 효과 |
 |---|---|---|
 | `EngageTarget` | `Chase` | `targetId_` 갱신 |
-| `FlankTarget` | `Flank` | `targetId_` + `assignedSlot_`(월드 좌표) 갱신 |
+| `FlankTarget` | `Flank` | `targetId_` + `assignedSlot_`(월드 좌표) + `slotRefTargetPos_` + `abandonDist_` 갱신 |
+| `HoldSlot` | `HoldSlot` | `targetId_` + `assignedSlot_`(월드 좌표) 갱신. 도착 후 공격 없이 제자리 유지. |
 | `AlternateWait` | `AlternateWait` | `targetId_` 갱신 |
 | `Retreat` | `Return` | — |
 | `Idle` | `Idle` | `targetId_ = 0` |
@@ -547,9 +552,24 @@ Dead: 종단 상태 (alive_ == false)
 **`detectionRange` 없음** — TacticalNpc는 플레이어를 스스로 감지하지 않는다.
 Return 상태에서도 재어그로 없음.
 
+#### TacticalCommand 구조체
+
+```cpp
+struct TacticalCommand {
+    TacticalCommandType type             = TacticalCommandType::None;
+    uint32_t            targetId         = 0;
+    Vec3                slotOffset       = {};     // Flank/HoldSlot: 목적지 월드 좌표
+    Vec3                slotRefTargetPos = {};     // 슬롯 계산 시점의 타겟 위치 (유효성 체크)
+    float               abandonDist      = 15.f;  // 타겟 이탈 시 슬롯 포기 거리 (Flank 전용)
+};
+```
+
+`slotRefTargetPos_`와 `abandonDist_`는 FlankTarget 수신 시 저장된다.
+Flank 이동 중 매 틱 `dist(target, slotRefTargetPos_) > abandonDist_`이면 Chase로 전환한다.
+
 #### Return 이동 특성
 
-`Return` 상태에서 이동 속도는 `moveSpeed_ * 2.0`이 적용된다. 분리 힘은 `separationWeight * 0.25` 배율로 약화된다.
+`Return` 상태에서 이동 속도는 `moveSpeed_ * 2.0`이 적용된다.
 
 ---
 
@@ -563,9 +583,12 @@ Squad는 비(非) Actor 코디네이터다. 소속 TacticalNpc들의 ID만 보�
 |---|---|
 | `Idle` | 전투 해제. 멤버 전체에 Idle 명령. |
 | `Engage` | 정면 공격. 멤버 전체에 EngageTarget 명령. |
-| `FlankLeft` | 좌측 측면 기동. 멤버에게 FlankTarget 명령 + 좌측 슬롯 좌표. |
-| `FlankRight` | 우측 측면 기동. 멤버에게 FlankTarget 명령 + 우측 슬롯 좌표. |
-| `Encircle` | 포위. 지정된 섹터 각도 범위 내 슬롯에 FlankTarget 발행. |
+| `FlankLeft` | 좌측 측면 기동. 멤버에게 FlankTarget 명령 + 좌측 슬롯 좌표. 명령 수신 시 1회 계산. |
+| `FlankRight` | 우측 측면 기동. 멤버에게 FlankTarget 명령 + 우측 슬롯 좌표. 명령 수신 시 1회 계산. |
+| `Encircle` | 포위. 지정된 섹터 각도 범위 내 슬롯에 FlankTarget 발행. 명령 수신 시 1회 계산. |
+| `DenseHold` | 밀집 대형 + 현재 위치 유지. 멤버 centroid 기준 그리드 슬롯에 HoldSlot 명령. 명령 수신 시 1회 계산. |
+| `DenseAdvance` | 밀집 대형 + 지정 섹터 위치로 전진. `sectorPos` 기준 그리드 슬롯에 FlankTarget 명령. 명령 수신 시 1회 계산. |
+| `WedgeCharge` | 쐐기 대형 + 타겟 돌진. V자 슬롯에 FlankTarget 명령. 타겟이 이동하므로 **매 틱** 슬롯 재계산. |
 | `AlternateAttack` | 교대 공격. `attackTurn` 순번에 해당하는 멤버만 EngageTarget, 나머지 AlternateWait. |
 | `Retreat` | 후퇴. 멤버 전체에 Retreat 명령. |
 
@@ -573,32 +596,31 @@ Squad는 비(非) Actor 코디네이터다. 소속 TacticalNpc들의 ID만 보�
 
 ```cpp
 struct SquadOrder {
-    SquadOrderType type        = SquadOrderType::Idle;
-    uint32_t       targetId    = 0;
-    float          sectorAngle = 0.f;   // Encircle: 이 Squad의 섹터 중심 각도 (라디안)
-    float          sectorSpan  = 0.f;   // Encircle: 섹터 폭 (라디안)
-    int            attackTurn  = 0;     // AlternateAttack: 공격 순번 (0부터)
-    int            totalTurns  = 1;     // AlternateAttack: 전체 순번 수
-    float          approachRadius = 5.f; // Flank/Encircle: 타겟 기준 접근 반경
-    Vec3           leaderPos   = {};    // FlankLeft/Right: 방향 계산용 리더 위치
+    SquadOrderType type          = SquadOrderType::Idle;
+    uint32_t       targetId      = 0;
+    float          sectorAngle   = 0.f;  // Encircle: 이 Squad의 섹터 중심 각도 (라디안)
+    float          sectorSpan    = 0.f;  // Encircle: 섹터 폭 (라디안)
+    int            attackTurn    = 0;    // AlternateAttack: 공격 순번 (0부터)
+    int            totalTurns    = 1;    // AlternateAttack: 전체 순번 수
+    float          approachRadius = 5.f; // Flank/Encircle/WedgeCharge: 타겟 기준 접근 반경
+    Vec3           leaderPos     = {};   // FlankLeft/Right/WedgeCharge: 방향 계산용 리더 위치
+    Vec3           sectorPos     = {};   // DenseAdvance: 부대가 이동할 섹터 월드 좌표
 };
 ```
 
 #### 슬롯 계산
 
-**FlankLeft/Right:**
+**FlankLeft/Right (`calcFlankSlots`):**
 ```
 dir  = normalize(targetPos − leaderPos)          // 리더→타겟 방향
 side = (+dir.z, 0, −dir.x)                       // 좌측 수직 (XZ 평면)
      = (−dir.z, 0, +dir.x)                       // 우측 수직
 spacing = memberAttackRange + 1.5
 
-slot[i] = targetPos
-         + side    * approachRadius
-         + dir     * (i * spacing)                // 타겟에 가까운 멤버 순서
+slot[i] = targetPos + side * approachRadius + dir * (i * spacing)
 ```
 
-**Encircle (멤버 2명 이상):**
+**Encircle (`calcEncircleSlots`, 멤버 2명 이상):**
 ```
 arc   = sectorSpan / (count − 1)
 start = sectorAngle − sectorSpan * 0.5
@@ -607,13 +629,43 @@ slot[i] = targetPos + { cos(start + arc*i), 0, sin(start + arc*i) } * approachRa
 ```
 멤버 1명이면 `{ cos(sectorAngle), 0, sin(sectorAngle) } * approachRadius`로 단일 슬롯.
 
-#### update() 처리 순서
+**DenseHold / DenseAdvance (`calcDenseSlots`):**
+```
+cols    = ceil(sqrt(count))
+spacing = max(memberAttackRange * 0.8, 1.2)
+right   = (-forward.z, 0, forward.x)             // XZ 평면 우방향
 
-1. `removeDeadMembers()` — `findActorById(id)->isAlive()` 검사, 사망 NPC ID 제거
-2. 새 명령(`orderDirty_`)이 있거나 Flank/Encircle 유형이면 `pushCommandsToMembers()` 호출
-3. `pushCommandsToMembers()` 내에서 타겟 위치를 매 틱 재조회 → 슬롯 갱신 (타겟 이동 반영)
+// DenseHold: center = squad centroid,  forward = centroid → target 방향
+// DenseAdvance: center = sectorPos,     forward = sectorPos → playerCentroid 방향
+slot[i] = center + right * colOffset + forward * rowOffset
+          // colOffset/rowOffset: 직사각형 그리드, 중심 정렬
+```
 
-Flank/Encircle 유형은 `orderDirty_` 없이도 매 틱 슬롯을 재계산해 이동 중인 타겟을 추적한다.
+**WedgeCharge (`calcWedgeSlots`):**
+```
+spacing = max(memberAttackRange * 1.2, 1.5)
+forward = normalize(targetPos − fromPos)          // fromPos = 리더 위치
+tip     = targetPos − forward * memberAttackRange  // 첨단 = 사정거리 바로 앞
+
+// 행 0: 1명, 행 1: 2명, 행 2: 3명, ... (V자 대형)
+slot    = tip − forward * (row * spacing * 1.5) + right * colOffset
+```
+
+#### update() 슬롯 갱신 정책
+
+| 명령 타입 | 갱신 시점 | 이유 |
+|-----------|-----------|------|
+| `FlankLeft / FlankRight` | 명령 수신 시 1회 (`orderDirty_`) | 의도적 플랭크 위치 고정 |
+| `Encircle` | 명령 수신 시 1회 | 포위 위치 고정 |
+| `DenseHold` | 명령 수신 시 1회 | 경계 위치 고정 |
+| `DenseAdvance` | 명령 수신 시 1회 (`orderDirty_`) | PlatoonLeader가 centroid 변화 감지 시 재발행 |
+| `WedgeCharge` | **매 틱** | 돌진 — 타겟이 이동하므로 추적 필요 |
+
+```
+1. removeDeadMembers()
+2. orderDirty_ == true → pushCommandsToMembers(); orderDirty_ = false
+3. 현재 명령이 WedgeCharge → 매 틱 pushCommandsToMembers() (타겟 위치 재조회)
+```
 
 #### PlatoonLeader 사망 처리
 
@@ -637,19 +689,59 @@ PlatoonLeader의 `update()`에서 `alive_`가 false로 바뀌는 틱에 `deathRe
 - **명령 간섭 차단**: 매 틱 `pendingCmd_.type = None` 설정 후 `TacticalNpc::update()` 호출 → TacticalSquad의 명령이 리더 자신의 FSM에 영향을 주지 않는다.
 - **항상 플레이어 인식**: 보스 룸 = 전체 활동 구역. `detectionRange` 없이 `room.getLivingPlayers()` 전부 평가.
 
+#### 전술 발동 조건 (`checkTacticsConditions`)
+
+전술은 기본적으로 비활성(`tacticsUnlocked_ = false`). 아래 중 하나가 충족되면 **영구 활성화**된다.
+
+| 조건 | 임계값 |
+|---|---|
+| 리더 HP ≤ `maxHp * TACTIC_HP_THRESHOLD` | 70% 이하 |
+| 어느 Squad든 생존 비율 < `TACTIC_SQUAD_RATIO` | 초기 인원의 80% 미만 |
+
+조건 충족 전에는 모든 Squad에 **Engage**만 발행한다.
+
+#### TacticalPhase 상태 전이
+
+```
+Encircle ──(플레이어 분산 감지)──► Vigilance ──(5초 경과)──► DivideAndConquer
+    ▲                                                              │
+    └──────────────────(플레이어 집합 감지)◄──────────────────────┘
+```
+
+| 페이즈 | Squad 명령 | 조건 |
+|---|---|---|
+| `Encircle` | DenseAdvance (3개 부대 120° 배치) | 플레이어 군집 수 = 1 |
+| `Vigilance` | DenseHold (전체 현 위치 유지) | 플레이어 군집 수 ≥ 2 (최초 전환 시 5초 대기 시작) |
+| `DivideAndConquer` | Squad[0]: WedgeCharge / Squad[1,2]: DenseHold | Vigilance 5초 경과 |
+
+**분산 판단**: `clusterPlayers()` — O(N²) 연결 컴포넌트. 플레이어 간 거리 ≤ `CLUSTER_RADIUS(10)` 이면 같은 군집으로 판정.
+
+**포위 재발행 조건**: `DenseAdvance`는 매 1초 evaluateTactics 호출마다 발행하지 않는다.
+`lastEncircleCentroid_` 를 기록해 플레이어 centroid 이동거리가 `ENCIRCLE_RECALC_THRESHOLD(12)` 초과 시에만 재발행한다.
+
 #### evaluateTactics() — 전술 평가 (1초 주기)
 
 ```
-1. selectPrimaryTarget(room)  →  점수 기반 primary 선택
-2. 살아있는 Squad 수에 따른 전술 결정:
-   Squad 1개  →  Engage  (정면 공격)
-   Squad 2개  →  FlankLeft + FlankRight  (좌/우 협공)
-   Squad 3개+ →  Encircle  (360° / N 균등 분할, sectorAngle = span * i)
-3. 각 Squad에 SquadOrder 발행 (receiveOrder)
-4. 리더 자신: targetId_ 갱신, Idle/Return 상태이면 Chase로 전환
-```
+1. removeDeadMembers() — 사망 멤버 제거 후 liveSquads 수집
+2. selectPrimaryTarget(room) — 없으면 전체 Idle, 리턴
+3. 리더 자신: targetId_ 갱신, Idle/Return이면 Chase 전환
+4. checkTacticsConditions() → tacticsUnlocked_ = true (조건 충족 시, 단방향)
+5. tacticsUnlocked_ == false → 전체 Engage, 리턴
 
-플레이어 없음 또는 활성 Squad 없음: 전체 Squad에 Idle 명령, 리더 자신도 Idle/Return 유지.
+6. scattered = (clusterPlayers(room) >= 2)
+
+7. if (!scattered):                          // 포위
+       isNewPhase = (tacticalPhase_ != Encircle)
+       centroidShifted = dist(centroid, lastEncircleCentroid_) > 12.0
+       if (isNewPhase || centroidShifted):
+           tacticalPhase_ = Encircle
+           DenseAdvance 발행: sectorPos = centroid + {cos(i*2π/3), sin(i*2π/3)} * ENCIRCLE_RADIUS(10)
+
+8. else:                                     // 분산
+       Encircle → Vigilance 전환: DenseHold 발행, vigilanceElapsed_ = 0
+       Vigilance 유지: vigilanceElapsed_ >= 5.0 → DivideAndConquer 전환
+       DivideAndConquer: Squad[0] WedgeCharge, Squad[1,2] DenseHold (매 evaluate 갱신)
+```
 
 #### 플레이어 점수 함수
 
@@ -667,7 +759,13 @@ hpScore   = 1.0f - (hp / maxHp)      // HP 낮을수록 높음
 | 상수 | 값 | 설명 |
 |---|---|---|
 | `TACTIC_INTERVAL` | 1.0s | evaluateTactics() 호출 주기 |
-| `APPROACH_RADIUS` | 4.5 | 슬롯 배치 반경 (타겟 기준) |
+| `APPROACH_RADIUS` | 4.5 | 슬롯 배치 반경 (타겟 기준, FlankLeft/Right용) |
+| `VIGILANCE_DURATION` | 5.0s | Vigilance → DivideAndConquer 전환 시간 |
+| `CLUSTER_RADIUS` | 10.0 | 플레이어 분산 판단 반경 |
+| `ENCIRCLE_RADIUS` | 10.0 | 포위 섹터 배치 반경 |
+| `TACTIC_HP_THRESHOLD` | 0.70 | 리더 HP 70% 이하 시 전술 발동 |
+| `TACTIC_SQUAD_RATIO` | 0.80 | 부대원 80% 미만 생존 시 전술 발동 |
+| `ENCIRCLE_RECALC_THRESHOLD` | 12.0 | 포위 재배치 거리 임계값 |
 
 ---
 
@@ -759,6 +857,7 @@ std::vector<DebugTacticalNpcEntry> tacticalNpcs;
 | `AlternateWait(5)` | 파랑 | (50, 80, 220) |
 | `Return(6)` | 초록 | (50, 180, 50) |
 | `Dead(7)` | 거의 검정 | (40, 40, 40) |
+| `HoldSlot(8)` | 노랑 | (255, 220, 0) |
 
 #### drawTacticalNpc() 시각화 요소
 
@@ -776,13 +875,21 @@ std::vector<DebugTacticalNpcEntry> tacticalNpcs;
 ### 시나리오 (ScenarioTactical)
 
 ```
-P1 (HumanControl)  at (-10, 0, 0)
-Boss (PlatoonLeader, HP=200)  at (15, 0, 0)
-  Squad A: SoldierA1(12,0,-3)  SoldierA2(12,0,-6)   squadId=0
-  Squad B: SoldierB1(12,0, 3)  SoldierB2(12,0, 6)   squadId=1
+P1 (HumanControl)  at (0, 0, 0)
+Boss (PlatoonLeader, HP=200)  at (25, 0, 0)
+  Squad A (4명): A1~A4 at (22, 0, -8~-12)   squadId=0  — 우상단
+  Squad B (4명): B1~B4 at (26-28, 0, ±2)    squadId=1  — 정면
+  Squad C (4명): C1~C4 at (22, 0, 5~12)     squadId=2  — 우하단
 ```
 
-Squad 2개이므로 PlatoonLeader는 FlankLeft + FlankRight를 발행한다.
-- Squad A → 좌측 측면 기동(cyan)
-- Squad B → 우측 측면 기동(cyan)
+**기본 동작 (tacticsUnlocked_ == false)**: 모든 Squad가 Engage 발행.
+
+**전술 발동 조건**: Boss HP ≤ 70% 또는 어느 Squad든 초기 인원의 80% 미만 생존.
+
+**전술 발동 후 (플레이어 1명 = 항상 포위)**:
+- Squad A/B/C → DenseAdvance (120° 간격 섹터, 반경 10에 밀집 대형으로 접근)
 - Boss → 정면 Chase + Attack
+
+**플레이어 2명 이상 (분산 시)**:
+- Vigilance → 전체 DenseHold (최대 5초)
+- DivideAndConquer → Squad A(WedgeCharge), Squad B/C(DenseHold)

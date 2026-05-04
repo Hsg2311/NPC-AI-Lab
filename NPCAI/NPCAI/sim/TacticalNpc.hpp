@@ -20,6 +20,7 @@ enum class TacticalNpcState {
     AlternateWait = 5,  // 교대 공격: 공격 순번 대기
     Return        = 6,  // Retreat 명령: spawnPos 귀환
     Dead          = 7,  // 종료 상태
+    HoldSlot      = 8,  // DenseHold 명령: 슬롯 위치 유지, 공격 없음 (경계)
 };
 
 // ─── TacticalCommand ─────────────────────────────────────────────────────────
@@ -31,12 +32,15 @@ enum class TacticalCommandType {
     Retreat,        // spawnPos 귀환
     Idle,           // 전투 해제
     Confused,       // PlatoonLeader 사망: 방황
+    HoldSlot,       // assignedSlot 이동 후 유지 (공격 안 함, 경계용)
 };
 
 struct TacticalCommand {
-    TacticalCommandType type       = TacticalCommandType::None;
-    uint32_t            targetId   = 0;
-    Vec3                slotOffset = {};  // 타겟 기준 오프셋 (Flank용)
+    TacticalCommandType type             = TacticalCommandType::None;
+    uint32_t            targetId         = 0;
+    Vec3                slotOffset       = {};     // Flank/HoldSlot: 목적지 월드 좌표
+    Vec3                slotRefTargetPos = {};     // 슬롯 계산 시점의 타겟 위치 (유효성 체크용)
+    float               abandonDist      = 15.f;  // 타겟 이탈 시 슬롯 포기 거리 (Flank 전용)
 };
 
 // ─── TacticalNpcConfig ───────────────────────────────────────────────────────
@@ -88,6 +92,7 @@ protected:
     void updateFlank        (float dt, Room& room);
     void updateAlternateWait(float dt, Room& room);
     void updateReturn       (float dt, Room& room);
+    void updateHoldSlot     (float dt, Room& room);
     void updateDead         ();
 
     // ── 헬퍼 ──────────────────────────────────────────────────────────────────
@@ -98,7 +103,9 @@ protected:
     TacticalNpcState state_{ TacticalNpcState::Idle };
     TacticalCommand  pendingCmd_{};
     uint32_t         targetId_{ 0 };
-    Vec3             assignedSlot_{};   // Flank 목적지 (월드 좌표)
+    Vec3             assignedSlot_{};      // Flank/HoldSlot 목적지 (월드 좌표)
+    Vec3             slotRefTargetPos_{};  // 슬롯 발행 시점의 타겟 위치 (유효성 체크용)
+    float            abandonDist_{ 15.f }; // Flank 슬롯 포기 거리
     Vec3             spawnPos_;
     int              squadId_{ -1 };
     std::string      logPrefix_{};
