@@ -22,15 +22,15 @@ enum class SquadOrderType {
 };
 
 struct SquadOrder {
-    SquadOrderType type           = SquadOrderType::Idle;
-    uint32_t       targetId       = 0;
-    float          sectorAngle    = 0.f;   // Encircle: 이 Squad의 중심 각도 (라디안)
-    float          sectorSpan     = 0.f;   // Encircle: 섹터 폭 (라디안)
-    int            attackTurn     = 0;     // AlternateAttack: 공격 순번 (0부터)
-    int            totalTurns     = 1;     // AlternateAttack: 전체 순번 수
-    float          approachRadius = 5.f;   // Flank/Encircle: 타겟 기준 접근 반경
-    Vec3           leaderPos      = {};    // Flank 방향 계산용 / DenseAdvance: 플레이어 센트로이드
-    Vec3           sectorPos      = {};    // DenseAdvance: 부대 이동 목표 섹터 월드 좌표
+    SquadOrderType type              = SquadOrderType::Idle;
+    uint32_t       targetId          = 0;
+    float          sectorAngle       = 0.f;   // Encircle: 이 Squad의 중심 각도 (라디안)
+    float          sectorSpan        = 0.f;   // Encircle: 섹터 폭 (라디안)
+    int            attackTurn        = 0;     // AlternateAttack: 공격 순번 (0부터)
+    int            totalTurns        = 1;     // AlternateAttack: 전체 순번 수
+    float          approachRadius    = 5.f;   // Flank/Encircle: 타겟 기준 접근 반경
+    Vec3           leaderPos         = {};    // Flank 방향 계산용 / DenseAdvance: 플레이어 센트로이드
+    Vec3           sectorPos         = {};    // DenseAdvance: 부대 이동 목표 섹터 월드 좌표
 };
 
 // ─── TacticalSquad ───────────────────────────────────────────────────────────
@@ -63,14 +63,12 @@ private:
     void pushCommandsToMembers(Room& room);
 
     // ── 슬롯 계산 ─────────────────────────────────────────────────────────────
-    // 월드 좌표 슬롯 목록 반환 (멤버 수만큼)
-    std::vector<Vec3> calcFlankSlots   (const Vec3& targetPos, const Vec3& leaderPos,
-                                        bool leftSide, float radius, int count) const;
     std::vector<Vec3> calcEncircleSlots(const Vec3& targetPos, float sectorAngle,
                                         float sectorSpan, float radius, int count) const;
-    // 밀집(직사각형 그리드) / 쐐기(V자) 대형
-    std::vector<Vec3> calcDenseSlots(const Vec3& center, const Vec3& forward, int count) const;
-    std::vector<Vec3> calcWedgeSlots(const Vec3& targetPos, const Vec3& fromPos, int count) const;
+    std::vector<Vec3> calcFlankSlots (const Vec3& targetPos, const Vec3& leaderPos,
+                                      bool leftSide, float radius, int count) const;
+    std::vector<Vec3> calcDenseSlots (const Vec3& center, const Vec3& forward, int count) const;
+    std::vector<Vec3> calcWedgeSlots (const Vec3& targetPos, const Vec3& fromPos, int count) const;
 
     int                  squadId_;
     float                memberAttackRange_;

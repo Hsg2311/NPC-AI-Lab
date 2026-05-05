@@ -1,6 +1,6 @@
 # NPCAI Project — TODO
 
-> 마지막 갱신: 2026-05-04 (홉 고블린 전술 3종 구현 — HoldSlot 상태, DenseHold/DenseAdvance/WedgeCharge, PlatoonLeader 조건부 전술 발동)
+> 마지막 갱신: 2026-05-06 (슬램 기믹 제거, 순수 원형 포위 완성, Squad당 20명)
 
 ---
 
@@ -172,8 +172,9 @@ NPC 개별 행동 AI를 FSM에서 Behavior Tree(BT)로 전환하는 방안을 �
 
 #### 미구현 — 다음 단계
 
-- [ ] **전술 이동 속도 부스트** — Flank/HoldSlot 상태에서 `moveSpeed * TACTICAL_SPEED_MULT(2.0)` 적용. (`docs/NextSession_TacticalSpeedCooldown.md` 참고)
-- [ ] **전술 쿨타임** — 전술 활성 10초 후 8초간 Engage 복귀, 이후 재활성. (`docs/NextSession_TacticalSpeedCooldown.md` 참고)
+- [o] **전술 이동 속도 부스트** — Flank/HoldSlot 상태에서 `moveSpeed * TACTICAL_SPEED_MULT(2.0)` 적용.
+- [o] **전술 쿨타임** — 전체 멤버 슬롯 도착(`allMembersArrived()`) 즉시 8초 쿨타임 → Engage 복귀 → 재발동.
+- [ ] **포위 이동속도 추가 상승** — 포위 전술 발동 시 `TACTICAL_SPEED_MULT`를 현재 2.0보다 대폭 높이는 것 검토 (예: 4.0 ~ 5.0)
 - [ ] **Confused 방황 구현** — 현재는 Idle 전이로 대체. `confusedTimer_` 기반 랜덤 방황 후 Idle.
 - [ ] **전투 효율 기반 Retreat** — 살아있는 Squad 멤버 비율 < 임계값이면 전체 Retreat 명령
 - [ ] **TacticalNpc 상태 범례** — HUD에 TacticalNpcState 색상 범례 별도 추가 (현재 Npc 범례만 있음)
@@ -223,7 +224,7 @@ NPCAI/
     Scenario.hpp                            ← 시나리오 추상 베이스 클래스
     ScenarioSoloNpc.hpp / .cpp              ← 독립 NPC 시나리오
     ScenarioSharedSight.hpp / .cpp          ← 시야 공유 그룹 NPC 시나리오
-    ScenarioTactical.hpp / .cpp             ← 전술 NPC 시나리오 (Boss + Squad A/B/C 각 4명) ← 현재 활성
+    ScenarioTactical.hpp / .cpp             ← 전술 NPC 시나리오 (Boss + Squad A/B/C 각 20명, 총 61명) ← 현재 활성
   viz/
     Renderer.hpp / Renderer.cpp             ← drawTacticalNpc(), tacticalStateColor(), drawGroups
     Application.hpp / Application.cpp       ← Scenario 시스템
@@ -449,21 +450,19 @@ slot[i] = targetPos
 
 ### 13. Encircle 슬롯 (`sim/TacticalSquad.cpp` — `calcEncircleSlots`)
 
-Squad마다 섹터(sectorAngle ± sectorSpan/2) 안에 멤버를 균등 배치한다:
+Squad마다 섹터(sectorAngle ± sectorSpan/2) 안에 멤버를 균등 배치한다.
+**center-of-subdivision** 방식 — 경계가 아닌 소구역 중심에 슬롯을 배치해 인접 Squad 간 슬롯 겹침을 방지한다.
 
 ```
-// 멤버 2명 이상
-arc   = sectorSpan / (count − 1)
-start = sectorAngle − sectorSpan × 0.5
+arc   = sectorSpan / count                // 소구역 폭
+start = sectorAngle − sectorSpan × 0.5 + arc × 0.5   // 첫 번째 소구역 중심
 
 slot[i] = targetPos + { cos(start + arc×i), 0, sin(start + arc×i) } × approachRadius
-
-// 멤버 1명
-slot[0] = targetPos + { cos(sectorAngle), 0, sin(sectorAngle) } × approachRadius
 ```
 
-PlatoonLeader가 Squad N개에 대해 `sectorAngle = (2π / N) × i`, `sectorSpan = 2π / N`를 배분해
-360° 포위를 구성한다.
+할당 방식: **greedy nearest-slot** — 각 NPC에서 가장 가까운 미사용 슬롯에 배정해 경로 교차를 최소화한다.
+
+PlatoonLeader가 Squad N개에 대해 인원 비율에 따라 `sectorSpan`을 배분해 360° 포위를 구성한다.
 
 ---
 
@@ -474,10 +473,12 @@ PlatoonLeader가 Squad N개에 대해 `sectorAngle = (2π / N) × i`, `sectorSpa
 [수직 투영 이동]   sepPerp = sep − axis × (sep·axis)
                   moveDir = normalize(axis + sepPerp × w)   // Chase, Flank, Return
 [body push]       position += push.normalized() × speed × 0.15 × dt  // AttackRecover (BODY_RADIUS=0.8)
+[HoldSlot 감쇠]   sepScale = min(1, distToSlot / separationRadius)    // 도착 직전 진동 방지
 [Npc 타겟 점수]   score    = (1−d/range)×50 + 20 + 15 − aggro×8
 [PL 타겟 점수]    score    = 1/(1+d)×0.5 + (1−hp/maxHp)×0.5
 [Flank 슬롯]      slot[i]  = target + side×r + dir×(i×spacing)
-[Encircle 슬롯]   slot[i]  = target + {cos(start+arc×i), sin(start+arc×i)} × r
+[Encircle 슬롯]   arc = sectorSpan/count,  start = center − span/2 + arc/2
+                  slot[i]  = target + {cos(start+arc×i), sin(start+arc×i)} × r
 [좌표 변환]       screenX  = W/2 + (worldX − centerX) × scale
 [진행도]          progress = clamp(timer / totalTime, 0, 1)
 ```
@@ -942,6 +943,46 @@ Squad들에게 포위/협공 전술 명령을 내리는 계층형 전술 AI를 �
 ### 수정: `viz/Renderer.cpp`
 
 - [o] `tacticalStateColor()` — `case 8: return RGB(255, 220, 0)` (HoldSlot 노란색) 추가
+
+---
+
+## 갱신: 2026-05-06 — 슬램 기믹 제거 + 순수 원형 포위 완성 + NPC 60명
+
+### 배경
+
+이전에 구현한 "포위 → 무적 잠금 → 보스 점프 슬램" 기믹을 전면 제거하고,
+NPC들이 플레이어를 순수하게 원형으로 둘러싸는 것만 남겼다.
+포위 이동 품질(슬롯 겹침/진동/경로 교차)도 함께 개선했다.
+
+### 제거: 슬램/무적/봉쇄 코드
+
+- [o] `sim/Actor.hpp/.cpp` — `invincible_` 필드, `isInvincible()`, `setInvincible()` 제거. `takeDamage()` 단순화.
+- [o] `sim/TacticalNpc.hpp/.cpp` — `CircleGuard(9)` 상태, `TacticalCommandType::CircleGuard`, `updateCircleGuard()` 전부 제거.
+- [o] `sim/TacticalSquad.hpp/.cpp` — `issueCircleGuard()` 선언 및 구현 제거.
+- [o] `sim/PlatoonLeader.hpp/.cpp` — `circleGuardActive_`, `circleGuardTimer_`, `jumpTimer_`, `circleCenter_`, `launchPos_` 및 관련 접근자/상수 제거. 슬램 시퀀스 블록 제거.
+- [o] `sim/Room.hpp/.cpp` — `applyDamageToPlayersInRange()`, `applyEncircleContainment()` 제거. `tick()` 호출 제거.
+- [o] `sim/DebugSnapshot.hpp` — `invincible`, `isJumping`, `jumpProgress`, `encircleActive/Center/Radius` 필드 제거.
+- [o] `viz/Renderer.cpp` — 무적 골드 링, 점프 표시, 포위 원 렌더링 블록 제거.
+
+### 변경: 포위(Encircle) 명령 방식
+
+- [o] Encircle 명령 → **HoldSlot** 발행 (기존: FlankTarget/DenseAdvance).
+  - 슬롯 도착 후 플레이어 방향 `facing_` 유지, 공격 전환 없음.
+- [o] `calcEncircleSlots()` — **center-of-subdivision** 공식으로 교체.
+  - `arc = sectorSpan / count`, `start = sectorAngle - sectorSpan/2 + arc/2`
+  - 인접 Squad 경계 슬롯 겹침 문제 해결.
+- [o] 슬롯 할당 방식: **greedy nearest-slot** — 각 NPC가 가장 가까운 미사용 슬롯을 배정 (경로 교차 최소화).
+- [o] `HoldSlot` 이동 중 분리력 감쇠: `sepScale = min(1, distToSlot / separationRadius)` → 목적지 도착 직전 진동 방지.
+
+### 변경: 쿨타임 트리거
+
+- [o] `TACTIC_ACTIVE_DURATION` 제거. 전체 멤버 슬롯 도착(`allMembersArrived()`) 즉시 쿨타임(8초) 진입.
+- [o] 쿨타임 중 `encircleSlotsAssigned_ = false` → 쿨타임 종료 후 현재 플레이어 위치 기준 새 슬롯 재발행.
+
+### 변경: 기타
+
+- [o] `ENCIRCLE_RADIUS` 10.0f → **20.0f** (더 넓은 포위 반경).
+- [o] `ScenarioTactical` — Squad당 4명 → **20명** (A1~A20 / B1~B20 / C1~C20, 총 60명 + Boss).
 
 ---
 

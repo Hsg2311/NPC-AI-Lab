@@ -48,18 +48,14 @@ void PlatoonLeader::update(float dt, Room& room) {
         tacticCooldown_ -= dt;
         if (tacticCooldown_ <= 0.f) {
             tacticsOnCooldown_ = false;
-            tacticPhaseTimer_  = 0.f;
             Logger::get().log(name_, "전술 쿨타임 종료 — 전술 재활성");
         }
-    } else if (tacticsUnlocked_ && allMembersArrived(room)) {
-        tacticPhaseTimer_ += dt;
-        if (tacticPhaseTimer_ >= TACTIC_ACTIVE_DURATION) {
-            tacticsOnCooldown_     = true;
-            tacticCooldown_        = TACTIC_COOLDOWN_DURATION;
-            tacticPhaseTimer_      = 0.f;
-            encircleSlotsAssigned_ = false;
-            Logger::get().log(name_, "전술 쿨타임 시작 — Engage 복귀");
-        }
+    } else if (tacticsUnlocked_ && encircleSlotsAssigned_ && allMembersArrived(room)) {
+        // 포위 완성 → 즉시 Engage 전환 후 쿨타임
+        tacticsOnCooldown_     = true;
+        tacticCooldown_        = TACTIC_COOLDOWN_DURATION;
+        encircleSlotsAssigned_ = false;
+        Logger::get().log(name_, "포위 완성 — Engage 전환, 쿨타임 진입");
     }
 
     // 전술 평가 (주기적)
@@ -69,9 +65,7 @@ void PlatoonLeader::update(float dt, Room& room) {
         evaluateTactics(room);
     }
 
-    // 자체 전투 FSM (TacticalNpc 상속 로직)
-    // PlatoonLeader는 pendingCmd_를 통하지 않고 primaryTargetId_를 직접 사용
-    // → base update 호출 전 pendingCmd_를 Idle로 막아서 외부 명령 간섭 차단
+    // 자체 전투 FSM
     pendingCmd_.type = TacticalCommandType::None;
     TacticalNpc::update(dt, room);
 }
@@ -149,21 +143,30 @@ void PlatoonLeader::evaluateTactics(Room& room) {
             lastEncircleCentroid_  = centroid;
             encircleSlotsAssigned_ = true;
 
-            float angleStep = (numSquads > 1)
-                ? (2.f * 3.14159265f / static_cast<float>(numSquads))
-                : 0.f;
+            int totalMembers = 0;
+            for (auto* sq : liveSquads)
+                totalMembers += static_cast<int>(sq->getMembers().size());
+            if (totalMembers < 1) totalMembers = 1;
 
+            constexpr float TWO_PI = 2.f * 3.14159265f;
+
+            // ── 명령 발행 ────────────────────────────────────────────────────
+            float angleAccum = 0.f;
             for (int i = 0; i < numSquads; ++i) {
-                float angle = static_cast<float>(i) * angleStep;
-                Vec3  sec   = centroid + Vec3{ std::cosf(angle), 0.f, std::sinf(angle) } * ENCIRCLE_RADIUS;
+                int   memberCount = static_cast<int>(liveSquads[static_cast<size_t>(i)]->getMembers().size());
+                float fraction    = static_cast<float>(memberCount) / static_cast<float>(totalMembers);
+                float sectorSpan  = TWO_PI * fraction;
+                float sectorAngle = angleAccum + sectorSpan * 0.5f;
 
                 SquadOrder ord;
-                ord.type           = SquadOrderType::DenseAdvance;
+                ord.type           = SquadOrderType::Encircle;
                 ord.targetId       = primary->getId();
-                ord.sectorPos      = sec;
-                ord.leaderPos      = centroid;
+                ord.sectorAngle    = sectorAngle;
+                ord.sectorSpan     = sectorSpan;
                 ord.approachRadius = ENCIRCLE_RADIUS;
                 liveSquads[static_cast<size_t>(i)]->receiveOrder(ord);
+
+                angleAccum += sectorSpan;
             }
         }
         // 슬롯 이미 발행됨 → 재발행 없음 (NPC 현재 상태 유지)
@@ -292,7 +295,7 @@ float PlatoonLeader::evaluatePlayerScore(const Player* p) const {
 }
 
 // ─── allMembersArrived ────────────────────────────────────────────────────────
-// 모든 생존 멤버가 슬롯에 도착했는지 확인. 도착 전엔 tacticPhaseTimer_ 정지.
+// 모든 생존 멤버가 슬롯에 도착했는지 확인.
 
 bool PlatoonLeader::allMembersArrived(const Room& room) const {
     for (auto* sq : squads_) {

@@ -9,7 +9,8 @@
 > **2026-04-26:** Squad / Platoon 계층 전면 제거. 모든 Npc 클래스 인스턴스는 단독 행동(standalone).
 > **2026-05-01:** 전술 NPC 시스템 추가 (섹션 4). 기존 Npc 클래스는 변경 없음.
 > **2026-05-04:** 홉 고블린 전술 3종 구현 — HoldSlot(8) 상태 추가, DenseHold/DenseAdvance/WedgeCharge 명령 추가, PlatoonLeader 전술 조건부 발동·3단계 전환 로직 구현.
-> **2026-05-05:** 전술 이동 속도 부스트(Flank/HoldSlot 2×) 구현. 전술 쿨타임 시스템 구현(슬롯 도착 후 10초 활성 → 8초 Engage 복귀). 포위 슬롯 고정(플레이어 이동 시 재할당 방지, 쿨타임 후 새 슬롯 발행).
+> **2026-05-05:** 전술 이동 속도 부스트(Flank/HoldSlot ×`TACTICAL_SPEED_MULT`) 구현. 포위 슬롯 고정(플레이어 이동 시 재할당 방지, 쿨타임 후 새 슬롯 발행).
+> **2026-05-06:** 슬램/무적/CircleGuard 기믹 전면 제거. Encircle 명령 → HoldSlot(greedy nearest-slot). `calcEncircleSlots()` center-of-subdivision 공식으로 교체. `TACTIC_ACTIVE_DURATION` 제거 — `allMembersArrived()` 즉시 쿨타임. `ENCIRCLE_RADIUS` 20.0f. Squad당 20명(총 60명+Boss).
 
 ---
 
@@ -603,7 +604,7 @@ Squad는 비(非) Actor 코디네이터다. 소속 TacticalNpc들의 ID만 보�
 | `Engage` | 정면 공격. 멤버 전체에 EngageTarget 명령. |
 | `FlankLeft` | 좌측 측면 기동. 멤버에게 FlankTarget 명령 + 좌측 슬롯 좌표. 명령 수신 시 1회 계산. |
 | `FlankRight` | 우측 측면 기동. 멤버에게 FlankTarget 명령 + 우측 슬롯 좌표. 명령 수신 시 1회 계산. |
-| `Encircle` | 포위. 지정된 섹터 각도 범위 내 슬롯에 FlankTarget 발행. 명령 수신 시 1회 계산. |
+| `Encircle` | 포위. 지정된 섹터 각도 범위 내 슬롯에 **HoldSlot** 명령 발행. greedy nearest-slot 할당으로 경로 교차 최소화. 명령 수신 시 1회 계산. |
 | `DenseHold` | 밀집 대형 + 현재 위치 유지. 멤버 centroid 기준 그리드 슬롯에 HoldSlot 명령. 명령 수신 시 1회 계산. |
 | `DenseAdvance` | 밀집 대형 + 지정 섹터 위치로 전진. `sectorPos` 기준 그리드 슬롯에 FlankTarget 명령. 명령 수신 시 1회 계산. |
 | `WedgeCharge` | 쐐기 대형 + 타겟 돌진. V자 슬롯에 FlankTarget 명령. 타겟이 이동하므로 **매 틱** 슬롯 재계산. |
@@ -638,14 +639,15 @@ spacing = memberAttackRange + 1.5
 slot[i] = targetPos + side * approachRadius + dir * (i * spacing)
 ```
 
-**Encircle (`calcEncircleSlots`, 멤버 2명 이상):**
+**Encircle (`calcEncircleSlots`, center-of-subdivision):**
 ```
-arc   = sectorSpan / (count − 1)
-start = sectorAngle − sectorSpan * 0.5
+arc   = sectorSpan / count                         // 소구역 폭
+start = sectorAngle − sectorSpan * 0.5 + arc * 0.5 // 첫 번째 소구역 중심
 
 slot[i] = targetPos + { cos(start + arc*i), 0, sin(start + arc*i) } * approachRadius
 ```
-멤버 1명이면 `{ cos(sectorAngle), 0, sin(sectorAngle) } * approachRadius`로 단일 슬롯.
+경계(0번째, count-1번째)가 아닌 소구역 **중심**에 슬롯을 배치해 인접 Squad 간 동일 위치 중복을 방지한다.
+할당: **greedy nearest-slot** — 각 NPC에서 가장 가까운 미사용 슬롯에 순차 배정.
 
 **DenseHold / DenseAdvance (`calcDenseSlots`):**
 ```
@@ -728,7 +730,7 @@ Encircle ──(플레이어 분산 감지)──► Vigilance ──(5초 경�
 
 | 페이즈 | Squad 명령 | 조건 |
 |---|---|---|
-| `Encircle` | DenseAdvance (3개 부대 120° 배치) | 플레이어 군집 수 = 1 |
+| `Encircle` | Encircle 명령 → HoldSlot (인원 비율 비례 섹터, greedy nearest-slot, 반경 20) | 플레이어 군집 수 = 1 |
 | `Vigilance` | DenseHold (전체 현 위치 유지) | 플레이어 군집 수 ≥ 2 (최초 전환 시 5초 대기 시작) |
 | `DivideAndConquer` | Squad[0]: WedgeCharge / Squad[1,2]: DenseHold | Vigilance 5초 경과 |
 
@@ -752,7 +754,11 @@ Encircle ──(플레이어 분산 감지)──► Vigilance ──(5초 경�
        isNewPhase = (tacticalPhase_ != Encircle)
        if (isNewPhase || !encircleSlotsAssigned_):
            tacticalPhase_ = Encircle; encircleSlotsAssigned_ = true
-           DenseAdvance 발행: sectorPos = centroid + {cos(i*2π/3), sin(i*2π/3)} * ENCIRCLE_RADIUS(10)
+           Encircle 명령 발행: 인원 비율 비례 섹터 각도/폭 계산
+             sectorSpan_i = 2π × (memberCount_i / totalMembers)
+             sectorAngle_i = 누적 각도 + sectorSpan_i * 0.5
+             approachRadius = ENCIRCLE_RADIUS (20.0)
+           → 각 Squad의 TacticalSquad가 HoldSlot 명령으로 변환 (greedy nearest-slot)
        // 슬롯 발행 완료 → 재발행 없음 (플레이어 이동 시에도 슬롯 고정)
 
 8. else:                                     // 분산
@@ -780,11 +786,10 @@ hpScore   = 1.0f - (hp / maxHp)      // HP 낮을수록 높음
 | `APPROACH_RADIUS` | 4.5 | 슬롯 배치 반경 (타겟 기준, FlankLeft/Right용) |
 | `VIGILANCE_DURATION` | 5.0s | Vigilance → DivideAndConquer 전환 시간 |
 | `CLUSTER_RADIUS` | 10.0 | 플레이어 분산 판단 반경 |
-| `ENCIRCLE_RADIUS` | 10.0 | 포위 섹터 배치 반경 |
+| `ENCIRCLE_RADIUS` | 20.0 | 포위 섹터 배치 반경 |
 | `TACTIC_HP_THRESHOLD` | 0.70 | 리더 HP 70% 이하 시 전술 발동 |
 | `TACTIC_SQUAD_RATIO` | 0.80 | 부대원 80% 미만 생존 시 전술 발동 |
-| `TACTIC_ACTIVE_DURATION` | 10.0s | 슬롯 도착 후 전술 활성 지속 시간. 이 시간이 지나면 쿨타임 진입. |
-| `TACTIC_COOLDOWN_DURATION` | 8.0s | 쿨타임 길이. 이 기간 동안 전체 Engage 복귀, 슬롯 고정 해제. |
+| `TACTIC_COOLDOWN_DURATION` | 8.0s | 쿨타임 길이. 전체 멤버 슬롯 도착 즉시 진입. Engage 복귀, 슬롯 초기화. |
 
 #### 전술 쿨타임 시스템
 
@@ -793,27 +798,24 @@ hpScore   = 1.0f - (hp / maxHp)      // HP 낮을수록 높음
 ```
 [전술 활성]
   │ 슬롯 발행 (encircleSlotsAssigned_ = true)
-  │ NPC 이동 중 → tacticPhaseTimer_ 정지 (allMembersArrived() == false)
+  │ NPC들 HoldSlot 명령으로 슬롯 위치 이동
   ↓
-[슬롯 도착]
-  │ allMembersArrived() == true → tacticPhaseTimer_ 누적 시작
-  ↓
-[10초 경과 — TACTIC_ACTIVE_DURATION]
-  │ tacticsOnCooldown_ = true
-  │ encircleSlotsAssigned_ = false   ← 다음 사이클용 슬롯 초기화
-  │ 모든 Squad → Engage (정면 공격 복귀)
+[전원 슬롯 도착 — allMembersArrived() == true]
+  │ 즉시: tacticsOnCooldown_ = true
+  │        encircleSlotsAssigned_ = false   ← 다음 사이클용 슬롯 초기화
+  │        모든 Squad → Engage (정면 공격 복귀)
   ↓
 [쿨타임 — TACTIC_COOLDOWN_DURATION (8초)]
   ↓
 [쿨타임 종료]
-  │ tacticsOnCooldown_ = false, tacticPhaseTimer_ = 0
+  │ tacticsOnCooldown_ = false
   └→ 다음 evaluateTactics() 에서 !encircleSlotsAssigned_ 감지
        → 현재 플레이어 위치 기준 새 슬롯 발행
 ```
 
 **핵심 보장:**
 - 슬롯은 한 사이클 내에서 고정 — 플레이어 이동과 무관
-- 타이머는 NPCs가 슬롯에 도착한 이후부터만 누적
+- 슬롯 도착 즉시 쿨타임 진입 (타이머 대기 없음)
 - 쿨타임 종료 시 현재 플레이어 위치를 기준으로 새 포위 슬롯 재발행
 
 ---
@@ -926,19 +928,22 @@ std::vector<DebugTacticalNpcEntry> tacticalNpcs;
 ```
 P1 (HumanControl)  at (0, 0, 0)
 Boss (PlatoonLeader, HP=200)  at (25, 0, 0)
-  Squad A (4명): A1~A4 at (22, 0, -8~-12)   squadId=0  — 우상단
-  Squad B (4명): B1~B4 at (26-28, 0, ±2)    squadId=1  — 정면
-  Squad C (4명): C1~C4 at (22, 0, 5~12)     squadId=2  — 우하단
+  Squad A (20명): A1~A20 at (20~22, 0, -3~-21)   squadId=0  — 우상단 2열
+  Squad B (20명): B1~B20 at (26~30, 0, -4~+5)    squadId=1  — 정면 그리드
+  Squad C (20명): C1~C20 at (20~22, 0, +3~+21)   squadId=2  — 우하단 2열
+총 61명 (Boss 포함)
 ```
 
 **기본 동작 (tacticsUnlocked_ == false)**: 모든 Squad가 Engage 발행.
 
 **전술 발동 조건**: Boss HP ≤ 70% 또는 어느 Squad든 초기 인원의 80% 미만 생존.
 
-**전술 발동 후 (플레이어 1명 = 항상 포위)**:
-- Squad A/B/C → DenseAdvance (120° 간격 섹터, 반경 10에 밀집 대형으로 접근)
+**전술 발동 후 (플레이어 집합 = 포위)**:
+- Squad A/B/C → Encircle 명령 (인원 비율 비례 섹터, 반경 20에 HoldSlot)
+  - 슬롯 도달 후 플레이어 방향 facing 유지, 공격 없음
+  - 전원 도달 즉시 8초 쿨타임 → Engage 복귀 → 재포위
 - Boss → 정면 Chase + Attack
 
-**플레이어 2명 이상 (분산 시)**:
+**플레이어 분산 시 (clusterPlayers ≥ 2)**:
 - Vigilance → 전체 DenseHold (최대 5초)
 - DivideAndConquer → Squad A(WedgeCharge), Squad B/C(DenseHold)

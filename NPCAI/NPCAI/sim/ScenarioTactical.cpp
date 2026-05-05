@@ -22,14 +22,14 @@ namespace sim {
 
 void ScenarioTactical::setup(Room& room) {
     // ── 플레이어 ──────────────────────────────────────────────────────────────
-    auto p1 = std::make_shared<Player>("P1", Vec3{ 0.f, 0.f, 0.f }, 10000.f, 20.f);
+    auto p1 = std::make_shared<Player>("P1", Vec3{ 0.f, 0.f, 0.f }, 300.f, 20.f);
     room.addActor(p1);
     controlledPlayer_ = p1.get();
 
     // ── NPC 공통 설정 ─────────────────────────────────────────────────────────
     TacticalNpcConfig cfg;
     cfg.maxHp             = 80.f;
-    cfg.moveSpeed         = 15.f;
+    cfg.moveSpeed         = 9.f;
     cfg.attackRange       = 2.f;
     cfg.attackDamage      = 10.f;
     cfg.attackWindupTime  = 0.35f;
@@ -39,7 +39,7 @@ void ScenarioTactical::setup(Room& room) {
 
     TacticalNpcConfig leaderCfg = cfg;
     leaderCfg.maxHp       = 200.f;
-    leaderCfg.moveSpeed   = 18.f;
+    leaderCfg.moveSpeed   = 10.f;
     leaderCfg.attackRange = 2.5f;
 
     // ── PlatoonLeader ─────────────────────────────────────────────────────────
@@ -48,54 +48,56 @@ void ScenarioTactical::setup(Room& room) {
     room.addTacticalNpc(leaderPtr);
     room.registerPlatoonLeader(leader);
 
-    // ── Squad A (우상단) ──────────────────────────────────────────────────────
+    // ── Squad A (우상단, 20명) ────────────────────────────────────────────────
     auto squadA = std::make_unique<TacticalSquad>(0, cfg.attackRange);
     TacticalSquad* pSquadA = squadA.get();
     leader->addSquad(pSquadA);
 
-    const char* namesA[] = { "A1", "A2", "A3", "A4" };
-    float posAz[] = { -8.f, -6.f, -10.f, -12.f };
-    for (int i = 0; i < 4; ++i) {
-        auto npc = std::make_shared<TacticalNpc>(namesA[i], Vec3{ 22.f, 0.f, posAz[i] }, cfg);
+    for (int i = 0; i < 20; ++i) {
+        char name[8]; std::snprintf(name, sizeof(name), "A%d", i + 1);
+        float x = 20.f + static_cast<float>(i % 2) * 2.f;
+        float z = -3.f - static_cast<float>(i / 2) * 2.f;
+        auto npc = std::make_shared<TacticalNpc>(name, Vec3{ x, 0.f, z }, cfg);
         npc->setSquadId(0);
         pSquadA->addMember(npc->getId());
         room.addTacticalNpc(npc);
     }
     room.addTacticalSquad(std::move(squadA));
 
-    // ── Squad B (정면) ────────────────────────────────────────────────────────
+    // ── Squad B (정면, 20명) ──────────────────────────────────────────────────
     auto squadB = std::make_unique<TacticalSquad>(1, cfg.attackRange);
     TacticalSquad* pSquadB = squadB.get();
     leader->addSquad(pSquadB);
 
-    const char* namesB[] = { "B1", "B2", "B3", "B4" };
-    float posBx[] = { 26.f, 28.f, 26.f, 28.f };
-    float posBz[] = { -2.f, -2.f,  2.f,  2.f };
-    for (int i = 0; i < 4; ++i) {
-        auto npc = std::make_shared<TacticalNpc>(namesB[i], Vec3{ posBx[i], 0.f, posBz[i] }, cfg);
+    for (int i = 0; i < 20; ++i) {
+        char name[8]; std::snprintf(name, sizeof(name), "B%d", i + 1);
+        float x = 26.f + static_cast<float>(i / 4) * 2.f;
+        float z = -4.f + static_cast<float>(i % 4) * 2.f + (i % 2) * 1.f;
+        auto npc = std::make_shared<TacticalNpc>(name, Vec3{ x, 0.f, z }, cfg);
         npc->setSquadId(1);
         pSquadB->addMember(npc->getId());
         room.addTacticalNpc(npc);
     }
     room.addTacticalSquad(std::move(squadB));
 
-    // ── Squad C (우하단) ──────────────────────────────────────────────────────
+    // ── Squad C (우하단, 20명) ────────────────────────────────────────────────
     auto squadC = std::make_unique<TacticalSquad>(2, cfg.attackRange);
     TacticalSquad* pSquadC = squadC.get();
     leader->addSquad(pSquadC);
 
-    const char* namesC[] = { "C1", "C2", "C3", "C4" };
-    float posCz[] = { 8.f, 6.f, 10.f, 12.f };
-    for (int i = 0; i < 4; ++i) {
-        auto npc = std::make_shared<TacticalNpc>(namesC[i], Vec3{ 22.f, 0.f, posCz[i] }, cfg);
+    for (int i = 0; i < 20; ++i) {
+        char name[8]; std::snprintf(name, sizeof(name), "C%d", i + 1);
+        float x = 20.f + static_cast<float>(i % 2) * 2.f;
+        float z =  3.f + static_cast<float>(i / 2) * 2.f;
+        auto npc = std::make_shared<TacticalNpc>(name, Vec3{ x, 0.f, z }, cfg);
         npc->setSquadId(2);
         pSquadC->addMember(npc->getId());
         room.addTacticalNpc(npc);
     }
     room.addTacticalSquad(std::move(squadC));
 
-    std::cout << "[Sim] ScenarioTactical: P1(1명) + Boss(Leader) + Squad A/B/C 각 4명\n";
-    std::cout << "화살표키로 P1 이동. Boss가 감지 후 3개 부대 밀집 포위 명령.\n";
+    std::cout << "[Sim] ScenarioTactical: P1(1명) + Boss(Leader) + Squad A/B/C 각 20명\n";
+    std::cout << "화살표키로 P1 이동. Boss가 감지 후 3개 부대 포위 명령.\n";
 }
 
 } // namespace sim

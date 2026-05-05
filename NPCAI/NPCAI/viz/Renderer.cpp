@@ -20,6 +20,7 @@ COLORREF Renderer::tacticalStateColor(int state) {
         case 6: return RGB( 50, 200,  80);  // Return        - 초록색
         case 7: return RGB( 40,  40,  40);  // Dead          - 거의 검정
         case 8: return RGB(255, 220,   0);  // HoldSlot      - 노란색 (경계)
+        case 9: return RGB(180, 180, 255);  // CircleGuard   - 연보라 (무적 대기)
     }
     return RGB(255, 255, 255);
 }

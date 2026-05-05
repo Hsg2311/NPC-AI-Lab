@@ -36,18 +36,15 @@ float Player::getAttackProgress() const {
 void Player::update(float dt, Room& room) {
     if (!alive_) return;
 
-    // 공격 선딜/후딜 중에는 이동 불가
-    if (attackState_ == AttackState::None) {
-        Vec3  dir  = moveTarget_ - position_;
-        float dist = dir.length();
-        if (dist >= 0.05f) {
-            facing_ = dir.normalized();
-            float step = moveSpeed_ * dt;
-            if (step >= dist)
-                position_ = moveTarget_;
-            else
-                position_ += facing_ * step;
-        }
+    Vec3  dir  = moveTarget_ - position_;
+    float dist = dir.length();
+    if (dist >= 0.05f) {
+        facing_ = dir.normalized();
+        float step = moveSpeed_ * dt;
+        if (step >= dist)
+            position_ = moveTarget_;
+        else
+            position_ += facing_ * step;
     }
 
     updateAttack(dt, room);

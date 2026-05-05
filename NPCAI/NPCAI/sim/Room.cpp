@@ -357,6 +357,7 @@ DebugSnapshot Room::buildSnapshot() const {
         Vec3 pos    = tnpc->getPosition();
         Vec3 facing = tnpc->getFacing();
         Vec3 slot   = tnpc->getAssignedSlot();
+        auto* leader = dynamic_cast<PlatoonLeader*>(tnpc.get());
         DebugTacticalNpcEntry e;
         e.id             = static_cast<int>(tnpc->getId());
         e.x              = pos.x;
@@ -375,7 +376,7 @@ DebugSnapshot Room::buildSnapshot() const {
         e.windupProgress = tnpc->getWindupProgress();
         e.recoverProgress= tnpc->getRecoverProgress();
         e.squadId        = tnpc->getSquadId();
-        e.isLeader       = (tnpc->typeName() == std::string("PlatoonLeader"));
+        e.isLeader       = (leader != nullptr);
         e.slotX          = slot.x;
         e.slotZ          = slot.z;
         snap.tacticalNpcs.push_back(e);

@@ -41,6 +41,7 @@ struct TacticalCommand {
     Vec3                slotOffset       = {};     // Flank/HoldSlot: 목적지 월드 좌표
     Vec3                slotRefTargetPos = {};     // 슬롯 계산 시점의 타겟 위치 (유효성 체크용)
     float               abandonDist      = 15.f;  // 타겟 이탈 시 슬롯 포기 거리 (Flank 전용)
+    float               speedMult        = 1.f;   // Flank 이동 속도 배율 (동시 도착용)
 };
 
 // ─── TacticalNpcConfig ───────────────────────────────────────────────────────
@@ -119,6 +120,7 @@ protected:
     float separationRadius_;
     float separationWeight_;
 
+    float speedMult_{ 1.f };      // Flank 이동 속도 배율 (동시 도착 보정)
     float windupTimer_{ 0.f };
     float recoverTimer_{ 0.f };
 
@@ -126,7 +128,7 @@ protected:
     float confusedTimer_{ 0.f };
     Vec3  wanderDir_{ 1.f, 0.f, 0.f };
     static constexpr float CONFUSED_DURATION    = 3.f;
-    static constexpr float TACTICAL_SPEED_MULT  = 2.0f;
+    static constexpr float TACTICAL_SPEED_MULT  = 3.0f;
 
     std::vector<Vec3> nearbyCache_;
 };

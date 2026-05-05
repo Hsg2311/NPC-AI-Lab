@@ -49,7 +49,6 @@ private:
     std::vector<int> initialSquadSizes_  {};
     Vec3             lastEncircleCentroid_{};
     bool             encircleSlotsAssigned_{ false };  // 현 사이클에서 슬롯 발행 완료
-    float            tacticPhaseTimer_  { 0.f };
     float            tacticCooldown_    { 0.f };
     bool             tacticsOnCooldown_ { false };
 
@@ -57,11 +56,10 @@ private:
     static constexpr float APPROACH_RADIUS           = 4.5f;
     static constexpr float VIGILANCE_DURATION        = 5.0f;   // 경계 → 각개격파 전환 시간(초)
     static constexpr float CLUSTER_RADIUS            = 10.0f;  // 플레이어 분산 판단 반경
-    static constexpr float ENCIRCLE_RADIUS           = 10.0f;  // 포위 섹터 배치 반경
+    static constexpr float ENCIRCLE_RADIUS           = 50.0f;  // 포위 섹터 배치 반경
     static constexpr float TACTIC_HP_THRESHOLD       = 0.70f;  // 리더 HP 70% 이하 시 전술 발동
     static constexpr float TACTIC_SQUAD_RATIO        = 0.80f;  // 부대원 80% 미만 생존 시 전술 발동
     static constexpr float ENCIRCLE_RECALC_THRESHOLD = 12.0f;  // 포위 재배치 거리 임계값
-    static constexpr float TACTIC_ACTIVE_DURATION   = 10.0f;  // 전술 활성 지속 시간(초)
     static constexpr float TACTIC_COOLDOWN_DURATION =  8.0f;  // 쿨타임 길이(초)
 };
 

@@ -51,8 +51,7 @@ public:
     int  countNpcsTargeting(uint32_t playerId) const;
 
     // 플레이어 공격: 범위 내 생존 NPC + TacticalNpc에게 피해 적용
-    // 반환값: 피해 입힌 대상 수
-    int  applyDamageToActorsInRange(const Vec3& center, float radius, float damage);
+    int  applyDamageToActorsInRange (const Vec3& center, float radius, float damage);
 
     // ── NpcGroup 관리 ─────────────────────────────────────────────────────────
     // 그룹 생성 후 Room이 소유; 반환된 포인터는 Room 생존 기간 동안 유효

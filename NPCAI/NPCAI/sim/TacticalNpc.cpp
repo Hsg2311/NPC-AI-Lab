@@ -89,6 +89,7 @@ void TacticalNpc::consumePendingCommand() {
             assignedSlot_      = pendingCmd_.slotOffset;
             slotRefTargetPos_  = pendingCmd_.slotRefTargetPos;
             abandonDist_       = pendingCmd_.abandonDist;
+            speedMult_         = pendingCmd_.speedMult;
             transitionTo(TacticalNpcState::Flank, "명령: FlankTarget");
             break;
         case TacticalCommandType::HoldSlot:
@@ -275,7 +276,7 @@ void TacticalNpc::updateFlank(float dt, Room& room) {
     Vec3 sepPerp = sep - slotDir * sep.dot(slotDir);
     Vec3 moveDir = (slotDir + sepPerp * separationWeight_).normalized();
     facing_   = moveDir;
-    position_ += moveDir * (moveSpeed_ * TACTICAL_SPEED_MULT * dt);
+    position_ += moveDir * (moveSpeed_ * TACTICAL_SPEED_MULT * speedMult_ * dt);
 }
 
 // ─── HoldSlot ─────────────────────────────────────────────────────────────────
@@ -290,14 +291,20 @@ void TacticalNpc::updateHoldSlot(float dt, Room& room) {
     }
 
     float distToSlot = Vec3::distance(position_, assignedSlot_);
-    if (distToSlot < 0.5f) return;  // 슬롯 도착 — 제자리 유지
+    if (distToSlot < 0.5f) {
+        // 슬롯 도착 — 타겟 방향으로 facing 유지
+        Vec3 dir = target->getPosition() - position_;
+        if (dir.length() > 0.1f) facing_ = dir.normalized();
+        return;
+    }
 
     Vec3 slotDir = (assignedSlot_ - position_).normalized();
     nearbyCache_.clear();
     room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
-    Vec3 sep     = calcSeparationForce(separationRadius_, nearbyCache_);
-    Vec3 sepPerp = sep - slotDir * sep.dot(slotDir);
-    Vec3 moveDir = (slotDir + sepPerp * separationWeight_).normalized();
+    Vec3  sep      = calcSeparationForce(separationRadius_, nearbyCache_);
+    // 슬롯에 가까울수록 분리력 감쇠 → 도착 직전 진동 방지
+    float sepScale = std::min(1.f, distToSlot / separationRadius_);
+    Vec3  moveDir  = (slotDir + sep * (separationWeight_ * sepScale)).normalized();
     facing_   = moveDir;
     position_ += moveDir * (moveSpeed_ * TACTICAL_SPEED_MULT * dt);
 }

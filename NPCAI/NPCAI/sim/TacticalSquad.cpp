@@ -95,13 +95,9 @@ std::vector<Vec3> TacticalSquad::calcEncircleSlots(const Vec3& targetPos,
                                                      int count) const {
     std::vector<Vec3> slots;
     slots.reserve(static_cast<size_t>(count));
-    if (count == 1) {
-        slots.push_back(targetPos + Vec3{ std::cosf(sectorAngle), 0.f,
-                                          std::sinf(sectorAngle) } * radius);
-        return slots;
-    }
-    float arc = sectorSpan / static_cast<float>(count - 1);
-    float start = sectorAngle - sectorSpan * 0.5f;
+    // 섹터를 count 등분 후 각 구획 중앙에 배치 → 인접 Squad 경계 슬롯 겹침 방지
+    float arc   = sectorSpan / static_cast<float>(count);
+    float start = sectorAngle - sectorSpan * 0.5f + arc * 0.5f;
     for (int i = 0; i < count; ++i) {
         float a = start + arc * static_cast<float>(i);
         slots.push_back(targetPos + Vec3{ std::cosf(a), 0.f, std::sinf(a) } * radius);
@@ -239,15 +235,27 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
             std::vector<Vec3> slots = calcEncircleSlots(
                 targetPos, ord.sectorAngle, ord.sectorSpan, ord.approachRadius, count);
 
+            // 각 NPC에게 가장 가까운 미사용 슬롯 배정 (경로 교차 최소화)
+            std::vector<bool> slotUsed(static_cast<size_t>(count), false);
             for (int i = 0; i < count; ++i) {
                 Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
+                if (!a || !a->isAlive()) continue;
+
+                int   bestSlot = -1;
+                float bestDist = -1.f;
+                for (int j = 0; j < count; ++j) {
+                    if (slotUsed[static_cast<size_t>(j)]) continue;
+                    float d = Vec3::distance(a->getPosition(), slots[static_cast<size_t>(j)]);
+                    if (bestDist < 0.f || d < bestDist) { bestDist = d; bestSlot = j; }
+                }
+                if (bestSlot < 0) continue;
+                slotUsed[static_cast<size_t>(bestSlot)] = true;
+
                 if (auto* tnpc = dynamic_cast<TacticalNpc*>(a)) {
                     TacticalCommand cmd;
-                    cmd.type             = TacticalCommandType::FlankTarget;
-                    cmd.targetId         = ord.targetId;
-                    cmd.slotOffset       = slots[static_cast<size_t>(i)];
-                    cmd.slotRefTargetPos = targetPos;
-                    cmd.abandonDist      = ord.approachRadius * 2.f;
+                    cmd.type       = TacticalCommandType::HoldSlot;
+                    cmd.targetId   = ord.targetId;
+                    cmd.slotOffset = slots[static_cast<size_t>(bestSlot)];
                     tnpc->receiveCommand(cmd);
                 }
             }
