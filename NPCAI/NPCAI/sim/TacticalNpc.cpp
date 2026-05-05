@@ -275,7 +275,7 @@ void TacticalNpc::updateFlank(float dt, Room& room) {
     Vec3 sepPerp = sep - slotDir * sep.dot(slotDir);
     Vec3 moveDir = (slotDir + sepPerp * separationWeight_).normalized();
     facing_   = moveDir;
-    position_ += moveDir * (moveSpeed_ * dt);
+    position_ += moveDir * (moveSpeed_ * TACTICAL_SPEED_MULT * dt);
 }
 
 // ─── HoldSlot ─────────────────────────────────────────────────────────────────
@@ -299,7 +299,7 @@ void TacticalNpc::updateHoldSlot(float dt, Room& room) {
     Vec3 sepPerp = sep - slotDir * sep.dot(slotDir);
     Vec3 moveDir = (slotDir + sepPerp * separationWeight_).normalized();
     facing_   = moveDir;
-    position_ += moveDir * (moveSpeed_ * dt);
+    position_ += moveDir * (moveSpeed_ * TACTICAL_SPEED_MULT * dt);
 }
 
 // ─── AlternateWait ────────────────────────────────────────────────────────────
@@ -339,6 +339,18 @@ void TacticalNpc::updateDead() {
     targetId_ = 0;
     if (state_ != TacticalNpcState::Dead)
         transitionTo(TacticalNpcState::Dead, "hp 0");
+}
+
+// ─── isAtSlot ─────────────────────────────────────────────────────────────────
+// Flank: 도착 시 상태 전환되므로 항상 이동 중.
+// HoldSlot: 도착 후에도 상태 유지 → 거리로 판단.
+
+bool TacticalNpc::isAtSlot() const {
+    if (state_ == TacticalNpcState::Flank)
+        return false;
+    if (state_ == TacticalNpcState::HoldSlot)
+        return Vec3::distance(position_, assignedSlot_) < 0.5f;
+    return true;  // 슬롯 이동 중이 아닌 상태
 }
 
 // ─── resolveTarget ────────────────────────────────────────────────────────────

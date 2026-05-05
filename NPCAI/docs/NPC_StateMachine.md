@@ -9,6 +9,7 @@
 > **2026-04-26:** Squad / Platoon 계층 전면 제거. 모든 Npc 클래스 인스턴스는 단독 행동(standalone).
 > **2026-05-01:** 전술 NPC 시스템 추가 (섹션 4). 기존 Npc 클래스는 변경 없음.
 > **2026-05-04:** 홉 고블린 전술 3종 구현 — HoldSlot(8) 상태 추가, DenseHold/DenseAdvance/WedgeCharge 명령 추가, PlatoonLeader 전술 조건부 발동·3단계 전환 로직 구현.
+> **2026-05-05:** 전술 이동 속도 부스트(Flank/HoldSlot 2×) 구현. 전술 쿨타임 시스템 구현(슬롯 도착 후 10초 활성 → 8초 Engage 복귀). 포위 슬롯 고정(플레이어 이동 시 재할당 방지, 쿨타임 후 새 슬롯 발행).
 
 ---
 
@@ -567,9 +568,26 @@ struct TacticalCommand {
 `slotRefTargetPos_`와 `abandonDist_`는 FlankTarget 수신 시 저장된다.
 Flank 이동 중 매 틱 `dist(target, slotRefTargetPos_) > abandonDist_`이면 Chase로 전환한다.
 
-#### Return 이동 특성
+#### 이동 속도 특성
 
-`Return` 상태에서 이동 속도는 `moveSpeed_ * 2.0`이 적용된다.
+| 상태 | 속도 배율 | 비고 |
+|---|---|---|
+| `Return` | × 2.0 | 하드코딩 |
+| `Flank` | × `TACTICAL_SPEED_MULT` (2.0) | 전술 슬롯으로 빠르게 전개 |
+| `HoldSlot` | × `TACTICAL_SPEED_MULT` (2.0) | 경계 슬롯으로 빠르게 전개 |
+| 그 외 | × 1.0 | 기본 속도 |
+
+`TACTICAL_SPEED_MULT`는 `TacticalNpc` 클래스 상수.
+
+#### 슬롯 도착 감지 (`isAtSlot()`)
+
+```
+Flank    → 도착 시 상태가 Chase/AttackWindup으로 전이되므로 항상 false 반환
+HoldSlot → distToSlot < 0.5 이면 true (도착 후에도 상태 유지)
+그 외    → true (슬롯 이동 중 아님)
+```
+
+`PlatoonLeader::allMembersArrived(room)`에서 전체 생존 멤버의 `isAtSlot()`을 확인한다.
 
 ---
 
@@ -658,7 +676,7 @@ slot    = tip − forward * (row * spacing * 1.5) + right * colOffset
 | `FlankLeft / FlankRight` | 명령 수신 시 1회 (`orderDirty_`) | 의도적 플랭크 위치 고정 |
 | `Encircle` | 명령 수신 시 1회 | 포위 위치 고정 |
 | `DenseHold` | 명령 수신 시 1회 | 경계 위치 고정 |
-| `DenseAdvance` | 명령 수신 시 1회 (`orderDirty_`) | PlatoonLeader가 centroid 변화 감지 시 재발행 |
+| `DenseAdvance` | 명령 수신 시 1회 (`orderDirty_`) | PlatoonLeader가 사이클 시작 또는 쿨타임 종료 시에만 재발행 |
 | `WedgeCharge` | **매 틱** | 돌진 — 타겟이 이동하므로 추적 필요 |
 
 ```
@@ -716,8 +734,8 @@ Encircle ──(플레이어 분산 감지)──► Vigilance ──(5초 경�
 
 **분산 판단**: `clusterPlayers()` — O(N²) 연결 컴포넌트. 플레이어 간 거리 ≤ `CLUSTER_RADIUS(10)` 이면 같은 군집으로 판정.
 
-**포위 재발행 조건**: `DenseAdvance`는 매 1초 evaluateTactics 호출마다 발행하지 않는다.
-`lastEncircleCentroid_` 를 기록해 플레이어 centroid 이동거리가 `ENCIRCLE_RECALC_THRESHOLD(12)` 초과 시에만 재발행한다.
+**포위 슬롯 고정**: `encircleSlotsAssigned_` 플래그로 한 사이클 내 슬롯을 **1회만** 발행한다.
+플레이어가 이동해도 슬롯은 재할당되지 않으며, 쿨타임 종료 후 다음 사이클 시작 시에만 새 위치로 재발행한다.
 
 #### evaluateTactics() — 전술 평가 (1초 주기)
 
@@ -726,16 +744,16 @@ Encircle ──(플레이어 분산 감지)──► Vigilance ──(5초 경�
 2. selectPrimaryTarget(room) — 없으면 전체 Idle, 리턴
 3. 리더 자신: targetId_ 갱신, Idle/Return이면 Chase 전환
 4. checkTacticsConditions() → tacticsUnlocked_ = true (조건 충족 시, 단방향)
-5. tacticsUnlocked_ == false → 전체 Engage, 리턴
+5. tacticsUnlocked_ == false || tacticsOnCooldown_ → 전체 Engage, 리턴
 
 6. scattered = (clusterPlayers(room) >= 2)
 
 7. if (!scattered):                          // 포위
        isNewPhase = (tacticalPhase_ != Encircle)
-       centroidShifted = dist(centroid, lastEncircleCentroid_) > 12.0
-       if (isNewPhase || centroidShifted):
-           tacticalPhase_ = Encircle
+       if (isNewPhase || !encircleSlotsAssigned_):
+           tacticalPhase_ = Encircle; encircleSlotsAssigned_ = true
            DenseAdvance 발행: sectorPos = centroid + {cos(i*2π/3), sin(i*2π/3)} * ENCIRCLE_RADIUS(10)
+       // 슬롯 발행 완료 → 재발행 없음 (플레이어 이동 시에도 슬롯 고정)
 
 8. else:                                     // 분산
        Encircle → Vigilance 전환: DenseHold 발행, vigilanceElapsed_ = 0
@@ -765,7 +783,38 @@ hpScore   = 1.0f - (hp / maxHp)      // HP 낮을수록 높음
 | `ENCIRCLE_RADIUS` | 10.0 | 포위 섹터 배치 반경 |
 | `TACTIC_HP_THRESHOLD` | 0.70 | 리더 HP 70% 이하 시 전술 발동 |
 | `TACTIC_SQUAD_RATIO` | 0.80 | 부대원 80% 미만 생존 시 전술 발동 |
-| `ENCIRCLE_RECALC_THRESHOLD` | 12.0 | 포위 재배치 거리 임계값 |
+| `TACTIC_ACTIVE_DURATION` | 10.0s | 슬롯 도착 후 전술 활성 지속 시간. 이 시간이 지나면 쿨타임 진입. |
+| `TACTIC_COOLDOWN_DURATION` | 8.0s | 쿨타임 길이. 이 기간 동안 전체 Engage 복귀, 슬롯 고정 해제. |
+
+#### 전술 쿨타임 시스템
+
+전술이 한 번 발동된 이후에는 아래 사이클을 반복한다.
+
+```
+[전술 활성]
+  │ 슬롯 발행 (encircleSlotsAssigned_ = true)
+  │ NPC 이동 중 → tacticPhaseTimer_ 정지 (allMembersArrived() == false)
+  ↓
+[슬롯 도착]
+  │ allMembersArrived() == true → tacticPhaseTimer_ 누적 시작
+  ↓
+[10초 경과 — TACTIC_ACTIVE_DURATION]
+  │ tacticsOnCooldown_ = true
+  │ encircleSlotsAssigned_ = false   ← 다음 사이클용 슬롯 초기화
+  │ 모든 Squad → Engage (정면 공격 복귀)
+  ↓
+[쿨타임 — TACTIC_COOLDOWN_DURATION (8초)]
+  ↓
+[쿨타임 종료]
+  │ tacticsOnCooldown_ = false, tacticPhaseTimer_ = 0
+  └→ 다음 evaluateTactics() 에서 !encircleSlotsAssigned_ 감지
+       → 현재 플레이어 위치 기준 새 슬롯 발행
+```
+
+**핵심 보장:**
+- 슬롯은 한 사이클 내에서 고정 — 플레이어 이동과 무관
+- 타이머는 NPCs가 슬롯에 도착한 이후부터만 누적
+- 쿨타임 종료 시 현재 플레이어 위치를 기준으로 새 포위 슬롯 재발행
 
 ---
 

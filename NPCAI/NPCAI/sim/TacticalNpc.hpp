@@ -78,6 +78,7 @@ public:
     float            getSeparationRadius() const { return separationRadius_; }
     float            getWindupProgress()   const;
     float            getRecoverProgress()  const;
+    bool             isAtSlot()           const;  // Flank/HoldSlot 슬롯 도착 여부
 
     void setSquadId(int id) { squadId_ = id; }
 
@@ -124,7 +125,8 @@ protected:
     // 방황 타이머 (Confused 상태용)
     float confusedTimer_{ 0.f };
     Vec3  wanderDir_{ 1.f, 0.f, 0.f };
-    static constexpr float CONFUSED_DURATION = 3.f;
+    static constexpr float CONFUSED_DURATION    = 3.f;
+    static constexpr float TACTICAL_SPEED_MULT  = 2.0f;
 
     std::vector<Vec3> nearbyCache_;
 };

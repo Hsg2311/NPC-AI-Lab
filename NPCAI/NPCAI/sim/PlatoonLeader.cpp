@@ -43,6 +43,25 @@ void PlatoonLeader::update(float dt, Room& room) {
     if (tacticalPhase_ == TacticalPhase::Vigilance)
         vigilanceElapsed_ += dt;
 
+    // 쿨타임 관리
+    if (tacticsOnCooldown_) {
+        tacticCooldown_ -= dt;
+        if (tacticCooldown_ <= 0.f) {
+            tacticsOnCooldown_ = false;
+            tacticPhaseTimer_  = 0.f;
+            Logger::get().log(name_, "전술 쿨타임 종료 — 전술 재활성");
+        }
+    } else if (tacticsUnlocked_ && allMembersArrived(room)) {
+        tacticPhaseTimer_ += dt;
+        if (tacticPhaseTimer_ >= TACTIC_ACTIVE_DURATION) {
+            tacticsOnCooldown_     = true;
+            tacticCooldown_        = TACTIC_COOLDOWN_DURATION;
+            tacticPhaseTimer_      = 0.f;
+            encircleSlotsAssigned_ = false;
+            Logger::get().log(name_, "전술 쿨타임 시작 — Engage 복귀");
+        }
+    }
+
     // 전술 평가 (주기적)
     tacticTimer_ -= dt;
     if (tacticTimer_ <= 0.f) {
@@ -100,7 +119,7 @@ void PlatoonLeader::evaluateTactics(Room& room) {
 
     int numSquads = static_cast<int>(liveSquads.size());
 
-    if (!tacticsUnlocked_) {
+    if (!tacticsUnlocked_ || tacticsOnCooldown_) {
         // ── 기본: Engage ──────────────────────────────────────────────────────
         for (auto* sq : liveSquads) {
             SquadOrder ord;
@@ -115,9 +134,8 @@ void PlatoonLeader::evaluateTactics(Room& room) {
 
     if (!scattered) {
         // ── (가) 포위 ─────────────────────────────────────────────────────────
-        Vec3 centroid = calcPlayerCentroid(room);
+        Vec3 centroid   = calcPlayerCentroid(room);
         bool isNewPhase = (tacticalPhase_ != TacticalPhase::Encircle);
-        bool centroidShifted = Vec3::distance(centroid, lastEncircleCentroid_) > ENCIRCLE_RECALC_THRESHOLD;
 
         if (isNewPhase) {
             Logger::get().log(name_, "전술 전환: 포위");
@@ -125,8 +143,11 @@ void PlatoonLeader::evaluateTactics(Room& room) {
             vigilanceElapsed_ = 0.f;
         }
 
-        if (isNewPhase || centroidShifted) {
-            lastEncircleCentroid_ = centroid;
+        // 현 사이클에서 아직 슬롯을 발행하지 않은 경우에만 재발행
+        // (플레이어 이동으로 인한 재할당 방지 — 쿨타임 후 encircleSlotsAssigned_ 가 리셋)
+        if (isNewPhase || !encircleSlotsAssigned_) {
+            lastEncircleCentroid_  = centroid;
+            encircleSlotsAssigned_ = true;
 
             float angleStep = (numSquads > 1)
                 ? (2.f * 3.14159265f / static_cast<float>(numSquads))
@@ -145,7 +166,7 @@ void PlatoonLeader::evaluateTactics(Room& room) {
                 liveSquads[static_cast<size_t>(i)]->receiveOrder(ord);
             }
         }
-        // centroid 변화 없음 → 재발행 없음 (NPC 현재 상태 유지)
+        // 슬롯 이미 발행됨 → 재발행 없음 (NPC 현재 상태 유지)
 
     } else {
         // ── 분산 상태 ─────────────────────────────────────────────────────────
@@ -268,6 +289,22 @@ float PlatoonLeader::evaluatePlayerScore(const Player* p) const {
     float distScore = 1.f / (1.f + dist);
     float hpScore   = 1.f - (p->getHp() / p->getMaxHp());
     return distScore * 0.5f + hpScore * 0.5f;
+}
+
+// ─── allMembersArrived ────────────────────────────────────────────────────────
+// 모든 생존 멤버가 슬롯에 도착했는지 확인. 도착 전엔 tacticPhaseTimer_ 정지.
+
+bool PlatoonLeader::allMembersArrived(const Room& room) const {
+    for (auto* sq : squads_) {
+        for (uint32_t id : sq->getMembers()) {
+            Actor* a = room.findActorById(id);
+            if (!a || !a->isAlive()) continue;
+            auto* tnpc = dynamic_cast<TacticalNpc*>(a);
+            if (!tnpc) continue;
+            if (!tnpc->isAtSlot()) return false;
+        }
+    }
+    return true;
 }
 
 } // namespace sim
