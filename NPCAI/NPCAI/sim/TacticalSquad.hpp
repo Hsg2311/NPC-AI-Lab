@@ -19,6 +19,7 @@ enum class SquadOrderType {
     DenseHold,       // 밀집 대형, 현재 위치 고정 (경계/각개격파 후방부대)
     DenseAdvance,    // 밀집 대형, sectorPos로 이동 후 교전 (포위)
     WedgeCharge,     // 쐐기 대형, 타겟 향해 돌진 (각개격파 공격대)
+    BoxAdvance,      // 박스 대형 진격: sectorPos(상대 오프셋) 슬롯으로 이동, 전투 중 NPC 유지
 };
 
 struct SquadOrder {
@@ -31,12 +32,13 @@ struct SquadOrder {
     float          approachRadius    = 5.f;   // Flank/Encircle: 타겟 기준 접근 반경
     Vec3           leaderPos         = {};    // Flank 방향 계산용 / DenseAdvance: 플레이어 센트로이드
     Vec3           sectorPos         = {};    // DenseAdvance: 부대 이동 목표 섹터 월드 좌표
+    Vec3           formationTargetPos= {};    // BoxAdvance: 대형 시작 시점의 고정 타겟 위치
 };
 
 // ─── TacticalSquad ───────────────────────────────────────────────────────────
 class TacticalSquad {
 public:
-    TacticalSquad(int squadId, float memberAttackRange);
+    TacticalSquad(int squadId, float memberAttackRange, float memberSeparationRadius);
 
     // ── 멤버 관리 ─────────────────────────────────────────────────────────────
     void addMember   (uint32_t npcId);
@@ -59,6 +61,9 @@ public:
     // PlatoonLeader::evaluateTactics()에서 isEmpty() 평가 전 호출
     void removeDeadMembers(Room& room);
 
+    // BoxAdvance 중 leaderPos 갱신 (기존 호출 호환용)
+    void updateBoxLeaderPos(const Vec3& pos);
+
 private:
     void pushCommandsToMembers(Room& room);
 
@@ -72,6 +77,7 @@ private:
 
     int                  squadId_;
     float                memberAttackRange_;
+    float                memberSeparationRadius_;
     std::vector<uint32_t> memberIds_;
     SquadOrder           currentOrder_{};
     bool                 orderDirty_{ false };  // 새 명령 수신 플래그

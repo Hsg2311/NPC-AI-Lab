@@ -48,14 +48,34 @@ void PlatoonLeader::update(float dt, Room& room) {
         tacticCooldown_ -= dt;
         if (tacticCooldown_ <= 0.f) {
             tacticsOnCooldown_ = false;
-            Logger::get().log(name_, "전술 쿨타임 종료 — 전술 재활성");
+            boxAdvanceActive_  = true;   // 쿨타임 종료 후 박스 대형 재개
+            boxAdvanceOrderIssued_ = false;
+            Logger::get().log(name_, "전술 쿨타임 종료 — 박스 대형 재개");
         }
     } else if (tacticsUnlocked_ && encircleSlotsAssigned_ && allMembersArrived(room)) {
-        // 포위 완성 → 즉시 Engage 전환 후 쿨타임
+        // 포위 완성 → 쿨타임 진입
         tacticsOnCooldown_     = true;
         tacticCooldown_        = TACTIC_COOLDOWN_DURATION;
         encircleSlotsAssigned_ = false;
-        Logger::get().log(name_, "포위 완성 — Engage 전환, 쿨타임 진입");
+        Logger::get().log(name_, "포위 완성 — 쿨타임 진입");
+    }
+
+    // ── 박스 대형 전환 감지 (tacticsUnlocked_ = false 경로) ──────────────────
+    Player* primary = selectPrimaryTarget(room);
+
+    if (!tacticsUnlocked_ && !tacticsOnCooldown_ && primary) {
+        if (boxAdvanceActive_ && allMembersArrived(room)) {
+            // 박스 대형 완성 → Engage 전환
+            boxAdvanceActive_ = false;
+            Logger::get().log(name_, "박스 대형 완성 — Engage 전환");
+            for (auto* sq : squads_) {
+                if (sq->isEmpty()) continue;
+                SquadOrder ord;
+                ord.type     = SquadOrderType::Engage;
+                ord.targetId = primaryTargetId_;
+                sq->receiveOrder(ord);
+            }
+        }
     }
 
     // 전술 평가 (주기적)
@@ -65,9 +85,31 @@ void PlatoonLeader::update(float dt, Room& room) {
         evaluateTactics(room);
     }
 
-    // 자체 전투 FSM
+    // ── 보스 이동 ─────────────────────────────────────────────────────────────
     pendingCmd_.type = TacticalCommandType::None;
-    TacticalNpc::update(dt, room);
+
+    if (boxAdvanceActive_) {
+        // BoxAdvance 중: 보스 이동 없음, 플레이어 응시
+        if (primary)
+            facing_ = (primary->getPosition() - position_).normalized();
+        return;
+    }
+
+    // Engage / Tactics 중: 플레이어와 거리 유지
+    if (primary) {
+        float dist    = Vec3::distance(position_, primary->getPosition());
+        Vec3 toPlayer = (primary->getPosition() - position_).normalized();
+        if (dist > BOSS_KEEP_DIST + BOSS_KEEP_TOL) {
+            position_ += toPlayer * moveSpeed_ * dt;
+            facing_    = toPlayer;
+        } else if (dist < BOSS_KEEP_DIST - BOSS_KEEP_TOL) {
+            position_ -= toPlayer * moveSpeed_ * dt;
+            facing_    = toPlayer;
+        } else {
+            facing_ = toPlayer;
+        }
+    }
+    // TacticalNpc::update() 호출하지 않음 — 보스는 직접 공격 안 함
 }
 
 // ─── evaluateTactics ─────────────────────────────────────────────────────────
@@ -114,12 +156,56 @@ void PlatoonLeader::evaluateTactics(Room& room) {
     int numSquads = static_cast<int>(liveSquads.size());
 
     if (!tacticsUnlocked_ || tacticsOnCooldown_) {
-        // ── 기본: Engage ──────────────────────────────────────────────────────
-        for (auto* sq : liveSquads) {
-            SquadOrder ord;
-            ord.type     = SquadOrderType::Engage;
-            ord.targetId = primary->getId();
-            sq->receiveOrder(ord);
+        primaryTargetId_ = primary->getId();
+        if (boxAdvanceActive_) {
+            if (boxAdvanceOrderIssued_) return;
+
+            boxAdvanceTargetPos_ = primary->getPosition();
+
+            // ── 박스 대형 진격 ────────────────────────────────────────────────
+            // right 방향 투영값 기준으로 부대 정렬 → 반대편 이동 방지
+            Vec3 toTgt2  = boxAdvanceTargetPos_ - position_;
+            float tLen2  = toTgt2.length();
+            Vec3  fwd2   = (tLen2 > 0.01f) ? (toTgt2 / tLen2) : Vec3{ 1.f, 0.f, 0.f };
+            Vec3  rgt2{ -fwd2.z, 0.f, fwd2.x };
+
+            std::vector<std::pair<float, TacticalSquad*>> sqByLat;
+            sqByLat.reserve(static_cast<size_t>(numSquads));
+            for (auto* sq : liveSquads) {
+                Vec3 sum{}; int cnt = 0;
+                for (uint32_t mid : sq->getMembers()) {
+                    Actor* ma = room.findActorById(mid);
+                    if (ma && ma->isAlive()) { sum += ma->getPosition(); ++cnt; }
+                }
+                Vec3 cen = (cnt > 0) ? (sum / static_cast<float>(cnt)) : position_;
+                sqByLat.push_back({ cen.dot(rgt2), sq });
+            }
+            std::sort(sqByLat.begin(), sqByLat.end(),
+                [](const std::pair<float, TacticalSquad*>& a,
+                   const std::pair<float, TacticalSquad*>& b) {
+                    return a.first < b.first;
+                });
+
+            auto offsets = calcSquadBoxOffsets(numSquads);
+            for (int i = 0; i < numSquads; ++i) {
+                SquadOrder ord;
+                ord.type           = SquadOrderType::BoxAdvance;
+                ord.targetId       = primaryTargetId_;
+                ord.sectorPos      = offsets[static_cast<size_t>(i)];
+                ord.leaderPos      = position_;
+                ord.formationTargetPos = boxAdvanceTargetPos_;
+                ord.approachRadius = BOX_APPROACH_DIST;
+                sqByLat[static_cast<size_t>(i)].second->receiveOrder(ord);
+            }
+            boxAdvanceOrderIssued_ = true;
+        } else {
+            // ── Engage 유지 (박스 완성 후 전투 중) ────────────────────────────
+            for (auto* sq : liveSquads) {
+                SquadOrder ord;
+                ord.type     = SquadOrderType::Engage;
+                ord.targetId = primaryTargetId_;
+                sq->receiveOrder(ord);
+            }
         }
         return;
     }
@@ -308,6 +394,31 @@ bool PlatoonLeader::allMembersArrived(const Room& room) const {
         }
     }
     return true;
+}
+
+// ─── calcSquadBoxOffsets ──────────────────────────────────────────────────────
+// numSquads개 부대의 상대 오프셋 반환.
+// x=우방향, z=깊이방향 — TacticalSquad가 매 틱 절대 좌표로 변환.
+
+std::vector<Vec3> PlatoonLeader::calcSquadBoxOffsets(int numSquads) const {
+    int rows = static_cast<int>(std::max(1.f, std::floorf(std::sqrtf(static_cast<float>(numSquads)))));
+    int cols = (numSquads + rows - 1) / rows;
+
+    std::vector<Vec3> offsets;
+    offsets.reserve(static_cast<size_t>(numSquads));
+    for (int i = 0; i < numSquads; ++i) {
+        int   col    = i % cols;
+        int   row    = i / cols;
+        float colOff     = (static_cast<float>(col) - static_cast<float>(cols - 1) * 0.5f) * BOX_SQUAD_SPACING;
+        float rowOff     = (static_cast<float>(row) - static_cast<float>(rows - 1) * 0.5f) * BOX_SQUAD_SPACING;
+        float halfCols   = static_cast<float>(cols - 1) * 0.5f;
+        float latFrac    = (cols > 1)
+            ? std::abs(static_cast<float>(col) - halfCols) / halfCols
+            : 0.f;
+        float arcZ       = rowOff - BOX_ARC_DEPTH * latFrac;  // 측면 부대를 플레이어 방향으로 당김
+        offsets.push_back(Vec3{ colOff, 0.f, arcZ });
+    }
+    return offsets;
 }
 
 } // namespace sim

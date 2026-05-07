@@ -1,503 +1,543 @@
 # Tactical NPC 시스템 구조
 
-> 작성: 2026-05-06
-> 대상 파일: `sim/PlatoonLeader`, `sim/TacticalSquad`, `sim/TacticalNpc`
+> 갱신: 2026-05-07  
+> 대상: `sim/PlatoonLeader`, `sim/TacticalSquad`, `sim/TacticalNpc`, `sim/Room`, `sim/ScenarioTactical`
 
-전술 NPC 시스템은 **3계층 구조**다.
-각 계층은 서로 다른 추상 수준에서 동작하며, 위에서 아래로 단방향으로 명령을 전달한다.
+Tactical NPC 시스템은 **지휘관-분대-개별 NPC**의 3계층 구조로 구성된다.
+상위 계층은 전략적 판단을 하고, 하위 계층은 이를 위치와 상태 전이로 변환한다.
 
-```
-PlatoonLeader   ← 전술 판단. "어떤 전술을 쓸 것인가"
-      │  SquadOrder (매 1초)
-      ▼
-TacticalSquad   ← 대형 변환. "어느 위치에 배치할 것인가"
-      │  TacticalCommand (매 틱 또는 명령 수신 시)
-      ▼
-TacticalNpc     ← 개별 행동. "나는 지금 무엇을 할 것인가"
+```text
+PlatoonLeader
+  전술 판단: 어떤 목표를 공격할지, 어떤 전술을 발동할지 결정
+  └─ SquadOrder
+
+TacticalSquad
+  대형 변환: SquadOrder를 실제 슬롯 좌표로 변환
+  └─ TacticalCommand
+
+TacticalNpc
+  개별 실행: 명령을 소비하고 FSM으로 이동/공격/대기 수행
 ```
 
 ---
 
-## 1. tick() 내 업데이트 순서
+## 1. 시뮬레이션 갱신 순서
 
-`Room::tick(dt)` 안에서 아래 순서로 실행된다. **순서가 곧 설계 의도**다.
+`Room::tick(dt)`는 전술 계층이 같은 틱 안에서 지휘 → 대형 계산 → NPC 실행까지 끝나도록 순서를 고정한다.
 
-```
-7a. updatePlatoonLeaders(dt)
-    └─ PlatoonLeader::update()
-         ├─ evaluateTactics() 호출 (매 1초 간격)
-         │   └─ 각 TacticalSquad에 SquadOrder 발행
-         └─ 자체 전투 FSM (Chase / AttackWindup / AttackRecover)
-
-7b. updateTacticalSquads(dt)
-    └─ TacticalSquad::update()
-         ├─ removeDeadMembers()
-         └─ orderDirty_ == true → pushCommandsToMembers()
-              └─ 각 TacticalNpc에 TacticalCommand 발행
-
-7c. updateTacticalNpcMembers(dt)
-    └─ TacticalNpc::update()   (PlatoonLeader 제외)
-         ├─ consumePendingCommand()  ← 7b에서 저장된 명령 소비
-         └─ 현재 state_ 에 맞는 updateXxx() 실행
+```text
+1. Logger tick 동기화
+2. DummyPlayerController 갱신
+3. Player 업데이트
+4. NpcGroup 공유 시야 메모리 만료
+5. livingPlayers / aggroCount / spatialGrid 캐시 재구성
+6. 일반 Npc 업데이트
+7. PlatoonLeader 업데이트
+8. TacticalSquad 업데이트
+9. TacticalNpc 멤버 업데이트 (PlatoonLeader 제외)
+10. tick 증가
 ```
 
-이 순서 덕분에 같은 틱 안에서 리더 결정 → 스쿼드 변환 → NPC 실행이 완료된다.
+전술 NPC 입장에서는 7~9번이 핵심이다.
+
+```text
+PlatoonLeader::update()
+  └─ evaluateTactics()가 SquadOrder 발행
+
+TacticalSquad::update()
+  └─ SquadOrder를 TacticalCommand로 변환
+
+TacticalNpc::update()
+  └─ pendingCmd_ 소비 후 FSM 실행
+```
 
 ---
 
-## 2. PlatoonLeader — 전술 평가
+## 2. 시나리오 구성
 
-### 2-1. evaluateTactics() 호출 주기
+`ScenarioTactical`은 전술 AI 검증용 시나리오다.
 
-`PlatoonLeader::update()`에서 `tacticTimer_`를 감산하고, 0 이하가 되면 `evaluateTactics()`를 호출한다.
+| 구성 요소 | 수량 | 초기 위치 / 설정 |
+|---|---:|---|
+| Player P1 | 1 | `(0, 0, 0)`, HP 300, 이동 속도 20 |
+| Boss / PlatoonLeader | 1 | `(50, 0, 0)`, HP 200 |
+| Squad A | 20 | 우상단 배치 |
+| Squad B | 20 | 정면 배치 |
+| Squad C | 20 | 우하단 배치 |
 
-```cpp
-tacticTimer_ -= dt;
-if (tacticTimer_ <= 0.f) {
-    tacticTimer_ = TACTIC_INTERVAL;   // 1.0초
-    evaluateTactics(room);
-}
+일반 TacticalNpc 기본값:
+
+| 파라미터 | 값 |
+|---|---:|
+| `maxHp` | 80 |
+| `moveSpeed` | 10 |
+| `attackRange` | 2 |
+| `attackDamage` | 10 |
+| `attackWindupTime` | 0.35s |
+| `attackRecoverTime` | 0.70s |
+| `separationRadius` | 6 |
+| `separationWeight` | 1.5 |
+
+Boss는 같은 설정을 기반으로 HP 200, 공격 사거리 2.5를 사용한다.
+현재 Boss는 직접 공격 FSM을 돌리지 않고, 플레이어와 거리를 유지하며 Squad 지휘에 집중한다.
+
+---
+
+## 3. PlatoonLeader
+
+### 3-1. 역할
+
+`PlatoonLeader`는 `TacticalNpc`를 상속하지만, 일반 멤버처럼 자율 전투를 수행하지 않는다.
+주요 책임은 다음과 같다.
+
+- 생존 Squad 목록 유지
+- 주 타겟 플레이어 선택
+- 초기 박스 대형 발행
+- 전술 발동 조건 검사
+- 포위 / 경계 / 각개격파 페이즈 전환
+- 리더 사망 시 모든 Squad에 `Confused` 명령 발행
+
+### 3-2. 타겟 선택
+
+Boss는 살아 있는 모든 플레이어를 평가해 점수가 가장 높은 플레이어를 주 타겟으로 삼는다.
+
+```text
+distScore = 1 / (1 + distance(bossPos, playerPos))
+hpScore   = 1 - playerHp / playerMaxHp
+score     = 0.5 * distScore + 0.5 * hpScore
 ```
 
-전술 평가는 **1초에 1번**만 한다. 매 틱 하지 않는 이유는 슬롯 재계산 비용과 NPC 상태 안정성 때문이다.
+현재 시나리오에서는 플레이어가 1명이므로 항상 P1이 선택된다.
 
-### 2-2. evaluateTactics() 전체 흐름
+### 3-3. 초기 BoxAdvance 대형
 
-```
-① 사망 멤버 제거 + liveSquads 수집
-        │
-        ▼
-② 플레이어 선택 (selectPrimaryTarget)
-   → 없으면 전체 Idle 명령 후 종료
-        │
-        ▼
-③ 리더 자신의 targetId_ 갱신 (항상 primary 추격)
-        │
-        ▼
-④ 전술 잠금 해제 확인 (checkTacticsConditions)
-   tacticsUnlocked_ = false 라면 → 전체 Engage 발행 후 종료
-        │
-        ▼
-⑤ 쿨타임 확인
-   tacticsOnCooldown_ == true 라면 → 전체 Engage 발행 후 종료
-        │
-        ▼
-⑥ 플레이어 분산 여부 판단 (clusterPlayers)
-   │
-   ├─ 집합(군집 1개) → 포위(Encircle) 분기
-   └─ 분산(군집 2개+) → 경계/각개격파 분기
+시뮬레이션 시작 시 `boxAdvanceActive_ = true`이다.
+전술이 아직 발동되지 않았거나 전술 쿨타임 중이면 Boss는 먼저 Squad 단위의 박스 대형을 만든다.
+
+중요한 점은 **BoxAdvance 목표 위치는 대형 시작 시점에 한 번 고정**된다는 것이다.
+
+```text
+boxAdvanceTargetPos_ = currentPlayerPosition
+boxAdvanceOrderIssued_ = true
 ```
 
-### 2-3. 전술 잠금 해제 조건 (checkTacticsConditions)
+이후 플레이어가 움직여도 이미 발행된 BoxAdvance 슬롯은 재계산하지 않는다.
+따라서 NPC들은 계속 흔들리는 플레이어 위치가 아니라, 최초에 잡힌 대형 위치로 이동한다.
 
-전술은 초기에 잠겨 있다(`tacticsUnlocked_ = false`). 아래 중 하나라도 충족되면 영구 잠금 해제된다.
+BoxAdvance가 완료되면:
 
-| 조건 | 임계값 상수 |
-|---|---|
-| 리더 HP ≤ maxHp × 0.70 | `TACTIC_HP_THRESHOLD = 0.70f` |
-| 어느 Squad든 생존 비율 < 초기 인원 × 0.80 | `TACTIC_SQUAD_RATIO = 0.80f` |
-
-잠금 해제는 단방향(`false → true`)이다. 조건이 사라져도 다시 잠기지 않는다.
-
-### 2-4. 쿨타임 시스템
-
-```
-[전술 발동] → 슬롯 발행 (encircleSlotsAssigned_ = true)
-                   │
-         NPC들 슬롯으로 이동 중
-                   │
-     allMembersArrived() == true
-                   │ 즉시
-         tacticsOnCooldown_ = true
-         tacticCooldown_ = 8.0초
-         encircleSlotsAssigned_ = false
-         모든 Squad → Engage
-                   │
-         8초 경과
-                   │
-         tacticsOnCooldown_ = false
-                   │
-         다음 evaluateTactics()에서
-         !encircleSlotsAssigned_ 감지
-         → 현재 플레이어 위치 기준 새 슬롯 발행
+```text
+allMembersArrived() == true
+  → boxAdvanceActive_ = false
+  → 모든 Squad에 Engage 명령 발행
 ```
 
-`allMembersArrived()`는 모든 생존 Squad 멤버의 `TacticalNpc::isAtSlot()`을 확인한다.
+### 3-4. BoxAdvance 슬롯 기준
 
-### 2-5. TacticalPhase 전환
+고정된 플레이어 위치를 `P0`, Boss 위치를 `B`라고 할 때:
 
-```
-         플레이어 집합
-              │
-         ┌────▼────┐
-         │Encircle │◄──────────────────────────┐
-         └────┬────┘     플레이어 다시 집합      │
-              │ 플레이어 분산                    │
-         ┌────▼─────┐                          │
-         │Vigilance │                          │
-         └────┬─────┘                          │
-              │ 5초 경과                        │
-         ┌────▼─────────────┐                  │
-         │DivideAndConquer  │──────────────────┘
-         └──────────────────┘
+```text
+forward = normalize(P0 - B)
+right   = (-forward.z, 0, forward.x)
 ```
 
-각 페이즈가 발행하는 SquadOrder:
+Squad별 상대 오프셋은 `calcSquadBoxOffsets(numSquads)`로 계산한다.
+3개 Squad일 때 개념적으로는 좌측, 중앙, 우측에 배치된다.
 
-| 페이즈 | Squad 명령 | 조건 |
+```text
+cols = ceil(numSquads / rows)
+rows = floor(sqrt(numSquads))
+
+colOff  = (col - (cols - 1) / 2) * BOX_SQUAD_SPACING
+rowOff  = (row - (rows - 1) / 2) * BOX_SQUAD_SPACING
+latFrac = abs(col - (cols - 1) / 2) / ((cols - 1) / 2)
+arcZ    = rowOff - BOX_ARC_DEPTH * latFrac
+
+sectorPos = (colOff, 0, arcZ)
+```
+
+각 Squad 중심은 다음 식으로 구한다.
+
+```text
+halfDepth   = (rowsInSquad - 1) * 0.5 * memberSeparationRadius
+squadCenter = P0
+            - forward * BOX_APPROACH_DIST
+            + right   * sectorPos.x
+            - forward * sectorPos.z
+            - forward * halfDepth
+```
+
+이후 `calcDenseSlots(squadCenter, faceDir, count)`가 Squad 내부의 격자 슬롯을 만든다.
+
+### 3-5. 전술 발동 조건
+
+전술은 처음부터 켜져 있지 않고, 다음 조건 중 하나를 만족하면 영구적으로 해금된다.
+
+| 조건 | 식 | 상수 |
 |---|---|---|
-| `Encircle` | `Encircle` — 비례 섹터 포위 | 플레이어 군집 = 1 |
-| `Vigilance` | `DenseHold` — 현재 위치 유지 | 플레이어 군집 ≥ 2 (전환 직후) |
-| `DivideAndConquer` | Squad[0]: `WedgeCharge`, Squad[1+]: `DenseHold` | Vigilance 5초 후 |
+| Boss 체력 감소 | `bossHp / bossMaxHp < 0.70` | `TACTIC_HP_THRESHOLD` |
+| Squad 피해 누적 | `aliveMembers / initialMembers < 0.80` | `TACTIC_SQUAD_RATIO` |
 
-### 2-6. SquadOrder 발행 — Encircle 예시 (3개 부대)
+현재 구현은 전술 해금 후 다시 잠그지 않는다.
 
-```cpp
-// 전체 인원 수 집계
-int totalMembers = 합(liveSquads[i]->getMembers().size());
+### 3-6. 전술 페이즈
 
-// 각 Squad에 인원 비율에 따른 섹터 배분
-float angleAccum = 0.f;
-for (int i = 0; i < numSquads; ++i) {
-    float fraction   = memberCount_i / totalMembers;
-    float sectorSpan = 2π × fraction;    // 이 Squad의 섹터 폭
-    float sectorAngle = angleAccum + sectorSpan × 0.5;  // 섹터 중심 각도
+전술 해금 후 Boss는 플레이어 분산 여부에 따라 페이즈를 전환한다.
 
-    SquadOrder ord;
-    ord.type          = SquadOrderType::Encircle;
-    ord.targetId      = primary->getId();
-    ord.sectorAngle   = sectorAngle;
-    ord.sectorSpan    = sectorSpan;
-    ord.approachRadius = 20.0f;           // ENCIRCLE_RADIUS
-    squad[i]->receiveOrder(ord);
+```text
+Encircle
+  플레이어 군집이 1개일 때 포위 슬롯 발행
+  └─ 플레이어가 분산되면 Vigilance
 
-    angleAccum += sectorSpan;
-}
+Vigilance
+  모든 Squad가 DenseHold로 경계
+  └─ 5초 경과 후 DivideAndConquer
+
+DivideAndConquer
+  첫 번째 Squad는 WedgeCharge
+  나머지 Squad는 DenseHold
 ```
 
-20명 Squad가 3개(동일 인원)라면 각 Squad는 120°(2π/3) 섹터를 담당한다.
+플레이어 군집 수는 `clusterPlayers(room)`로 판단한다.
+두 플레이어 사이 거리가 `CLUSTER_RADIUS = 10` 이하이면 같은 군집으로 본다.
+현재 시나리오처럼 플레이어가 1명이면 항상 군집 수는 1이다.
+
+### 3-7. 포위 완료와 쿨타임
+
+포위 명령이 발행되면 `encircleSlotsAssigned_ = true`가 된다.
+모든 생존 멤버가 슬롯에 도착하면 전술 쿨타임에 들어간다.
+
+```text
+allMembersArrived() == true
+  → tacticsOnCooldown_ = true
+  → tacticCooldown_ = 8.0s
+  → encircleSlotsAssigned_ = false
+```
+
+쿨타임이 끝나면 `boxAdvanceActive_ = true`가 되어 다시 BoxAdvance 대형을 만들 수 있다.
+이때 `boxAdvanceOrderIssued_ = false`로 리셋되어 다음 사이클의 플레이어 위치를 새로 고정한다.
 
 ---
 
-## 3. TacticalSquad — 명령 변환
+## 4. TacticalSquad
 
-### 3-1. SquadOrder를 받으면
+### 4-1. 역할
 
-```cpp
-void TacticalSquad::receiveOrder(const SquadOrder& order) {
-    currentOrder_ = order;
-    orderDirty_   = true;   // 다음 update()에서 1회 pushCommandsToMembers() 호출
-}
-```
+`TacticalSquad`는 Actor가 아니다.
+월드에 물리적으로 존재하지 않는 지휘 보조 객체이며, 멤버 TacticalNpc의 ID 목록만 가진다.
 
-`orderDirty_`가 세워지면 다음 `update()`에서 `pushCommandsToMembers()`를 호출하고 플래그를 내린다.
+주요 책임:
 
-### 3-2. 갱신 정책
+- 죽은 멤버 제거
+- `SquadOrder` 저장
+- 슬롯 좌표 계산
+- 각 멤버에게 `TacticalCommand` 발행
 
-| SquadOrderType | 슬롯 재계산 시점 | 이유 |
+### 4-2. 명령 갱신 정책
+
+`receiveOrder()`는 명령을 저장하고 `orderDirty_ = true`로 표시한다.
+다음 `update()`에서 명령을 한 번 처리한다.
+
+| SquadOrderType | 슬롯 재계산 시점 | 설명 |
 |---|---|---|
-| `Engage`, `Idle`, `Retreat`, `AlternateAttack` | 명령 수신 시 1회 | 슬롯 없음, 매 틱 재발행해도 동일 |
-| `FlankLeft`, `FlankRight` | 명령 수신 시 1회 | 의도적 포지션 고정 |
-| `Encircle` | 명령 수신 시 1회 | 포위 슬롯 고정 (플레이어 이동 무시) |
-| `DenseHold` | 명령 수신 시 1회 | 경계 위치 고정 |
-| `DenseAdvance` | 명령 수신 시 1회 | PlatoonLeader가 새 사이클에만 재발행 |
-| `WedgeCharge` | **매 틱** | 타겟이 이동하므로 슬롯 추적 필요 |
+| `Idle`, `Engage`, `Retreat`, `AlternateAttack` | 명령 수신 시 1회 | 슬롯 없음 |
+| `FlankLeft`, `FlankRight` | 명령 수신 시 1회 | 측면 슬롯 고정 |
+| `Encircle` | 명령 수신 시 1회 | 포위 슬롯 고정 |
+| `DenseHold` | 명령 수신 시 1회 | 현재 Squad 중심 기준 대기 |
+| `DenseAdvance` | 명령 수신 시 1회 | 지정 섹터로 밀집 이동 |
+| `BoxAdvance` | 명령 수신 시 1회 | 초기 대형 목표 고정 |
+| `WedgeCharge` | 매 틱 | 움직이는 타겟을 추적하는 돌진 대형 |
 
-```cpp
-void TacticalSquad::update(float dt, Room& room) {
-    removeDeadMembers(room);
-    if (orderDirty_) {
-        pushCommandsToMembers(room);
-        orderDirty_ = false;
-    } else if (currentOrder_.type == SquadOrderType::WedgeCharge) {
-        pushCommandsToMembers(room);  // 매 틱
-    }
-}
-```
+`BoxAdvance`는 플레이어가 움직여도 재계산하지 않는다.
+`WedgeCharge`만 매 틱 슬롯을 갱신한다.
 
-### 3-3. SquadOrder → TacticalCommand 변환표
+### 4-3. SquadOrder → TacticalCommand
 
-| SquadOrderType | 발행되는 TacticalCommandType | 슬롯 계산 함수 |
+| SquadOrderType | TacticalCommandType | 슬롯 계산 |
 |---|---|---|
-| `Idle` | `Idle` | — |
-| `Engage` | `EngageTarget` | — |
-| `FlankLeft` | `FlankTarget` + 슬롯 좌표 | `calcFlankSlots(leftSide=true)` |
-| `FlankRight` | `FlankTarget` + 슬롯 좌표 | `calcFlankSlots(leftSide=false)` |
-| `Encircle` | `HoldSlot` + 슬롯 좌표 (greedy nearest-slot) | `calcEncircleSlots()` |
-| `DenseHold` | `HoldSlot` + 슬롯 좌표 | `calcDenseSlots(center=centroid)` |
-| `DenseAdvance` | `FlankTarget` + 슬롯 좌표 | `calcDenseSlots(center=sectorPos)` |
-| `WedgeCharge` | `FlankTarget` + 슬롯 좌표 | `calcWedgeSlots()` |
-| `AlternateAttack` | `EngageTarget` (공격 차례) / `AlternateWait` (대기 차례) | — |
-| `Retreat` | `Retreat` | — |
+| `Idle` | `Idle` | 없음 |
+| `Engage` | `EngageTarget` | 없음 |
+| `FlankLeft` / `FlankRight` | `FlankTarget` | `calcFlankSlots()` |
+| `Encircle` | `HoldSlot` | `calcEncircleSlots()` + greedy nearest-slot |
+| `DenseHold` | `HoldSlot` | `calcDenseSlots(center=squadCentroid)` |
+| `DenseAdvance` | `FlankTarget` | `calcDenseSlots(center=sectorPos)` |
+| `WedgeCharge` | `FlankTarget` | `calcWedgeSlots()` |
+| `BoxAdvance` | `HoldSlot` | 고정 `formationTargetPos` 기준 `calcDenseSlots()` |
+| `AlternateAttack` | `EngageTarget` 또는 `AlternateWait` | 순번 기반 |
+| `Retreat` | `Retreat` | 없음 |
 
-### 3-4. 슬롯 계산 상세
+### 4-4. Encircle 슬롯 수식
 
-#### calcEncircleSlots — 원호 배치 (center-of-subdivision)
+포위는 Squad별 섹터를 나눈 뒤, 각 섹터 내부를 멤버 수만큼 균등 분할한다.
 
-```
-arc   = sectorSpan / count           // 소구역 폭
-start = sectorAngle - sectorSpan/2 + arc/2   // 첫 소구역 중심
+전체 생존 멤버 수를 `N`, Squad `s`의 멤버 수를 `n_s`라 하면:
 
-slot[i] = targetPos + { cos(start + arc*i), 0, sin(start + arc*i) } * radius
-```
-
-경계(0번, count-1번)가 아닌 **소구역 중심**에 배치하므로 인접 Squad 슬롯이 같은 각도에 겹치지 않는다.
-
-할당은 **greedy nearest-slot**: 각 NPC마다 미사용 슬롯 중 가장 가까운 슬롯을 배정한다.
-
-```cpp
-for (int i = 0; i < count; ++i) {
-    // NPC i에서 모든 미사용 슬롯 중 최소 거리 슬롯 탐색
-    int   bestSlot = -1;
-    float bestDist = -1.f;
-    for (int j = 0; j < count; ++j) {
-        if (slotUsed[j]) continue;
-        float d = distance(npc[i].pos, slots[j]);
-        if (d < bestDist || bestDist < 0) { bestDist = d; bestSlot = j; }
-    }
-    slotUsed[bestSlot] = true;
-    // HoldSlot 명령 발행
-}
+```text
+fraction_s = n_s / N
+sectorSpan_s = 2π * fraction_s
+sectorAngle_s = angleAccum + sectorSpan_s / 2
 ```
 
-#### calcFlankSlots — 측면 선형 배치
+Squad 내부 슬롯:
 
-```
-dir     = normalize(targetPos - leaderPos)    // 리더 → 타겟 방향
-side    = 좌측: (+dir.z, 0, -dir.x)
-          우측: (-dir.z, 0, +dir.x)
-spacing = attackRange + 1.5
+```text
+arc   = sectorSpan / count
+start = sectorAngle - sectorSpan / 2 + arc / 2
+theta_i = start + arc * i
 
-slot[i] = targetPos + side * radius + dir * (i * spacing)
-```
-
-타겟에서 측면으로 `radius`만큼 떨어진 지점부터 정면 방향으로 `spacing` 간격으로 나열.
-
-#### calcDenseSlots — 직사각형 그리드
-
-```
-cols    = ceil(sqrt(count))
-spacing = max(attackRange * 0.8, 1.2)
-right   = (-forward.z, 0, forward.x)    // XZ 평면 우방향
-
-slot[i] = center
-        + right   * (col - (cols-1)/2) * spacing
-        + forward * (row - (rows-1)/2) * spacing
+slot_i = targetPos + (cos(theta_i), 0, sin(theta_i)) * ENCIRCLE_RADIUS
 ```
 
-`DenseHold`: center = Squad 멤버 centroid, forward = centroid → 타겟 방향
-`DenseAdvance`: center = sectorPos, forward = sectorPos → 플레이어 centroid 방향
+`start`에 `arc / 2`를 더하므로 슬롯이 섹터 경계가 아니라 각 소구간의 중앙에 놓인다.
+인접 Squad와 같은 각도에 슬롯이 겹치는 일을 줄이기 위한 방식이다.
 
-#### calcWedgeSlots — V자 쐐기
+슬롯 배정은 greedy nearest-slot이다.
 
+```text
+for each npc:
+  아직 사용하지 않은 slot 중 distance(npc.pos, slot)이 가장 작은 slot 선택
 ```
-forward = normalize(targetPos - fromPos)    // fromPos = 리더 위치
-tip     = targetPos - forward * attackRange  // 첨단
 
-row 0: 1명  (tip)
-row 1: 2명  (tip - forward * spacing*1.5)
-row 2: 3명  (tip - forward * spacing*3.0)
-...
+### 4-5. Dense 슬롯 수식
 
-각 행 내 좌우 간격 = spacing = max(attackRange*1.2, 1.5)
+밀집 대형은 직사각형 격자로 만든다.
+
+```text
+cols = ceil(sqrt(count))
+rows = ceil(count / cols)
+spacing = max(memberSeparationRadius, 1.2)
+right = (-forward.z, 0, forward.x)
+
+slot_i = center
+       + right   * (col - (cols - 1) / 2) * spacing
+       + forward * (row - (rows - 1) / 2) * spacing
+```
+
+`DenseHold`, `DenseAdvance`, `BoxAdvance`가 이 계산을 공유한다.
+
+### 4-6. Wedge 슬롯 수식
+
+쐐기 대형은 타겟 앞의 tip을 기준으로 1명, 2명, 3명 순서의 행을 만든다.
+
+```text
+forward = normalize(targetPos - fromPos)
+right   = (-forward.z, 0, forward.x)
+spacing = max(memberAttackRange * 1.2, 1.5)
+tip     = targetPos - forward * memberAttackRange
+
+rowCenter_r = tip - forward * (r * spacing * 1.5)
+slot        = rowCenter_r + right * lateralOffset
 ```
 
 ---
 
-## 4. TacticalNpc — 개별 FSM
+## 5. TacticalNpc
 
-### 4-1. pendingCmd_ 소비 메커니즘
+### 5-1. 역할
 
-TacticalNpc는 명령을 **저장**만 한다. 명령이 실제로 적용되는 것은 다음 `update()` 시작 시점이다.
+`TacticalNpc`는 개별 전투 유닛이다.
+스스로 타겟을 탐색하지 않고, Squad가 내려준 명령을 `pendingCmd_`에 저장했다가 다음 `update()` 시작 시 소비한다.
 
-```
-// TacticalSquad가 호출
-void TacticalNpc::receiveCommand(const TacticalCommand& cmd) {
-    pendingCmd_ = cmd;   // 덮어쓰기 — 가장 최신 명령만 유효
-}
+```text
+receiveCommand(cmd)
+  → pendingCmd_ = cmd
 
-// 다음 tick에서
-void TacticalNpc::update(float dt, Room& room) {
-    if (!alive_) { updateDead(); return; }
-
-    if (pendingCmd_.type != None)
-        consumePendingCommand();   // 명령 소비 → 상태 전이
-
-    switch (state_) { ... }       // 현재 상태 업데이트
-}
+update(dt)
+  → consumePendingCommand()
+  → state별 update 함수 실행
 ```
 
-같은 틱에 여러 명령이 오면 **마지막 것만** 남는다.
-명령은 **어떤 상태에서든** 즉시 적용된다 (AttackWindup 중에도 HoldSlot 명령이 오면 강제 전환).
+같은 틱에 여러 명령이 들어오면 마지막 명령만 남는다.
 
-### 4-2. 명령 → 상태 전이 표
+### 5-2. 상태와 명령
 
-| TacticalCommandType | 전환되는 상태 | 저장되는 데이터 |
+| 값 | 상태 | 동작 |
+|---:|---|---|
+| 0 | `Idle` | 명령 대기 |
+| 1 | `Chase` | 타겟 추적 |
+| 2 | `AttackWindup` | 공격 준비, 이동 없음 |
+| 3 | `AttackRecover` | 공격 후 회복 |
+| 4 | `Flank` | 지정 슬롯까지 고속 이동 후 교전 |
+| 5 | `AlternateWait` | 교대 공격 대기 |
+| 6 | `Return` | 스폰 위치 복귀 |
+| 7 | `Dead` | 사망 |
+| 8 | `HoldSlot` | 슬롯까지 이동 후 위치 유지 |
+
+| TacticalCommandType | 전환 상태 | 저장 데이터 |
 |---|---|---|
 | `EngageTarget` | `Chase` | `targetId_` |
 | `FlankTarget` | `Flank` | `targetId_`, `assignedSlot_`, `slotRefTargetPos_`, `abandonDist_`, `speedMult_` |
 | `HoldSlot` | `HoldSlot` | `targetId_`, `assignedSlot_` |
 | `AlternateWait` | `AlternateWait` | `targetId_` |
-| `Retreat` | `Return` | — |
+| `Retreat` | `Return` | 없음 |
 | `Idle` | `Idle` | `targetId_ = 0` |
 | `Confused` | `Idle` | `targetId_ = 0` |
 
-### 4-3. 상태 목록
+### 5-3. 이동과 분리
 
-| 값 | 상태 | 자율 행동 | 탈출 조건 |
-|---|---|---|---|
-| 0 | `Idle` | 아무것도 안 함 | 명령 수신 시 |
-| 1 | `Chase` | 타겟 추격 + separation force | 사정거리 진입 → Windup / 타겟 소실 → Idle |
-| 2 | `AttackWindup` | 이동 없음, windupTimer 누적 | 완료 → AttackRecover / 타겟 소실 → Idle |
-| 3 | `AttackRecover` | 체반경 하드 push만 허용, recoverTimer 누적 | 완료 → Windup 또는 Chase / 타겟 소실 → Idle |
-| 4 | `Flank` | 슬롯까지 이동 (속도 × TACTICAL_SPEED_MULT) | 슬롯 도착 → Chase 또는 Windup / 타겟 이탈 → Chase |
-| 5 | `AlternateWait` | 제자리 대기 | 명령 수신 시 (EngageTarget → Chase) |
-| 6 | `Return` | 스폰 위치로 귀환 (속도 × 2.0) | 도착 → Idle |
-| 7 | `Dead` | 종단 상태 | 없음 |
-| 8 | `HoldSlot` | 슬롯까지 이동 후 타겟 방향 facing 유지, 공격 없음 | 타겟 소실 → Idle |
+`Chase`와 `Flank`는 주변 NPC와 겹치지 않도록 separation force를 사용한다.
+이 힘은 주변 유닛으로부터 멀어지는 방향의 합이다.
 
-### 4-4. 상태별 핵심 코드
-
-#### Chase — 분리력 수직 투영
-
-추격 방향과 **수직인** 성분만 분리력에 적용한다. 역방향(뒤로) 이동이 발생하지 않는다.
-
-```cpp
-Vec3 chaseDir = (target.pos - position_).normalized();
-Vec3 sep      = calcSeparationForce(separationRadius_, nearby);
-Vec3 sepPerp  = sep - chaseDir * sep.dot(chaseDir);  // 수직 성분만
-Vec3 moveDir  = (chaseDir + sepPerp * separationWeight_).normalized();
-position_    += moveDir * moveSpeed_ * dt;
+```text
+away_j = selfPos - neighborPos_j
+d_j = |away_j|
+strength_j = 1 - d_j / separationRadius
+force = Σ normalize(away_j) * strength_j
 ```
 
-#### AttackRecover — 체반경 최소 push
+추적 방향과 같은 축으로 밀려 뒤로 물러나는 현상을 줄이기 위해, 실제 이동에는 진행 방향에 수직인 성분만 더한다.
 
-경직 중에는 큰 분리력이 아닌, 실제로 겹쳤을 때만 최소한의 반발을 준다.
-
-```cpp
-constexpr float BODY_RADIUS = 0.8f;
-room.findNearbyNpcPositions(position_, BODY_RADIUS * 2.f, ...);
-Vec3 push = calcSeparationForce(BODY_RADIUS * 2.f, nearby);
-if (push.length() > 0.1f)
-    position_ += push.normalized() * (moveSpeed_ * 0.15f * dt);
+```text
+sepPerp = sep - moveDir * dot(sep, moveDir)
+finalDir = normalize(moveDir + sepPerp * separationWeight)
 ```
 
-#### Flank — 속도 배율 + 슬롯 포기
+`HoldSlot`은 현재 구현상 슬롯까지 직선 이동한다.
+슬롯에 도착하면 공격하지 않고 타겟 방향으로 바라보기만 한다.
 
-```cpp
-// 타겟이 슬롯 계산 시점 위치에서 abandonDist_ 이상 이탈하면 포기
-float drift = distance(target.pos, slotRefTargetPos_);
-if (drift > abandonDist_) {
-    transitionTo(Chase, "타겟 이탈, 슬롯 포기");
-    return;
-}
-position_ += moveDir * (moveSpeed_ * TACTICAL_SPEED_MULT * speedMult_ * dt);
+```text
+if distance(position, assignedSlot) < separationRadius * 0.25:
+    facing = normalize(targetPos - position)
+else:
+    position += normalize(assignedSlot - position) * moveSpeed * TACTICAL_SPEED_MULT * dt
 ```
 
-#### HoldSlot — 도착 직전 진동 방지
-
-분리력에 거리 기반 감쇠를 적용한다. 슬롯에 가까울수록 분리력이 줄어든다.
-
-```cpp
-float distToSlot = distance(position_, assignedSlot_);
-if (distToSlot < 0.5f) {
-    // 도착 — 플레이어 방향 유지만
-    facing_ = (target.pos - position_).normalized();
-    return;
-}
-float sepScale = min(1.f, distToSlot / separationRadius_);
-Vec3  moveDir  = (slotDir + sep * (separationWeight_ * sepScale)).normalized();
-position_     += moveDir * (moveSpeed_ * TACTICAL_SPEED_MULT * dt);
-```
-
-#### isAtSlot() — allMembersArrived 판정용
-
-```cpp
-bool TacticalNpc::isAtSlot() const {
-    if (state_ == Flank)    return false;          // Flank는 도착 시 상태 전환됨
-    if (state_ == HoldSlot) return distToSlot < 0.5f;
-    return true;                                   // 다른 상태는 슬롯 이동 중 아님
-}
-```
+`isAtSlot()`은 `HoldSlot` 상태에서 슬롯까지의 거리가 `separationRadius * 0.25`보다 작으면 true를 반환한다.
+현재 시나리오의 `separationRadius = 6`이므로 도착 허용 거리는 1.5다.
 
 ---
 
-## 5. 전체 데이터 흐름 요약
+## 6. 디버그 시각화
 
-```
-PlatoonLeader::evaluateTactics()          (매 1초)
-│
-│ 판단: 플레이어 1명, 전술 활성, 쿨타임 아님
-│
-│  SquadOrder {
-│      type         = Encircle
-│      targetId     = P1.id
-│      sectorAngle  = 0.0  (Squad A)
-│      sectorSpan   = 2.09 (= 2π/3)
-│      approachRadius = 20.0
-│  }
-│
-▼
-TacticalSquad::receiveOrder()
-  → currentOrder_ = ord
-  → orderDirty_   = true
+`Room::buildSnapshot()`은 TacticalNpc 정보를 `DebugTacticalNpcEntry`로 변환한다.
+렌더러는 다음 정보를 표시한다.
 
-TacticalSquad::update()   (다음 tick, 7b단계)
-  → pushCommandsToMembers()
-      → calcEncircleSlots(targetPos, 0.0, 2.09, 20.0, 20)
-          → 20개 슬롯 좌표 생성
-      → greedy nearest-slot 할당
-      → 각 TacticalNpc에:
-           TacticalCommand {
-               type       = HoldSlot
-               targetId   = P1.id
-               slotOffset = (23.4, 0, -8.1)   // 예시
-           }
-           tnpc->receiveCommand(cmd)           // pendingCmd_ 에 저장
+- TacticalNpc 위치, 방향, HP
+- 상태 색상
+- Squad ID
+- Boss 여부 (`isLeader`)
+- 타겟 ID
+- 할당 슬롯 좌표 (`assignedSlot_`)
+- Windup / Recover 진행률
 
-TacticalNpc::update()   (같은 tick, 7c단계)
-  → consumePendingCommand()
-      → assignedSlot_ = (23.4, 0, -8.1)
-      → transitionTo(HoldSlot)
-  → updateHoldSlot()
-      → slotDir = normalize(slot - pos)
-      → 분리력 감쇠 적용
-      → position_ += slotDir * moveSpeed_ * TACTICAL_SPEED_MULT * dt
-```
+시각화에서 슬롯 마커와 NPC→슬롯 방향선을 보면 현재 대형이 어떤 좌표를 목표로 하는지 확인할 수 있다.
+초기 BoxAdvance 고정 동작을 확인할 때는 플레이어를 움직여도 슬롯 마커가 최초 목표점 주변에 남아 있는지 보면 된다.
 
 ---
 
-## 6. 파라미터 한눈에 보기
+## 7. 주요 상수
 
-### PlatoonLeader 상수 (`sim/PlatoonLeader.hpp`)
-
-| 상수 | 값 | 의미 |
-|---|---|---|
-| `TACTIC_INTERVAL` | 1.0s | evaluateTactics() 호출 간격 |
-| `VIGILANCE_DURATION` | 5.0s | Vigilance → DivideAndConquer 전환 시간 |
-| `CLUSTER_RADIUS` | 10.0 | 플레이어 군집 판단 반경 |
-| `ENCIRCLE_RADIUS` | 20.0 | 포위 슬롯 배치 반경 |
-| `TACTIC_HP_THRESHOLD` | 0.70 | 전술 발동 리더 HP 임계값 |
-| `TACTIC_SQUAD_RATIO` | 0.80 | 전술 발동 생존 비율 임계값 |
-| `ENCIRCLE_RECALC_THRESHOLD` | 12.0 | (미사용 — 레거시) |
-| `TACTIC_COOLDOWN_DURATION` | 8.0s | 포위 완성 후 쿨타임 길이 |
-
-### TacticalNpc 상수 (`sim/TacticalNpc.hpp`)
+### PlatoonLeader
 
 | 상수 | 값 | 의미 |
-|---|---|---|
-| `CONFUSED_DURATION` | 3.0s | Confused 상태 지속 시간 |
-| `TACTICAL_SPEED_MULT` | 3.0 | Flank / HoldSlot 이동 속도 배율 |
+|---|---:|---|
+| `TACTIC_INTERVAL` | 1.0s | 전술 평가 주기 |
+| `VIGILANCE_DURATION` | 5.0s | 경계 후 각개격파 전환 시간 |
+| `CLUSTER_RADIUS` | 10.0 | 플레이어 군집 판단 거리 |
+| `ENCIRCLE_RADIUS` | 50.0 | 포위 반경 |
+| `TACTIC_HP_THRESHOLD` | 0.70 | Boss HP 기반 전술 발동 임계값 |
+| `TACTIC_SQUAD_RATIO` | 0.80 | Squad 생존 비율 기반 전술 발동 임계값 |
+| `TACTIC_COOLDOWN_DURATION` | 8.0s | 전술 완료 후 쿨타임 |
+| `BOX_APPROACH_DIST` | 20.0 | 초기 박스 대형의 타겟 전방 거리 |
+| `BOX_SQUAD_SPACING` | 35.0 | Squad 사이 간격 |
+| `BOX_ARC_DEPTH` | 10.0 | 측면 Squad를 앞으로 당기는 호형 깊이 |
+| `BOSS_KEEP_DIST` | 18.0 | Boss가 유지하려는 플레이어 거리 |
+| `BOSS_KEEP_TOL` | 2.0 | 거리 유지 허용 오차 |
 
-### TacticalNpcConfig (ScenarioTactical 기본값)
+### TacticalNpc
 
-| 파라미터 | 일반 NPC | Boss(PlatoonLeader) |
-|---|---|---|
-| `maxHp` | 80 | 200 |
-| `moveSpeed` | 9.0 | 10.0 |
-| `attackRange` | 2.0 | 2.5 |
-| `attackDamage` | 10.0 | 10.0 |
-| `attackWindupTime` | 0.35s | 0.35s |
-| `attackRecoverTime` | 0.70s | 0.70s |
-| `separationRadius` | 6.0 | 6.0 |
-| `separationWeight` | 1.5 | 1.5 |
+| 상수 | 값 | 의미 |
+|---|---:|---|
+| `TACTICAL_SPEED_MULT` | 3.0 | `Flank`, `HoldSlot` 이동 속도 배율 |
+| `CONFUSED_DURATION` | 3.0s | Confused용 예약 상수 |
+
+---
+
+## 8. 졸업작품 보고서 작성 가이드
+
+### 8-1. 추천 서술 구조
+
+보고서에는 다음 순서로 쓰면 자연스럽다.
+
+1. 문제 정의: 다수 NPC가 단순 추적만 하면 겹침, 비효율 경로, 전술성 부족이 발생한다.
+2. 구조 제안: Boss가 전술 판단을 담당하고, Squad가 대형 위치를 계산하며, 개별 NPC는 FSM으로 실행한다.
+3. 초기 행동: 시뮬레이션 시작 시 Squad 단위 BoxAdvance 대형을 만든 뒤 플레이어를 추적한다.
+4. 전술 발동: Boss HP 또는 Squad 피해 조건을 만족하면 포위 전술을 발동한다.
+5. 수식 설명: 타겟 선택, 대형 슬롯 계산, 포위 섹터 분할, 도착 판정을 제시한다.
+6. 검증: 디버그 뷰에서 슬롯 마커, 상태 색상, HP, 타겟선을 확인했다고 설명한다.
+
+### 8-2. 보고서용 문단 예시
+
+```text
+본 프로젝트의 전술 NPC 시스템은 중간보스가 상위 지휘관 역할을 수행하고,
+NPC들은 Squad 단위로 명령을 받아 움직이는 계층형 AI 구조로 설계하였다.
+중간보스는 일정 주기마다 플레이어와 아군 상태를 평가하여 SquadOrder를 생성하고,
+각 Squad는 이를 실제 월드 좌표상의 대형 슬롯으로 변환한다.
+개별 TacticalNpc는 Squad가 전달한 TacticalCommand를 소비하여 Chase, HoldSlot,
+Flank, AttackWindup 등의 FSM 상태를 실행한다.
+
+시뮬레이션 초기에 중간보스는 BoxAdvance 명령을 통해 3개 Squad를 플레이어 전방의
+박스형 대형으로 배치한다. 이때 대형 목표점은 명령 발행 시점의 플레이어 위치로
+고정하여, 플레이어가 이동하더라도 NPC들이 흔들리지 않고 최초 대형 슬롯에 도착하도록 하였다.
+대형이 완성되면 Squad는 Engage 상태로 전환되어 플레이어를 추적한다.
+
+전술 조건은 중간보스의 체력 비율 또는 Squad 생존 비율로 판단한다.
+중간보스 HP가 70% 미만이거나 어느 Squad의 생존 비율이 80% 미만이면 전술이 해금된다.
+전술이 해금된 상태에서 플레이어가 하나의 군집으로 판단되면, 중간보스는 전체 NPC 수에 비례하여
+각 Squad에 원형 포위 섹터를 배분하고, 각 NPC는 자신에게 할당된 포위 슬롯으로 이동한다.
+```
+
+### 8-3. 보고서에 넣기 좋은 핵심 수식
+
+타겟 선택:
+
+```text
+S(p) = 0.5 * 1 / (1 + ||B - p||)
+     + 0.5 * (1 - HP(p) / HPmax(p))
+```
+
+전술 발동 조건:
+
+```text
+HPboss / HPboss,max < 0.70
+or
+aliveSquadMembers / initialSquadMembers < 0.80
+```
+
+초기 BoxAdvance 대형:
+
+```text
+P0 = player position at order issue time
+f = normalize(P0 - B)
+r = (-fz, 0, fx)
+
+C_s = P0 - f * d_approach + r * offset_x - f * offset_z - f * halfDepth
+```
+
+포위 섹터 분할:
+
+```text
+sectorSpan_s = 2π * n_s / N
+sectorAngle_s = angleAccum + sectorSpan_s / 2
+```
+
+포위 슬롯:
+
+```text
+theta_i = sectorAngle_s - sectorSpan_s / 2 + (i + 0.5) * sectorSpan_s / n_s
+slot_i = P + R * (cos(theta_i), 0, sin(theta_i))
+```
+
+도착 판정:
+
+```text
+arrived_i = ||pos_i - slot_i|| < separationRadius * 0.25
+```
+
+### 8-4. 강조하면 좋은 설계 포인트
+
+- 전술 판단과 개별 이동을 분리해 확장성이 높다.
+- Squad 단위 명령을 사용해 60명 NPC를 개별로 직접 제어하지 않아도 된다.
+- 초기 BoxAdvance는 목표점을 고정해 플레이어 이동으로 인한 대형 미완성 문제를 줄인다.
+- 포위는 Squad 인원 비율에 따라 섹터를 배분하므로 Squad 크기가 달라도 자연스럽게 확장된다.
+- `Room::buildSnapshot()`과 GDI 렌더러로 슬롯, 상태, 타겟을 시각화해 디버깅 가능하다.

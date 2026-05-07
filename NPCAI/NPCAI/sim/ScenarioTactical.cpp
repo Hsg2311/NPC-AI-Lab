@@ -29,7 +29,7 @@ void ScenarioTactical::setup(Room& room) {
     // ── NPC 공통 설정 ─────────────────────────────────────────────────────────
     TacticalNpcConfig cfg;
     cfg.maxHp             = 80.f;
-    cfg.moveSpeed         = 9.f;
+    cfg.moveSpeed         = 10.f;
     cfg.attackRange       = 2.f;
     cfg.attackDamage      = 10.f;
     cfg.attackWindupTime  = 0.35f;
@@ -43,13 +43,13 @@ void ScenarioTactical::setup(Room& room) {
     leaderCfg.attackRange = 2.5f;
 
     // ── PlatoonLeader ─────────────────────────────────────────────────────────
-    auto leaderPtr = std::make_shared<PlatoonLeader>("Boss", Vec3{ 25.f, 0.f, 0.f }, leaderCfg);
+    auto leaderPtr = std::make_shared<PlatoonLeader>("Boss", Vec3{ 50.f, 0.f, 0.f }, leaderCfg);
     PlatoonLeader* leader = leaderPtr.get();
     room.addTacticalNpc(leaderPtr);
     room.registerPlatoonLeader(leader);
 
     // ── Squad A (우상단, 20명) ────────────────────────────────────────────────
-    auto squadA = std::make_unique<TacticalSquad>(0, cfg.attackRange);
+    auto squadA = std::make_unique<TacticalSquad>(0, cfg.attackRange, cfg.separationRadius);
     TacticalSquad* pSquadA = squadA.get();
     leader->addSquad(pSquadA);
 
@@ -65,7 +65,7 @@ void ScenarioTactical::setup(Room& room) {
     room.addTacticalSquad(std::move(squadA));
 
     // ── Squad B (정면, 20명) ──────────────────────────────────────────────────
-    auto squadB = std::make_unique<TacticalSquad>(1, cfg.attackRange);
+    auto squadB = std::make_unique<TacticalSquad>(1, cfg.attackRange, cfg.separationRadius);
     TacticalSquad* pSquadB = squadB.get();
     leader->addSquad(pSquadB);
 
@@ -81,7 +81,7 @@ void ScenarioTactical::setup(Room& room) {
     room.addTacticalSquad(std::move(squadB));
 
     // ── Squad C (우하단, 20명) ────────────────────────────────────────────────
-    auto squadC = std::make_unique<TacticalSquad>(2, cfg.attackRange);
+    auto squadC = std::make_unique<TacticalSquad>(2, cfg.attackRange, cfg.separationRadius);
     TacticalSquad* pSquadC = squadC.get();
     leader->addSquad(pSquadC);
 

@@ -32,6 +32,7 @@ private:
     int     clusterPlayers     (const Room& room) const;
     Vec3    calcPlayerCentroid (const Room& room) const;
     bool    allMembersArrived  (const Room& room) const;
+    std::vector<Vec3> calcSquadBoxOffsets(int numSquads) const;
 
     enum class TacticalPhase { Encircle, Vigilance, DivideAndConquer };
 
@@ -51,6 +52,10 @@ private:
     bool             encircleSlotsAssigned_{ false };  // 현 사이클에서 슬롯 발행 완료
     float            tacticCooldown_    { 0.f };
     bool             tacticsOnCooldown_ { false };
+    bool             boxAdvanceActive_  { true  };  // 박스 대형 진격 중
+    bool             boxAdvanceOrderIssued_{ false };
+    Vec3             boxAdvanceTargetPos_{};
+    uint32_t         primaryTargetId_   { 0     };  // Engage 전환용 타겟 캐시
 
     static constexpr float TACTIC_INTERVAL           = 1.f;
     static constexpr float APPROACH_RADIUS           = 4.5f;
@@ -60,7 +65,12 @@ private:
     static constexpr float TACTIC_HP_THRESHOLD       = 0.70f;  // 리더 HP 70% 이하 시 전술 발동
     static constexpr float TACTIC_SQUAD_RATIO        = 0.80f;  // 부대원 80% 미만 생존 시 전술 발동
     static constexpr float ENCIRCLE_RECALC_THRESHOLD = 12.0f;  // 포위 재배치 거리 임계값
-    static constexpr float TACTIC_COOLDOWN_DURATION =  8.0f;  // 쿨타임 길이(초)
+    static constexpr float TACTIC_COOLDOWN_DURATION  = 8.0f;   // 쿨타임 길이(초)
+    static constexpr float BOX_APPROACH_DIST         = 20.f;   // 박스 대형 플레이어 전방 배치 거리
+    static constexpr float BOX_SQUAD_SPACING         = 35.f;   // 부대 간 간격 (20명×sep=6 → 부대폭 24, 여유 6)
+    static constexpr float BOX_ARC_DEPTH             = 10.f;   // 호형 대형 깊이: 측면 부대를 전방으로 당기는 거리
+    static constexpr float BOSS_KEEP_DIST            = 18.f;   // 보스~플레이어 유지 거리
+    static constexpr float BOSS_KEEP_TOL             =  2.f;   // 거리 유지 허용 오차
 };
 
 } // namespace sim

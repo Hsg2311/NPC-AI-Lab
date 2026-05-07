@@ -291,22 +291,17 @@ void TacticalNpc::updateHoldSlot(float dt, Room& room) {
     }
 
     float distToSlot = Vec3::distance(position_, assignedSlot_);
-    if (distToSlot < 0.5f) {
+    if (distToSlot < separationRadius_ * 0.25f) {
         // 슬롯 도착 — 타겟 방향으로 facing 유지
         Vec3 dir = target->getPosition() - position_;
         if (dir.length() > 0.1f) facing_ = dir.normalized();
         return;
     }
 
+    // 대형 이동 중 분리력 없음 — 슬롯 직선 접근, 일시적 겹침 허용
     Vec3 slotDir = (assignedSlot_ - position_).normalized();
-    nearbyCache_.clear();
-    room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
-    Vec3  sep      = calcSeparationForce(separationRadius_, nearbyCache_);
-    // 슬롯에 가까울수록 분리력 감쇠 → 도착 직전 진동 방지
-    float sepScale = std::min(1.f, distToSlot / separationRadius_);
-    Vec3  moveDir  = (slotDir + sep * (separationWeight_ * sepScale)).normalized();
-    facing_   = moveDir;
-    position_ += moveDir * (moveSpeed_ * TACTICAL_SPEED_MULT * dt);
+    facing_   = slotDir;
+    position_ += slotDir * (moveSpeed_ * TACTICAL_SPEED_MULT * dt);
 }
 
 // ─── AlternateWait ────────────────────────────────────────────────────────────
@@ -353,11 +348,15 @@ void TacticalNpc::updateDead() {
 // HoldSlot: 도착 후에도 상태 유지 → 거리로 판단.
 
 bool TacticalNpc::isAtSlot() const {
-    if (state_ == TacticalNpcState::Flank)
-        return false;
-    if (state_ == TacticalNpcState::HoldSlot)
-        return Vec3::distance(position_, assignedSlot_) < 0.5f;
-    return true;  // 슬롯 이동 중이 아닌 상태
+    switch (state_) {
+        case TacticalNpcState::HoldSlot:
+            return Vec3::distance(position_, assignedSlot_) < separationRadius_ * 0.25f;
+        case TacticalNpcState::AttackWindup:
+        case TacticalNpcState::AttackRecover:
+            return true;   // 전투 중: 대형 완성으로 간주
+        default:
+            return false;  // Idle, Chase, Flank, Return, Dead 등: 슬롯 미도달
+    }
 }
 
 // ─── resolveTarget ────────────────────────────────────────────────────────────
