@@ -17,8 +17,6 @@ static const char* tacticalStateStr(TacticalNpcState s) {
         case TacticalNpcState::AttackWindup:  return "AttackWindup";
         case TacticalNpcState::AttackRecover: return "AttackRecover";
         case TacticalNpcState::Flank:         return "Flank";
-        case TacticalNpcState::AlternateWait: return "AlternateWait";
-        case TacticalNpcState::Return:        return "Return";
         case TacticalNpcState::Dead:          return "Dead";
         case TacticalNpcState::HoldSlot:      return "HoldSlot";
     }
@@ -97,13 +95,6 @@ void TacticalNpc::consumePendingCommand() {
             assignedSlot_ = pendingCmd_.slotOffset;
             transitionTo(TacticalNpcState::HoldSlot, "명령: HoldSlot");
             break;
-        case TacticalCommandType::AlternateWait:
-            targetId_ = pendingCmd_.targetId;
-            transitionTo(TacticalNpcState::AlternateWait, "명령: AlternateWait");
-            break;
-        case TacticalCommandType::Retreat:
-            transitionTo(TacticalNpcState::Return, "명령: Retreat");
-            break;
         case TacticalCommandType::Idle:
             targetId_ = 0;
             transitionTo(TacticalNpcState::Idle, "명령: Idle");
@@ -135,10 +126,8 @@ void TacticalNpc::update(float dt, Room& room) {
         case TacticalNpcState::Chase:         updateChase        (dt, room); break;
         case TacticalNpcState::AttackWindup:  updateAttackWindup (dt, room); break;
         case TacticalNpcState::AttackRecover: updateAttackRecover(dt, room); break;
-        case TacticalNpcState::Flank:         updateFlank        (dt, room); break;
-        case TacticalNpcState::AlternateWait: updateAlternateWait(dt, room); break;
-        case TacticalNpcState::Return:        updateReturn       (dt, room); break;
-        case TacticalNpcState::HoldSlot:      updateHoldSlot     (dt, room); break;
+        case TacticalNpcState::Flank:    updateFlank   (dt, room); break;
+        case TacticalNpcState::HoldSlot: updateHoldSlot(dt, room); break;
         case TacticalNpcState::Dead:          /* 종료 상태 */                 break;
     }
 }
@@ -302,37 +291,6 @@ void TacticalNpc::updateHoldSlot(float dt, Room& room) {
     Vec3 slotDir = (assignedSlot_ - position_).normalized();
     facing_   = slotDir;
     position_ += slotDir * (moveSpeed_ * TACTICAL_SPEED_MULT * dt);
-}
-
-// ─── AlternateWait ────────────────────────────────────────────────────────────
-// Squad에서 EngageTarget 명령이 오면 자동 전환 (pendingCmd_ 소비로 처리됨)
-
-void TacticalNpc::updateAlternateWait(float /*dt*/, Room& room) {
-    Actor* target = resolveTarget(room);
-    if (!target) {
-        targetId_ = 0;
-        transitionTo(TacticalNpcState::Idle, "타겟 소실 (AlternateWait 중)");
-    }
-    // 명령 대기 — 다음 틱 pendingCmd_ 소비로 전환
-}
-
-// ─── Return ───────────────────────────────────────────────────────────────────
-
-void TacticalNpc::updateReturn(float dt, Room& room) {
-    if (Vec3::distanceSq(position_, spawnPos_) < 0.3f * 0.3f) {
-        position_ = spawnPos_;
-        transitionTo(TacticalNpcState::Idle, "스폰 위치 복귀");
-        return;
-    }
-
-    Vec3 homeDir = (spawnPos_ - position_).normalized();
-    nearbyCache_.clear();
-    room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
-    Vec3 sep     = calcSeparationForce(separationRadius_, nearbyCache_);
-    Vec3 sepPerp = sep - homeDir * sep.dot(homeDir);
-    Vec3 moveDir = (homeDir + sepPerp * separationWeight_).normalized();
-    facing_   = moveDir;
-    position_ += moveDir * (moveSpeed_ * 2.f * dt);
 }
 
 // ─── Dead ─────────────────────────────────────────────────────────────────────

@@ -17,10 +17,8 @@ enum class TacticalNpcState {
     AttackWindup  = 2,  // 공격 준비 (이동 없음)
     AttackRecover = 3,  // 공격 후 쿨다운
     Flank         = 4,  // FlankTarget 명령: assignedSlot 위치까지 이동
-    AlternateWait = 5,  // 교대 공격: 공격 순번 대기
-    Return        = 6,  // Retreat 명령: spawnPos 귀환
     Dead          = 7,  // 종료 상태
-    HoldSlot      = 8,  // DenseHold 명령: 슬롯 위치 유지, 공격 없음 (경계)
+    HoldSlot      = 8,  // DenseHold/Encircle/BoxAdvance 명령: 슬롯 이동 후 유지
 };
 
 // ─── TacticalCommand ─────────────────────────────────────────────────────────
@@ -28,8 +26,6 @@ enum class TacticalCommandType {
     None,
     EngageTarget,   // targetId_ 설정 후 Chase
     FlankTarget,    // targetId_ + assignedSlot_ 설정 후 Flank
-    AlternateWait,  // 타겟 유지, 공격 순번 대기
-    Retreat,        // spawnPos 귀환
     Idle,           // 전투 해제
     Confused,       // PlatoonLeader 사망: 방황
     HoldSlot,       // assignedSlot 이동 후 유지 (공격 안 함, 경계용)
@@ -92,8 +88,6 @@ protected:
     void updateAttackWindup (float dt, Room& room);
     void updateAttackRecover(float dt, Room& room);
     void updateFlank        (float dt, Room& room);
-    void updateAlternateWait(float dt, Room& room);
-    void updateReturn       (float dt, Room& room);
     void updateHoldSlot     (float dt, Room& room);
     void updateDead         ();
 
@@ -124,10 +118,6 @@ protected:
     float windupTimer_{ 0.f };
     float recoverTimer_{ 0.f };
 
-    // 방황 타이머 (Confused 상태용)
-    float confusedTimer_{ 0.f };
-    Vec3  wanderDir_{ 1.f, 0.f, 0.f };
-    static constexpr float CONFUSED_DURATION    = 3.f;
     static constexpr float TACTICAL_SPEED_MULT  = 3.0f;
 
     std::vector<Vec3> nearbyCache_;

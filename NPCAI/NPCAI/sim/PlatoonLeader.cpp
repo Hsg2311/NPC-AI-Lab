@@ -131,7 +131,7 @@ void PlatoonLeader::evaluateTactics(Room& room) {
             SquadOrder ord; ord.type = SquadOrderType::Idle;
             sq->receiveOrder(ord);
         }
-        if (state_ != TacticalNpcState::Idle && state_ != TacticalNpcState::Return) {
+        if (state_ != TacticalNpcState::Idle) {
             targetId_ = 0;
             transitionTo(TacticalNpcState::Idle, "플레이어 없음");
         }
@@ -141,7 +141,7 @@ void PlatoonLeader::evaluateTactics(Room& room) {
     // 리더 자신은 항상 primary 추격
     if (targetId_ != primary->getId()) {
         targetId_ = primary->getId();
-        if (state_ == TacticalNpcState::Idle || state_ == TacticalNpcState::Return) {
+        if (state_ == TacticalNpcState::Idle) {
             char buf[64];
             std::snprintf(buf, sizeof(buf), "전술 평가: target=%s",
                 primary->getName().c_str());
