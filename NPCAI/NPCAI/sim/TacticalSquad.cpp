@@ -303,8 +303,7 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
                 if (!tnpc) continue;
 
                 TacticalNpcState st = tnpc->getState();
-                if (st == TacticalNpcState::AttackWindup ||
-                    st == TacticalNpcState::AttackRecover)
+                if (st == TacticalNpcState::AttackWindup)
                     continue;
 
                 // HoldSlot 이동 중에도 슬롯 변화가 작으면 현재 목표 유지 — 매 틱 재발행 방지
