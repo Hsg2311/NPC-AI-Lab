@@ -60,13 +60,13 @@ void PlatoonLeader::update(float dt, Room& room) {
         Logger::get().log(name_, "포위 완성 — 쿨타임 진입");
     }
 
-    // ── 박스 대형 전환 감지 (tacticsUnlocked_ = false 경로) ──────────────────
+    // ── 박스 대형 완성 감지 (tacticsUnlocked_ 여부 무관) ────────────────────
     Player* primary = selectPrimaryTarget(room);
 
-    if (!tacticsUnlocked_ && !tacticsOnCooldown_ && primary) {
-        if (boxAdvanceActive_ && allMembersArrived(room)) {
-            // 박스 대형 완성 → Engage 전환
-            boxAdvanceActive_ = false;
+    if (!tacticsOnCooldown_ && primary && boxAdvanceActive_ && allMembersArrived(room)) {
+        boxAdvanceActive_      = false;
+        boxAdvanceOrderIssued_ = false;
+        if (!tacticsUnlocked_) {
             Logger::get().log(name_, "박스 대형 완성 — Engage 전환");
             for (auto* sq : squads_) {
                 if (sq->isEmpty()) continue;
@@ -75,6 +75,8 @@ void PlatoonLeader::update(float dt, Room& room) {
                 ord.targetId = primaryTargetId_;
                 sq->receiveOrder(ord);
             }
+        } else {
+            Logger::get().log(name_, "박스 대형 완성 — 포위 준비");
         }
     }
 
@@ -155,7 +157,7 @@ void PlatoonLeader::evaluateTactics(Room& room) {
 
     int numSquads = static_cast<int>(liveSquads.size());
 
-    if (!tacticsUnlocked_ || tacticsOnCooldown_) {
+    if (!tacticsUnlocked_ || tacticsOnCooldown_ || boxAdvanceActive_) {
         primaryTargetId_ = primary->getId();
         if (boxAdvanceActive_) {
             if (boxAdvanceOrderIssued_) return;
