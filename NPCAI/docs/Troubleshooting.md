@@ -1901,6 +1901,102 @@ tick 순서는 유지하고 최소 침습적으로 해결.
 
 ---
 
+## [20] 포위 전술 이후 포위 ↔ 박스 대형 집결 무한 반복 버그
+
+**파일:** `sim/PlatoonLeader.cpp`
+
+**증상:**
+
+포위 전술이 최초 1회 정상 완료된 후, 두 번째 사이클부터 포위 완성 ↔ 박스 대형 집결을
+무한 반복하며 실제 전투로 진입하지 못했다. 동시에 PlatoonLeader가 이동을 멈췄다.
+
+**원인:**
+
+쿨타임이 종료되면 `boxAdvanceActive_ = true`로 설정되지만,
+`evaluateTactics()`의 박스 대형 발행 블록 진입 조건이 `!tacticsUnlocked_ || tacticsOnCooldown_`이었다.
+`tacticsUnlocked_ = true`인 상태에서는 이 조건이 false → 박스 대형 명령이 발행되지 않고
+곧바로 Encircle 명령을 발행했다.
+
+멤버들은 이전 포위 슬롯(HoldSlot)에 그대로 있으므로 `allMembersArrived()` = true →
+다음 틱에서 즉시 쿨타임 재진입 → 반복.
+
+`boxAdvanceActive_ = true`가 리셋되지 않아 `update()`의 보스 이동 코드에도 도달하지
+못하므로 PlatoonLeader가 제자리에 멈췄다.
+
+**수정:**
+
+```cpp
+// sim/PlatoonLeader.cpp — evaluateTactics() 진입 조건
+// Before
+if (!tacticsUnlocked_ || tacticsOnCooldown_) {
+
+// After
+if (!tacticsUnlocked_ || tacticsOnCooldown_ || boxAdvanceActive_) {
+```
+
+```cpp
+// sim/PlatoonLeader.cpp — update() 내 박스 대형 완성 감지 (tacticsUnlocked_ 무관하게 실행)
+// Before
+if (!tacticsUnlocked_ && !tacticsOnCooldown_ && primary) {
+    if (boxAdvanceActive_ && allMembersArrived(room)) {
+        boxAdvanceActive_ = false;
+        // Engage 명령 발행
+    }
+}
+
+// After
+if (!tacticsOnCooldown_ && primary && boxAdvanceActive_ && allMembersArrived(room)) {
+    boxAdvanceActive_      = false;
+    boxAdvanceOrderIssued_ = false;
+    if (!tacticsUnlocked_) {
+        // Engage 명령 발행
+    } else {
+        // 다음 evaluateTactics()에서 Encircle 자동 발행
+    }
+}
+```
+
+---
+
+## [21] BoxAdvance 중 AttackRecover 완료 NPC가 Chase로 고착되는 버그
+
+**파일:** `sim/TacticalSquad.cpp`
+
+**증상:**
+
+박스 대형 집결(BoxAdvance) 중 일부 NPC가 슬롯으로 이동하지 않고
+플레이어를 계속 Chase하는 상태로 남아 있었다.
+
+**원인:**
+
+BoxAdvance 명령은 `boxAdvanceOrderIssued_` 플래그로 인해 한 사이클에 **1회만** 발행된다.
+명령 발행 시점에 `AttackRecover` 상태인 NPC는 HoldSlot 명령을 받지 못하고 스킵된다.
+이후 회복 타이머가 만료되면 `updateAttackRecover()`가 자율적으로 Chase로 전환하는데,
+BoxAdvance가 재발행되지 않으므로 다음 전술 명령(Encircle)이 올 때까지 Chase가 유지된다.
+
+포위 루프 버그([20]) 수정 이후 쿨타임 종료마다 BoxAdvance가 발행되면서
+이 경로(Engage → AttackRecover 도중 BoxAdvance 수령)가 실제로 활성화됐다.
+
+**수정:**
+
+```cpp
+// sim/TacticalSquad.cpp — pushCommandsToMembers() BoxAdvance case
+// Before
+if (st == TacticalNpcState::AttackWindup ||
+    st == TacticalNpcState::AttackRecover)
+    continue;
+
+// After
+if (st == TacticalNpcState::AttackWindup)
+    continue;
+```
+
+`AttackWindup`은 공격 모션에 커밋됐으므로 스킵 유지.
+`AttackRecover`는 공격이 이미 완료됐으므로 HoldSlot을 pending queue에 즉시 넣는다.
+다음 틱 시작 시 `consumePendingCommand()`가 HoldSlot으로 전환하고 멤버는 슬롯으로 이동한다.
+
+---
+
 ## 오탐 분석 — 실제 버그가 아닌 이유
 
 플레이어 공격으로 NPC가 tick 1에서 사망하는 경로가 생겼을 때,
