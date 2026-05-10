@@ -118,7 +118,7 @@ protected:
     float windupTimer_{ 0.f };
     float recoverTimer_{ 0.f };
 
-    static constexpr float TACTICAL_SPEED_MULT  = 3.0f;
+    static constexpr float TACTICAL_SPEED_MULT = 3.0f;
 
     std::vector<Vec3> nearbyCache_;
 };

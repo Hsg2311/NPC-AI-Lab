@@ -405,9 +405,9 @@ void Renderer::drawPlayer(HDC hdc, int w, int h,
         DeleteObject(pen);
     }
 
-    drawFilledCircle(hdc, center, 10,
-        RGB( 40,  90, 200),
-        RGB(120, 180, 255));
+    COLORREF fillCol    = p.isDummy ? RGB(220, 140,  30) : RGB( 40,  90, 200);
+    COLORREF outlineCol = p.isDummy ? RGB(255, 200,  80) : RGB(120, 180, 255);
+    drawFilledCircle(hdc, center, 10, fillCol, outlineCol);
 
     if ((std::fabsf(p.dirX) + std::fabsf(p.dirZ)) > 0.05f) {
         POINT tip = {
@@ -426,7 +426,7 @@ void Renderer::drawPlayer(HDC hdc, int w, int h,
         drawProgressBar(hdc, center, center.y - 14, p.attackProgress, fc);
     }
 
-    SetTextColor(hdc, RGB(140, 200, 255));
+    SetTextColor(hdc, p.isDummy ? RGB(255, 200, 80) : RGB(140, 200, 255));
     SetBkMode   (hdc, TRANSPARENT);
     TextOutA    (hdc, center.x - 10, center.y - 30,
                  p.name.c_str(), static_cast<int>(p.name.size()));
@@ -484,6 +484,29 @@ void Renderer::drawHUD(HDC hdc, int w, int h,
         }
         TextOutA(hdc, 10, aggroY, buf, static_cast<int>(std::strlen(buf)));
         aggroY += 16;
+    }
+
+    // P1-P2 거리 및 집결/분산 상태 표시
+    {
+        const sim::DebugPlayerEntry* p1entry = nullptr;
+        const sim::DebugPlayerEntry* p2entry = nullptr;
+        for (const auto& p : snap.players) {
+            if (!p.alive) continue;
+            if (p.isDummy) p2entry = &p;
+            else           p1entry = &p;
+        }
+        if (p1entry && p2entry) {
+            float dx   = p1entry->x - p2entry->x;
+            float dz   = p1entry->z - p2entry->z;
+            float dist = std::sqrtf(dx * dx + dz * dz);
+            bool  clustered = (dist <= 20.f);
+
+            char distBuf[64];
+            std::snprintf(distBuf, sizeof(distBuf), "P1-P2 dist: %.1fm  [%s]",
+                dist, clustered ? "CLUSTERED" : "SCATTERED");
+            SetTextColor(hdc, clustered ? RGB(100, 220, 255) : RGB(255, 160, 50));
+            TextOutA(hdc, 10, aggroY + 4, distBuf, static_cast<int>(std::strlen(distBuf)));
+        }
     }
 
     // 상태 범례 (좌측 하단) - 8개 항목
@@ -620,9 +643,9 @@ void Renderer::drawTacticalNpc(HDC hdc, int w, int h,
     // ── 레이블 ──────────────────────────────────────────────────────────────
     {
         static const char* stateNames[] = {
-            "Idle","Chase","Windup","Recover","Flank","AltWait","Return","Dead"
+            "Idle","Chase","Windup","Recover","Flank","?","?","Dead","HoldSlot"
         };
-        const char* sname = (tnpc.state >= 0 && tnpc.state < 8)
+        const char* sname = (tnpc.state >= 0 && tnpc.state < 9)
             ? stateNames[tnpc.state] : "?";
         char label[80];
         std::snprintf(label, sizeof(label), "%s%s [%s]",

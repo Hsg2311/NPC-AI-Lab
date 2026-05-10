@@ -19,6 +19,7 @@ public:
     };
 
     void addControl(uint32_t playerId, std::vector<Vec3> waypoints, bool loop = true);
+    bool hasControl(uint32_t playerId) const;
     void update(float dt, Room& room);
 
 private:

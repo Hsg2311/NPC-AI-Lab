@@ -307,6 +307,7 @@ DebugSnapshot Room::buildSnapshot() const {
         e.attackState    = p->getAttackState();
         e.attackProgress = p->getAttackProgress();
         e.attackRange    = p->getAttackRange();
+        e.isDummy        = dummyCtrl_.hasControl(p->getId());
         snap.players.push_back(e);
     }
 

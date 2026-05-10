@@ -22,9 +22,19 @@ namespace sim {
 
 void ScenarioTactical::setup(Room& room) {
     // ── 플레이어 ──────────────────────────────────────────────────────────────
-    auto p1 = std::make_shared<Player>("P1", Vec3{ 0.f, 0.f, 0.f }, 300.f, 20.f);
+    auto p1 = std::make_shared<Player>("P1", Vec3{ 0.f, 0.f, 0.f }, 10000.f, 20.f);
     room.addActor(p1);
     controlledPlayer_ = p1.get();
+
+    // P2: 더미 플레이어 — 웨이포인트를 따라 자동 이동, 실질 무적(HP 9999)
+    // 삼각형 루트: P1 근처(집결) → 좌하단(분산) → 우하단(분산) → 반복
+    auto p2 = std::make_shared<Player>("P2", Vec3{ 3.f, 0.f, 3.f }, 9999.f, 7.f);
+    room.addActor(p2);
+    room.getDummyController().addControl(p2->getId(), {
+        {  3.f, 0.f,   3.f },
+        { -20.f, 0.f, -20.f },
+        {  20.f, 0.f, -20.f },
+    }, /*loop=*/true);
 
     // ── NPC 공통 설정 ─────────────────────────────────────────────────────────
     TacticalNpcConfig cfg;
@@ -96,8 +106,8 @@ void ScenarioTactical::setup(Room& room) {
     }
     room.addTacticalSquad(std::move(squadC));
 
-    std::cout << "[Sim] ScenarioTactical: P1(1명) + Boss(Leader) + Squad A/B/C 각 20명\n";
-    std::cout << "화살표키로 P1 이동. Boss가 감지 후 3개 부대 포위 명령.\n";
+    std::cout << "[Sim] ScenarioTactical: P1(인간) + P2(더미) + Boss(Leader) + Squad A/B/C 각 20명\n";
+    std::cout << "화살표키로 P1 이동. P1-P2 거리 10m 이내: 포위 / 초과: 2초 후 각개격파.\n";
 }
 
 } // namespace sim

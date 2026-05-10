@@ -12,8 +12,7 @@ enum class SquadOrderType {
     Idle,
     Engage,      // 정면 공격
     Encircle,    // 포위 (sectorAngle 각도 섹터 배정)
-    DenseHold,   // 밀집 대형, 현재 위치 고정 (경계/각개격파 후방부대)
-    WedgeCharge, // 쐐기 대형, 타겟 향해 돌진 (각개격파 공격대)
+    DenseHold,   // 밀집 대형, 현재 위치 고정
     BoxAdvance,  // 박스 대형 진격: sectorPos(상대 오프셋) 슬롯으로 이동, 전투 중 NPC 유지
 };
 
@@ -26,6 +25,7 @@ struct SquadOrder {
     Vec3           leaderPos         = {};    // WedgeCharge/BoxAdvance: 방향 계산용
     Vec3           sectorPos         = {};    // BoxAdvance: 부대 상대 오프셋
     Vec3           formationTargetPos= {};    // BoxAdvance: 대형 시작 시점의 고정 타겟 위치
+    Vec3           tacticCenter      = {};    // Encircle: 전술 발동 시점의 고정 포위 중심
 };
 
 // ─── TacticalSquad ───────────────────────────────────────────────────────────
@@ -64,7 +64,6 @@ private:
     std::vector<Vec3> calcEncircleSlots(const Vec3& targetPos, float sectorAngle,
                                         float sectorSpan, float radius, int count) const;
     std::vector<Vec3> calcDenseSlots (const Vec3& center, const Vec3& forward, int count) const;
-    std::vector<Vec3> calcWedgeSlots (const Vec3& targetPos, const Vec3& fromPos, int count) const;
 
     int                  squadId_;
     float                memberAttackRange_;

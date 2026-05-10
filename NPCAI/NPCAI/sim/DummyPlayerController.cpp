@@ -12,6 +12,12 @@ void DummyPlayerController::addControl(uint32_t playerId, std::vector<Vec3> wayp
     controls_.push_back(std::move(ctrl));
 }
 
+bool DummyPlayerController::hasControl(uint32_t playerId) const {
+    for (const auto& ctrl : controls_)
+        if (ctrl.playerId == playerId) return true;
+    return false;
+}
+
 void DummyPlayerController::update(float dt, Room& room) {
     for (auto& ctrl : controls_) {
         if (ctrl.waypoints.empty()) continue;

@@ -44,11 +44,11 @@ void TacticalSquad::update(float /*dt*/, Room& room) {
         // 새 명령 수신 시 1회 계산 (FlankLeft/Right/Encircle/DenseHold/DenseAdvance)
         pushCommandsToMembers(room);
         orderDirty_ = false;
-    } else if (currentOrder_.type == SquadOrderType::WedgeCharge) {
-        // 쐐기 돌진: 타겟이 움직이므로 매 틱 슬롯 갱신
+    } else if (currentOrder_.type == SquadOrderType::BoxAdvance) {
+        // BoxAdvance: 공격 사이클 후 Chase 복귀 NPC 재명령
         pushCommandsToMembers(room);
     }
-    // FlankLeft/Right/Encircle/DenseHold/BoxAdvance: 슬롯 고정 — 재계산 없음
+    // Encircle/DenseHold: 슬롯 고정 — 재계산 없음
 }
 
 // ─── removeDeadMembers ────────────────────────────────────────────────────────
@@ -113,40 +113,6 @@ std::vector<Vec3> TacticalSquad::calcDenseSlots(const Vec3& center,
     return slots;
 }
 
-// ─── calcWedgeSlots ───────────────────────────────────────────────────────────
-// V자 화살표 대형. 첨단이 타겟 방향. 행 i에 (i+1)명.
-
-std::vector<Vec3> TacticalSquad::calcWedgeSlots(const Vec3& targetPos,
-                                                  const Vec3& fromPos,
-                                                  int count) const {
-    std::vector<Vec3> slots;
-    slots.reserve(static_cast<size_t>(count));
-    if (count <= 0) return slots;
-
-    float spacing = memberAttackRange_ * 1.2f;
-    if (spacing < 1.5f) spacing = 1.5f;
-
-    Vec3 toTarget = (targetPos - fromPos);
-    float dist = toTarget.length();
-    Vec3 forward = (dist > 0.01f) ? (toTarget / dist) : Vec3{ 1.f, 0.f, 0.f };
-    Vec3 right{ -forward.z, 0.f, forward.x };
-
-    // 첨단: 타겟에서 attackRange 거리
-    Vec3 tip = targetPos - forward * memberAttackRange_;
-
-    int idx = 0;
-    for (int row = 0; idx < count; ++row) {
-        int rowCount = row + 1;
-        float rowDist = static_cast<float>(row) * spacing * 1.5f;
-        Vec3  rowCenter = tip - forward * rowDist;  // 첨단에서 뒤로
-        for (int col = 0; col < rowCount && idx < count; ++col, ++idx) {
-            float colOff = (static_cast<float>(col) - static_cast<float>(rowCount - 1) * 0.5f) * spacing;
-            slots.push_back(rowCenter + right * colOff);
-        }
-    }
-    return slots;
-}
-
 // ─── pushCommandsToMembers ───────────────────────────────────────────────────
 
 void TacticalSquad::pushCommandsToMembers(Room& room) {
@@ -182,7 +148,7 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
         case SquadOrderType::Encircle: {
             Actor* targetActor = room.findActorById(ord.targetId);
             if (!targetActor || !targetActor->isAlive()) return;
-            Vec3 targetPos = targetActor->getPosition();
+            Vec3 targetPos = ord.tacticCenter;
 
             std::vector<Vec3> slots = calcEncircleSlots(
                 targetPos, ord.sectorAngle, ord.sectorSpan, ord.approachRadius, count);
@@ -248,28 +214,6 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
             break;
         }
 
-        case SquadOrderType::WedgeCharge: {
-            Actor* targetActor = room.findActorById(ord.targetId);
-            if (!targetActor || !targetActor->isAlive()) return;
-            Vec3 targetPos = targetActor->getPosition();
-
-            std::vector<Vec3> slots = calcWedgeSlots(targetPos, ord.leaderPos, count);
-
-            for (int i = 0; i < count; ++i) {
-                Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
-                if (auto* tnpc = dynamic_cast<TacticalNpc*>(a)) {
-                    TacticalCommand cmd;
-                    cmd.type             = TacticalCommandType::FlankTarget;
-                    cmd.targetId         = ord.targetId;
-                    cmd.slotOffset       = slots[static_cast<size_t>(i)];
-                    cmd.slotRefTargetPos = targetPos;
-                    cmd.abandonDist      = ord.approachRadius * 3.f;
-                    tnpc->receiveCommand(cmd);
-                }
-            }
-            break;
-        }
-
         case SquadOrderType::BoxAdvance: {
             Actor* targetActor = room.findActorById(ord.targetId);
             if (!targetActor || !targetActor->isAlive()) return;
@@ -303,8 +247,6 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
                 if (!tnpc) continue;
 
                 TacticalNpcState st = tnpc->getState();
-                if (st == TacticalNpcState::AttackWindup)
-                    continue;
 
                 // HoldSlot 이동 중에도 슬롯 변화가 작으면 현재 목표 유지 — 매 틱 재발행 방지
                 if (st == TacticalNpcState::HoldSlot) {

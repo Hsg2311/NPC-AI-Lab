@@ -1,6 +1,6 @@
 # Tactical NPC 시스템 구조
 
-> 갱신: 2026-05-07  
+> 갱신: 2026-05-10  
 > 대상: `sim/PlatoonLeader`, `sim/TacticalSquad`, `sim/TacticalNpc`, `sim/Room`, `sim/ScenarioTactical`
 
 Tactical NPC 시스템은 **지휘관-분대-개별 NPC**의 3계층 구조로 구성된다.
@@ -109,30 +109,58 @@ score     = 0.5 * distScore + 0.5 * hpScore
 
 현재 시나리오에서는 플레이어가 1명이므로 항상 P1이 선택된다.
 
-### 3-3. 초기 BoxAdvance 대형
+### 3-3. LeaderPhase — 마스터 단계 사이클
 
-시뮬레이션 시작 시 `boxAdvanceActive_ = true`이다.
-전술이 아직 발동되지 않았거나 전술 쿨타임 중이면 Boss는 먼저 Squad 단위의 박스 대형을 만든다.
-
-중요한 점은 **BoxAdvance 목표 위치는 대형 시작 시점에 한 번 고정**된다는 것이다.
+PlatoonLeader는 `LeaderPhase` enum으로 전체 전술 사이클을 추적한다.
 
 ```text
-boxAdvanceTargetPos_ = currentPlayerPosition
-boxAdvanceOrderIssued_ = true
+BoxAdvance  → Engage    : allMembersArrived() && !tacticsUnlocked_
+BoxAdvance  → Encircle  : allMembersArrived() && tacticsUnlocked_
+Engage      → Encircle  : checkTacticsConditions() 충족 (같은 evaluateTactics 틱 내 즉시 전환)
+Encircle    → Cooldown  : phaseOrderIssued_ && allMembersArrived()
+Cooldown    → BoxAdvance: tacticCooldown_ <= 0
+```
+
+단계 전환은 모두 `enterPhase(next, reason)`을 통해 이루어진다.
+이 함수는 `leaderPhase_`를 갱신하고 `phaseOrderIssued_`를 false로 초기화한다.
+
+```text
+// enterPhase 역할
+leaderPhase_      = next
+phaseOrderIssued_ = false
+Logger::log(reason)
+```
+
+`tacticsUnlocked_`는 단방향 래치다. 한 번 true가 되면 되돌아가지 않으며,
+BoxAdvance 완성 후 Engage로 갈지 Encircle로 갈지만 결정한다.
+
+### 3-4. BoxAdvance 단계
+
+시뮬레이션 시작 시 `leaderPhase_ = LeaderPhase::BoxAdvance`다.
+전술이 아직 발동되지 않았거나 전술 쿨타임 종료 후에도 이 단계로 진입한다.
+
+중요한 점은 **BoxAdvance 목표 위치는 명령 발행 시점에 한 번 고정**된다는 것이다.
+
+```text
+boxAdvanceTargetPos_ = currentPlayerPosition   // 발행 시점에 고정
+phaseOrderIssued_    = true
 ```
 
 이후 플레이어가 움직여도 이미 발행된 BoxAdvance 슬롯은 재계산하지 않는다.
-따라서 NPC들은 계속 흔들리는 플레이어 위치가 아니라, 최초에 잡힌 대형 위치로 이동한다.
 
 BoxAdvance가 완료되면:
 
 ```text
 allMembersArrived() == true
-  → boxAdvanceActive_ = false
-  → 모든 Squad에 Engage 명령 발행
+  if !tacticsUnlocked_:
+    enterPhase(Engage, ...)  → 모든 Squad에 Engage 명령 발행
+  else:
+    enterPhase(Encircle, ...)  → 다음 evaluateTactics에서 포위 슬롯 발행
 ```
 
-### 3-4. BoxAdvance 슬롯 기준
+BoxAdvance 중에는 Boss 이동이 없다. 플레이어 방향만 바라본다.
+
+### 3-5. BoxAdvance 슬롯 기준
 
 고정된 플레이어 위치를 `P0`, Boss 위치를 `B`라고 할 때:
 
@@ -145,8 +173,8 @@ Squad별 상대 오프셋은 `calcSquadBoxOffsets(numSquads)`로 계산한다.
 3개 Squad일 때 개념적으로는 좌측, 중앙, 우측에 배치된다.
 
 ```text
+rows = max(1, floor(sqrt(numSquads)))
 cols = ceil(numSquads / rows)
-rows = floor(sqrt(numSquads))
 
 colOff  = (col - (cols - 1) / 2) * BOX_SQUAD_SPACING
 rowOff  = (row - (rows - 1) / 2) * BOX_SQUAD_SPACING
@@ -169,7 +197,7 @@ squadCenter = P0
 
 이후 `calcDenseSlots(squadCenter, faceDir, count)`가 Squad 내부의 격자 슬롯을 만든다.
 
-### 3-5. 전술 발동 조건
+### 3-6. 전술 발동 조건
 
 전술은 처음부터 켜져 있지 않고, 다음 조건 중 하나를 만족하면 영구적으로 해금된다.
 
@@ -180,20 +208,21 @@ squadCenter = P0
 
 현재 구현은 전술 해금 후 다시 잠그지 않는다.
 
-### 3-6. 전술 페이즈
+### 3-7. Encircle 단계 — 포위 전술
 
-전술 해금 후 Boss는 플레이어 분산 여부에 따라 페이즈를 전환한다.
+`leaderPhase_ == Encircle`일 때 `evaluateTactics()`는 플레이어 분산 여부에 따라
+`TacticalPhase` 서브-단계를 전환한다.
 
 ```text
-Encircle
-  플레이어 군집이 1개일 때 포위 슬롯 발행
-  └─ 플레이어가 분산되면 Vigilance
+TacticalPhase::Encircle
+  플레이어 군집이 1개일 때 포위 슬롯 발행 (phaseOrderIssued_ == false일 때만)
+  └─ 플레이어가 분산되면 TacticalPhase::Vigilance
 
-Vigilance
+TacticalPhase::Vigilance
   모든 Squad가 DenseHold로 경계
-  └─ 5초 경과 후 DivideAndConquer
+  └─ 5초 경과 후 TacticalPhase::DivideAndConquer
 
-DivideAndConquer
+TacticalPhase::DivideAndConquer
   첫 번째 Squad는 WedgeCharge
   나머지 Squad는 DenseHold
 ```
@@ -202,20 +231,34 @@ DivideAndConquer
 두 플레이어 사이 거리가 `CLUSTER_RADIUS = 10` 이하이면 같은 군집으로 본다.
 현재 시나리오처럼 플레이어가 1명이면 항상 군집 수는 1이다.
 
-### 3-7. 포위 완료와 쿨타임
-
-포위 명령이 발행되면 `encircleSlotsAssigned_ = true`가 된다.
-모든 생존 멤버가 슬롯에 도착하면 전술 쿨타임에 들어간다.
+포위 슬롯 발행 조건:
 
 ```text
-allMembersArrived() == true
-  → tacticsOnCooldown_ = true
-  → tacticCooldown_ = 8.0s
-  → encircleSlotsAssigned_ = false
+isNewTactical = (tacticalPhase_ != TacticalPhase::Encircle)
+if isNewTactical || !phaseOrderIssued_:
+  → 슬롯 재발행, phaseOrderIssued_ = true
 ```
 
-쿨타임이 끝나면 `boxAdvanceActive_ = true`가 되어 다시 BoxAdvance 대형을 만들 수 있다.
-이때 `boxAdvanceOrderIssued_ = false`로 리셋되어 다음 사이클의 플레이어 위치를 새로 고정한다.
+`isNewTactical`은 플레이어 분산→재집결 시 포위 슬롯을 다시 배치하기 위한 조건이다.
+
+### 3-8. Cooldown 단계
+
+모든 생존 멤버가 포위 슬롯에 도착하면 Cooldown으로 전환된다.
+
+```text
+leaderPhase_ == Encircle && phaseOrderIssued_ && allMembersArrived()
+  → enterPhase(Cooldown, "포위 완성 — 쿨타임 진입")
+  → tacticCooldown_ = 8.0s
+```
+
+쿨타임 중에는 Squad에 Engage 명령을 계속 발행해 전투를 유지한다.
+쿨타임이 끝나면 BoxAdvance로 전환되어 다음 사이클이 시작된다.
+
+```text
+tacticCooldown_ <= 0
+  → enterPhase(BoxAdvance, "전술 쿨타임 종료 — 박스 대형 재개")
+  → phaseOrderIssued_ = false  (다음 BoxAdvance 명령 발행 허용)
+```
 
 ---
 
@@ -240,11 +283,9 @@ allMembersArrived() == true
 
 | SquadOrderType | 슬롯 재계산 시점 | 설명 |
 |---|---|---|
-| `Idle`, `Engage`, `Retreat`, `AlternateAttack` | 명령 수신 시 1회 | 슬롯 없음 |
-| `FlankLeft`, `FlankRight` | 명령 수신 시 1회 | 측면 슬롯 고정 |
+| `Idle`, `Engage` | 명령 수신 시 1회 | 슬롯 없음 |
 | `Encircle` | 명령 수신 시 1회 | 포위 슬롯 고정 |
 | `DenseHold` | 명령 수신 시 1회 | 현재 Squad 중심 기준 대기 |
-| `DenseAdvance` | 명령 수신 시 1회 | 지정 섹터로 밀집 이동 |
 | `BoxAdvance` | 명령 수신 시 1회 | 초기 대형 목표 고정 |
 | `WedgeCharge` | 매 틱 | 움직이는 타겟을 추적하는 돌진 대형 |
 
@@ -257,14 +298,10 @@ allMembersArrived() == true
 |---|---|---|
 | `Idle` | `Idle` | 없음 |
 | `Engage` | `EngageTarget` | 없음 |
-| `FlankLeft` / `FlankRight` | `FlankTarget` | `calcFlankSlots()` |
 | `Encircle` | `HoldSlot` | `calcEncircleSlots()` + greedy nearest-slot |
 | `DenseHold` | `HoldSlot` | `calcDenseSlots(center=squadCentroid)` |
-| `DenseAdvance` | `FlankTarget` | `calcDenseSlots(center=sectorPos)` |
 | `WedgeCharge` | `FlankTarget` | `calcWedgeSlots()` |
 | `BoxAdvance` | `HoldSlot` | 고정 `formationTargetPos` 기준 `calcDenseSlots()` |
-| `AlternateAttack` | `EngageTarget` 또는 `AlternateWait` | 순번 기반 |
-| `Retreat` | `Retreat` | 없음 |
 
 ### 4-4. Encircle 슬롯 수식
 
@@ -313,7 +350,7 @@ slot_i = center
        + forward * (row - (rows - 1) / 2) * spacing
 ```
 
-`DenseHold`, `DenseAdvance`, `BoxAdvance`가 이 계산을 공유한다.
+`DenseHold`와 `BoxAdvance`가 이 계산을 공유한다.
 
 ### 4-6. Wedge 슬롯 수식
 
@@ -358,18 +395,16 @@ update(dt)
 | 2 | `AttackWindup` | 공격 준비, 이동 없음 |
 | 3 | `AttackRecover` | 공격 후 회복 |
 | 4 | `Flank` | 지정 슬롯까지 고속 이동 후 교전 |
-| 5 | `AlternateWait` | 교대 공격 대기 |
-| 6 | `Return` | 스폰 위치 복귀 |
 | 7 | `Dead` | 사망 |
 | 8 | `HoldSlot` | 슬롯까지 이동 후 위치 유지 |
+
+Dead(7)과 Flank(4) 사이의 int 값 5, 6은 삭제된 상태가 차지하던 번호다. 렌더러 색상 테이블은 int 값으로 인덱싱하므로 뒤쪽 값을 당기지 않는다.
 
 | TacticalCommandType | 전환 상태 | 저장 데이터 |
 |---|---|---|
 | `EngageTarget` | `Chase` | `targetId_` |
 | `FlankTarget` | `Flank` | `targetId_`, `assignedSlot_`, `slotRefTargetPos_`, `abandonDist_`, `speedMult_` |
 | `HoldSlot` | `HoldSlot` | `targetId_`, `assignedSlot_` |
-| `AlternateWait` | `AlternateWait` | `targetId_` |
-| `Retreat` | `Return` | 없음 |
 | `Idle` | `Idle` | `targetId_ = 0` |
 | `Confused` | `Idle` | `targetId_ = 0` |
 
@@ -402,8 +437,16 @@ else:
     position += normalize(assignedSlot - position) * moveSpeed * TACTICAL_SPEED_MULT * dt
 ```
 
-`isAtSlot()`은 `HoldSlot` 상태에서 슬롯까지의 거리가 `separationRadius * 0.25`보다 작으면 true를 반환한다.
-현재 시나리오의 `separationRadius = 6`이므로 도착 허용 거리는 1.5다.
+`isAtSlot()`은 다음 세 가지 경우에 true를 반환한다.
+
+| 상태 | 조건 | 이유 |
+|---|---|---|
+| `HoldSlot` | `distance(pos, slot) < separationRadius * 0.25` | 슬롯 도착 판정 |
+| `AttackWindup` | 무조건 true | 전투 중 = 대형 완성으로 간주 |
+| `AttackRecover` | 무조건 true | 전투 중 = 대형 완성으로 간주 |
+
+그 외 상태(`Idle`, `Chase`, `Flank`, `Dead`)는 false.
+현재 시나리오의 `separationRadius = 6`이므로 HoldSlot 도착 허용 거리는 1.5다.
 
 ---
 
@@ -449,95 +492,5 @@ else:
 | 상수 | 값 | 의미 |
 |---|---:|---|
 | `TACTICAL_SPEED_MULT` | 3.0 | `Flank`, `HoldSlot` 이동 속도 배율 |
-| `CONFUSED_DURATION` | 3.0s | Confused용 예약 상수 |
 
 ---
-
-## 8. 졸업작품 보고서 작성 가이드
-
-### 8-1. 추천 서술 구조
-
-보고서에는 다음 순서로 쓰면 자연스럽다.
-
-1. 문제 정의: 다수 NPC가 단순 추적만 하면 겹침, 비효율 경로, 전술성 부족이 발생한다.
-2. 구조 제안: Boss가 전술 판단을 담당하고, Squad가 대형 위치를 계산하며, 개별 NPC는 FSM으로 실행한다.
-3. 초기 행동: 시뮬레이션 시작 시 Squad 단위 BoxAdvance 대형을 만든 뒤 플레이어를 추적한다.
-4. 전술 발동: Boss HP 또는 Squad 피해 조건을 만족하면 포위 전술을 발동한다.
-5. 수식 설명: 타겟 선택, 대형 슬롯 계산, 포위 섹터 분할, 도착 판정을 제시한다.
-6. 검증: 디버그 뷰에서 슬롯 마커, 상태 색상, HP, 타겟선을 확인했다고 설명한다.
-
-### 8-2. 보고서용 문단 예시
-
-```text
-본 프로젝트의 전술 NPC 시스템은 중간보스가 상위 지휘관 역할을 수행하고,
-NPC들은 Squad 단위로 명령을 받아 움직이는 계층형 AI 구조로 설계하였다.
-중간보스는 일정 주기마다 플레이어와 아군 상태를 평가하여 SquadOrder를 생성하고,
-각 Squad는 이를 실제 월드 좌표상의 대형 슬롯으로 변환한다.
-개별 TacticalNpc는 Squad가 전달한 TacticalCommand를 소비하여 Chase, HoldSlot,
-Flank, AttackWindup 등의 FSM 상태를 실행한다.
-
-시뮬레이션 초기에 중간보스는 BoxAdvance 명령을 통해 3개 Squad를 플레이어 전방의
-박스형 대형으로 배치한다. 이때 대형 목표점은 명령 발행 시점의 플레이어 위치로
-고정하여, 플레이어가 이동하더라도 NPC들이 흔들리지 않고 최초 대형 슬롯에 도착하도록 하였다.
-대형이 완성되면 Squad는 Engage 상태로 전환되어 플레이어를 추적한다.
-
-전술 조건은 중간보스의 체력 비율 또는 Squad 생존 비율로 판단한다.
-중간보스 HP가 70% 미만이거나 어느 Squad의 생존 비율이 80% 미만이면 전술이 해금된다.
-전술이 해금된 상태에서 플레이어가 하나의 군집으로 판단되면, 중간보스는 전체 NPC 수에 비례하여
-각 Squad에 원형 포위 섹터를 배분하고, 각 NPC는 자신에게 할당된 포위 슬롯으로 이동한다.
-```
-
-### 8-3. 보고서에 넣기 좋은 핵심 수식
-
-타겟 선택:
-
-```text
-S(p) = 0.5 * 1 / (1 + ||B - p||)
-     + 0.5 * (1 - HP(p) / HPmax(p))
-```
-
-전술 발동 조건:
-
-```text
-HPboss / HPboss,max < 0.70
-or
-aliveSquadMembers / initialSquadMembers < 0.80
-```
-
-초기 BoxAdvance 대형:
-
-```text
-P0 = player position at order issue time
-f = normalize(P0 - B)
-r = (-fz, 0, fx)
-
-C_s = P0 - f * d_approach + r * offset_x - f * offset_z - f * halfDepth
-```
-
-포위 섹터 분할:
-
-```text
-sectorSpan_s = 2π * n_s / N
-sectorAngle_s = angleAccum + sectorSpan_s / 2
-```
-
-포위 슬롯:
-
-```text
-theta_i = sectorAngle_s - sectorSpan_s / 2 + (i + 0.5) * sectorSpan_s / n_s
-slot_i = P + R * (cos(theta_i), 0, sin(theta_i))
-```
-
-도착 판정:
-
-```text
-arrived_i = ||pos_i - slot_i|| < separationRadius * 0.25
-```
-
-### 8-4. 강조하면 좋은 설계 포인트
-
-- 전술 판단과 개별 이동을 분리해 확장성이 높다.
-- Squad 단위 명령을 사용해 60명 NPC를 개별로 직접 제어하지 않아도 된다.
-- 초기 BoxAdvance는 목표점을 고정해 플레이어 이동으로 인한 대형 미완성 문제를 줄인다.
-- 포위는 Squad 인원 비율에 따라 섹터를 배분하므로 Squad 크기가 달라도 자연스럽게 확장된다.
-- `Room::buildSnapshot()`과 GDI 렌더러로 슬롯, 상태, 타겟을 시각화해 디버깅 가능하다.

@@ -17,10 +17,47 @@ void PlatoonLeader::addSquad(TacticalSquad* squad) {
     squads_.push_back(squad);
 }
 
+// ─── enterPhase ───────────────────────────────────────────────────────────────
+
+void PlatoonLeader::enterPhase(LeaderPhase next, const char* reason) {
+    Logger::get().log(name_, reason);
+    leaderPhase_      = next;
+    phaseOrderIssued_ = false;
+}
+
+void PlatoonLeader::enterTacticFailCooldown(Room& room, const char* reason) {
+    removeDeadMembersFromSquads(room);
+
+    tacticCooldown_ = TACTIC_FAIL_COOLDOWN_DURATION;
+    enterPhase(LeaderPhase::Cooldown, reason);
+
+    std::vector<TacticalSquad*> liveSquads;
+    for (auto* sq : squads_) {
+        if (!sq->isEmpty()) liveSquads.push_back(sq);
+    }
+
+    Player* primary = selectPrimaryTarget(room);
+    if (!primary || liveSquads.empty()) return;
+
+    std::vector<uint32_t> targets(liveSquads.size(), primary->getId());
+    assignSquadsToPlayers(room, liveSquads, targets);
+    for (size_t i = 0; i < liveSquads.size(); ++i) {
+        SquadOrder ord;
+        ord.type     = SquadOrderType::Engage;
+        ord.targetId = targets[i];
+        liveSquads[i]->receiveOrder(ord);
+    }
+}
+
+void PlatoonLeader::removeDeadMembersFromSquads(Room& room) {
+    for (auto* sq : squads_)
+        sq->removeDeadMembers(room);
+}
+
 // ─── update ───────────────────────────────────────────────────────────────────
 
 void PlatoonLeader::update(float dt, Room& room) {
-    // 초기 부대 규모 기록 (사망 전 최초 1회)
+    // 초기 부대 규모 기록 (최초 1회)
     if (!initialSizesSet_) {
         initialSizesSet_ = true;
         for (auto* sq : squads_)
@@ -39,35 +76,39 @@ void PlatoonLeader::update(float dt, Room& room) {
         return;
     }
 
-    // 경계 타이머 누적
-    if (tacticalPhase_ == TacticalPhase::Vigilance)
-        vigilanceElapsed_ += dt;
+    removeDeadMembersFromSquads(room);
 
     // 쿨타임 관리
-    if (tacticsOnCooldown_) {
+    if (leaderPhase_ == LeaderPhase::Cooldown) {
         tacticCooldown_ -= dt;
-        if (tacticCooldown_ <= 0.f) {
-            tacticsOnCooldown_ = false;
-            boxAdvanceActive_  = true;   // 쿨타임 종료 후 박스 대형 재개
-            boxAdvanceOrderIssued_ = false;
-            Logger::get().log(name_, "전술 쿨타임 종료 — 박스 대형 재개");
+        if (tacticCooldown_ <= 0.f)
+            enterPhase(LeaderPhase::BoxAdvance, "전술 쿨타임 종료 — 박스 대형 재개");
+    }
+    else if (leaderPhase_ == LeaderPhase::Encircle) {
+        if (phaseOrderIssued_ && allMembersArrived(room)) {
+            tacticCooldown_ = TACTIC_COOLDOWN_DURATION;
+            enterPhase(LeaderPhase::Cooldown, "포위 완성 — 쿨타임 진입");
         }
-    } else if (tacticsUnlocked_ && encircleSlotsAssigned_ && allMembersArrived(room)) {
-        // 포위 완성 → 쿨타임 진입
-        tacticsOnCooldown_     = true;
-        tacticCooldown_        = TACTIC_COOLDOWN_DURATION;
-        encircleSlotsAssigned_ = false;
-        Logger::get().log(name_, "포위 완성 — 쿨타임 진입");
     }
 
-    // ── 박스 대형 완성 감지 (tacticsUnlocked_ 여부 무관) ────────────────────
+    // ── 박스 대형 완성 감지 ───────────────────────────────────────────────────
     Player* primary = selectPrimaryTarget(room);
 
-    if (!tacticsOnCooldown_ && primary && boxAdvanceActive_ && allMembersArrived(room)) {
-        boxAdvanceActive_      = false;
-        boxAdvanceOrderIssued_ = false;
+    if (!tacticsUnlocked_ && primary && checkTacticsConditions()) {
+        tacticsUnlocked_ = true;
+        Logger::get().log(name_, "전술 활성화 — 조건 충족");
+        if (leaderPhase_ == LeaderPhase::Engage && clusterPlayers(room) == 1)
+            enterPhase(LeaderPhase::TacticRegroup, "전술 활성화 — 플레이어 군집, 집결 후 포위 전환");
+    }
+
+    if (leaderPhase_ == LeaderPhase::BoxAdvance && primary && allMembersArrived(room)) {
+        if (tacticsUnlocked_ && clusterPlayers(room) != 1) {
+            enterTacticFailCooldown(room, "Tactic failed: players scattered after BoxAdvance");
+            return;
+        }
+
         if (!tacticsUnlocked_) {
-            Logger::get().log(name_, "박스 대형 완성 — Engage 전환");
+            enterPhase(LeaderPhase::Engage, "박스 대형 완성 — Engage 전환");
             for (auto* sq : squads_) {
                 if (sq->isEmpty()) continue;
                 SquadOrder ord;
@@ -75,8 +116,40 @@ void PlatoonLeader::update(float dt, Room& room) {
                 ord.targetId = primaryTargetId_;
                 sq->receiveOrder(ord);
             }
+        }
+        else if (clusterPlayers(room) == 1) {
+            enterPhase(LeaderPhase::Encircle, "박스 대형 완성 — 플레이어 군집 포위");
+        }
+        else {
+            enterPhase(LeaderPhase::Engage, "박스 대형 완성 — 플레이어 분산, Engage 유지");
+            for (auto* sq : squads_) {
+                if (sq->isEmpty()) continue;
+                SquadOrder ord;
+                ord.type     = SquadOrderType::Engage;
+                ord.targetId = primaryTargetId_;
+                sq->receiveOrder(ord);
+            }
+        }
+    }
+
+    // TacticRegroup: 전 부대 슬롯 도착 → Encircle 진입
+    if (leaderPhase_ == LeaderPhase::TacticRegroup && phaseOrderIssued_ && allMembersArrived(room)) {
+        if (clusterPlayers(room) != 1) {
+            enterTacticFailCooldown(room, "Tactic failed: players scattered after regroup");
+            return;
+        }
+
+        if (clusterPlayers(room) == 1) {
+            enterPhase(LeaderPhase::Encircle, "집결 완료 — 플레이어 군집 포위 전술 발동");
         } else {
-            Logger::get().log(name_, "박스 대형 완성 — 포위 준비");
+            enterPhase(LeaderPhase::Engage, "집결 완료 — 플레이어 분산, Engage 유지");
+            for (auto* sq : squads_) {
+                if (sq->isEmpty()) continue;
+                SquadOrder ord;
+                ord.type     = SquadOrderType::Engage;
+                ord.targetId = primaryTargetId_;
+                sq->receiveOrder(ord);
+            }
         }
     }
 
@@ -90,14 +163,26 @@ void PlatoonLeader::update(float dt, Room& room) {
     // ── 보스 이동 ─────────────────────────────────────────────────────────────
     pendingCmd_.type = TacticalCommandType::None;
 
-    if (boxAdvanceActive_) {
+    if (leaderPhase_ == LeaderPhase::BoxAdvance) {
         // BoxAdvance 중: 보스 이동 없음, 플레이어 응시
         if (primary)
             facing_ = (primary->getPosition() - position_).normalized();
         return;
     }
 
-    // Engage / Tactics 중: 플레이어와 거리 유지
+    if (leaderPhase_ == LeaderPhase::TacticRegroup) {
+        // 집결지로 이동
+        Vec3  toRally = regroupTargetPos_ - position_;
+        float d       = toRally.length();
+        if (d > 1.f) {
+            toRally = toRally / d;
+            position_ += toRally * moveSpeed_ * dt;
+            facing_    = toRally;
+        }
+        return;
+    }
+
+    // Engage / Encircle / Cooldown: 플레이어와 거리 유지
     if (primary) {
         float dist    = Vec3::distance(position_, primary->getPosition());
         Vec3 toPlayer = (primary->getPosition() - position_).normalized();
@@ -117,8 +202,7 @@ void PlatoonLeader::update(float dt, Room& room) {
 // ─── evaluateTactics ─────────────────────────────────────────────────────────
 
 void PlatoonLeader::evaluateTactics(Room& room) {
-    for (auto* sq : squads_)
-        sq->removeDeadMembers(room);
+    removeDeadMembersFromSquads(room);
 
     std::vector<TacticalSquad*> liveSquads;
     for (auto* sq : squads_)
@@ -149,22 +233,20 @@ void PlatoonLeader::evaluateTactics(Room& room) {
         }
     }
 
-    // 전술 발동 조건 체크 (한번 활성화되면 유지)
-    if (!tacticsUnlocked_ && checkTacticsConditions()) {
-        tacticsUnlocked_ = true;
-        Logger::get().log(name_, "전술 활성화 — 조건 충족");
+    if (tacticsUnlocked_ && leaderPhase_ == LeaderPhase::Engage && clusterPlayers(room) == 1) {
+        enterPhase(LeaderPhase::TacticRegroup, "플레이어 재군집 — 집결 후 포위 전환");
     }
 
     int numSquads = static_cast<int>(liveSquads.size());
 
-    if (!tacticsUnlocked_ || tacticsOnCooldown_ || boxAdvanceActive_) {
+    if (leaderPhase_ != LeaderPhase::Encircle) {
         primaryTargetId_ = primary->getId();
-        if (boxAdvanceActive_) {
-            if (boxAdvanceOrderIssued_) return;
+
+        if (leaderPhase_ == LeaderPhase::BoxAdvance) {
+            if (phaseOrderIssued_) return;
 
             boxAdvanceTargetPos_ = primary->getPosition();
 
-            // ── 박스 대형 진격 ────────────────────────────────────────────────
             // right 방향 투영값 기준으로 부대 정렬 → 반대편 이동 방지
             Vec3 toTgt2  = boxAdvanceTargetPos_ - position_;
             float tLen2  = toTgt2.length();
@@ -191,122 +273,100 @@ void PlatoonLeader::evaluateTactics(Room& room) {
             auto offsets = calcSquadBoxOffsets(numSquads);
             for (int i = 0; i < numSquads; ++i) {
                 SquadOrder ord;
-                ord.type           = SquadOrderType::BoxAdvance;
-                ord.targetId       = primaryTargetId_;
-                ord.sectorPos      = offsets[static_cast<size_t>(i)];
-                ord.leaderPos      = position_;
+                ord.type               = SquadOrderType::BoxAdvance;
+                ord.targetId           = primaryTargetId_;
+                ord.sectorPos          = offsets[static_cast<size_t>(i)];
+                ord.leaderPos          = position_;
                 ord.formationTargetPos = boxAdvanceTargetPos_;
-                ord.approachRadius = BOX_APPROACH_DIST;
+                ord.approachRadius     = BOX_APPROACH_DIST;
                 sqByLat[static_cast<size_t>(i)].second->receiveOrder(ord);
             }
-            boxAdvanceOrderIssued_ = true;
+            phaseOrderIssued_ = true;
+        } else if (leaderPhase_ == LeaderPhase::TacticRegroup) {
+            // 집결 명령 최초 1회만 발행
+            if (!phaseOrderIssued_) {
+                // 집결 위치: 보스 위치에서 플레이어 반대 방향으로 REGROUP_DIST
+                Vec3 playerCent = calcPlayerCentroid(room);
+                Vec3 toPlayer   = playerCent - position_;
+                float tLen      = toPlayer.length();
+                Vec3  awayDir   = (tLen > 0.01f) ? (toPlayer / tLen * -1.f) : Vec3{ -1.f, 0.f, 0.f };
+                regroupTargetPos_ = position_ + awayDir * REGROUP_DIST;
+
+                // 집결지 기준 박스 대형 — 플레이어 방향을 front로
+                auto offsets = calcSquadBoxOffsets(numSquads);
+                for (int i = 0; i < numSquads; ++i) {
+                    SquadOrder ord;
+                    ord.type               = SquadOrderType::BoxAdvance;
+                    ord.targetId           = primaryTargetId_;
+                    ord.sectorPos          = offsets[static_cast<size_t>(i)];
+                    ord.leaderPos          = regroupTargetPos_;
+                    ord.formationTargetPos = playerCent;
+                    ord.approachRadius     = BOX_APPROACH_DIST;
+                    liveSquads[static_cast<size_t>(i)]->receiveOrder(ord);
+                }
+                phaseOrderIssued_ = true;
+            }
         } else {
-            // ── Engage 유지 (박스 완성 후 전투 중) ────────────────────────────
-            for (auto* sq : liveSquads) {
+            // Engage 또는 Cooldown: 부대별 가장 가까운 플레이어를 독립 타겟팅
+            std::vector<uint32_t> targets(static_cast<size_t>(numSquads), primary->getId());
+            assignSquadsToPlayers(room, liveSquads, targets);
+            for (int i = 0; i < numSquads; ++i) {
                 SquadOrder ord;
                 ord.type     = SquadOrderType::Engage;
-                ord.targetId = primaryTargetId_;
-                sq->receiveOrder(ord);
+                ord.targetId = targets[static_cast<size_t>(i)];
+                liveSquads[static_cast<size_t>(i)]->receiveOrder(ord);
             }
         }
         return;
     }
 
-    bool scattered = (clusterPlayers(room) >= 2);
+    // ── LeaderPhase::Encircle ─────────────────────────────────────────────────
+    constexpr float TWO_PI = 2.f * 3.14159265f;
 
-    if (!scattered) {
-        // ── (가) 포위 ─────────────────────────────────────────────────────────
-        Vec3 centroid   = calcPlayerCentroid(room);
-        bool isNewPhase = (tacticalPhase_ != TacticalPhase::Encircle);
-
-        if (isNewPhase) {
-            Logger::get().log(name_, "전술 전환: 포위");
-            tacticalPhase_    = TacticalPhase::Encircle;
-            vigilanceElapsed_ = 0.f;
+    if (!phaseOrderIssued_) {
+        if (clusterPlayers(room) != 1) {
+            enterTacticFailCooldown(room, "Tactic failed: players scattered before Encircle");
+            return;
         }
 
-        // 현 사이클에서 아직 슬롯을 발행하지 않은 경우에만 재발행
-        // (플레이어 이동으로 인한 재할당 방지 — 쿨타임 후 encircleSlotsAssigned_ 가 리셋)
-        if (isNewPhase || !encircleSlotsAssigned_) {
-            lastEncircleCentroid_  = centroid;
-            encircleSlotsAssigned_ = true;
-
-            int totalMembers = 0;
-            for (auto* sq : liveSquads)
-                totalMembers += static_cast<int>(sq->getMembers().size());
-            if (totalMembers < 1) totalMembers = 1;
-
-            constexpr float TWO_PI = 2.f * 3.14159265f;
-
-            // ── 명령 발행 ────────────────────────────────────────────────────
-            float angleAccum = 0.f;
+        if (clusterPlayers(room) != 1) {
+            enterPhase(LeaderPhase::Engage, "포위 보류 — 플레이어 분산, Engage 유지");
+            std::vector<uint32_t> targets(static_cast<size_t>(numSquads), primaryTargetId_);
+            assignSquadsToPlayers(room, liveSquads, targets);
             for (int i = 0; i < numSquads; ++i) {
-                int   memberCount = static_cast<int>(liveSquads[static_cast<size_t>(i)]->getMembers().size());
-                float fraction    = static_cast<float>(memberCount) / static_cast<float>(totalMembers);
-                float sectorSpan  = TWO_PI * fraction;
-                float sectorAngle = angleAccum + sectorSpan * 0.5f;
-
                 SquadOrder ord;
-                ord.type           = SquadOrderType::Encircle;
-                ord.targetId       = primary->getId();
-                ord.sectorAngle    = sectorAngle;
-                ord.sectorSpan     = sectorSpan;
-                ord.approachRadius = ENCIRCLE_RADIUS;
+                ord.type     = SquadOrderType::Engage;
+                ord.targetId = targets[static_cast<size_t>(i)];
                 liveSquads[static_cast<size_t>(i)]->receiveOrder(ord);
-
-                angleAccum += sectorSpan;
             }
+            return;
         }
-        // 슬롯 이미 발행됨 → 재발행 없음 (NPC 현재 상태 유지)
 
-    } else {
-        // ── 분산 상태 ─────────────────────────────────────────────────────────
-        switch (tacticalPhase_) {
+        Vec3 encircleCenter = calcPlayerCentroid(room);
+        int totalMembers = 0;
+        for (auto* sq : liveSquads)
+            totalMembers += static_cast<int>(sq->getMembers().size());
+        if (totalMembers < 1) totalMembers = 1;
 
-            case TacticalPhase::Encircle:
-                Logger::get().log(name_, "전술 전환: 경계");
-                tacticalPhase_    = TacticalPhase::Vigilance;
-                vigilanceElapsed_ = 0.f;
-                for (auto* sq : liveSquads) {
-                    SquadOrder ord;
-                    ord.type     = SquadOrderType::DenseHold;
-                    ord.targetId = primary->getId();
-                    sq->receiveOrder(ord);
-                }
-                break;
+        float angleAccum = 0.f;
+        for (int i = 0; i < numSquads; ++i) {
+            int   memberCount = static_cast<int>(liveSquads[static_cast<size_t>(i)]->getMembers().size());
+            float fraction    = static_cast<float>(memberCount) / static_cast<float>(totalMembers);
+            float sectorSpan  = TWO_PI * fraction;
+            float sectorAngle = angleAccum + sectorSpan * 0.5f;
 
-            case TacticalPhase::Vigilance:
-                // 경계 유지 — 재발행 없음
-                if (vigilanceElapsed_ >= VIGILANCE_DURATION) {
-                    Logger::get().log(name_, "전술 전환: 각개격파");
-                    tacticalPhase_ = TacticalPhase::DivideAndConquer;
-                    if (numSquads >= 1) {
-                        SquadOrder atk;
-                        atk.type      = SquadOrderType::WedgeCharge;
-                        atk.targetId  = primary->getId();
-                        atk.leaderPos = position_;
-                        liveSquads[0]->receiveOrder(atk);
-                    }
-                    for (int i = 1; i < numSquads; ++i) {
-                        SquadOrder hold;
-                        hold.type     = SquadOrderType::DenseHold;
-                        hold.targetId = primary->getId();
-                        liveSquads[static_cast<size_t>(i)]->receiveOrder(hold);
-                    }
-                }
-                break;
+            SquadOrder ord;
+            ord.type           = SquadOrderType::Encircle;
+            ord.targetId       = primary->getId();
+            ord.sectorAngle    = sectorAngle;
+            ord.sectorSpan     = sectorSpan;
+            ord.approachRadius = ENCIRCLE_RADIUS;
+            ord.tacticCenter   = encircleCenter;
+            liveSquads[static_cast<size_t>(i)]->receiveOrder(ord);
 
-            case TacticalPhase::DivideAndConquer:
-                // 쐐기 방향만 매 evaluate마다 갱신 (매 틱은 Squad::update()에서 처리)
-                if (numSquads >= 1) {
-                    SquadOrder atk;
-                    atk.type      = SquadOrderType::WedgeCharge;
-                    atk.targetId  = primary->getId();
-                    atk.leaderPos = position_;
-                    liveSquads[0]->receiveOrder(atk);
-                }
-                break;
+            angleAccum += sectorSpan;
         }
+        phaseOrderIssued_ = true;
     }
 }
 
@@ -327,32 +387,6 @@ bool PlatoonLeader::checkTacticsConditions() const {
     return false;
 }
 
-// ─── clusterPlayers ───────────────────────────────────────────────────────────
-// union-find 없이 연결 컴포넌트 카운트 (플레이어 수 ≤ 8이므로 O(N²) 허용)
-
-int PlatoonLeader::clusterPlayers(const Room& room) const {
-    const auto& players = room.getLivingPlayers();
-    int n = static_cast<int>(players.size());
-    if (n <= 1) return n;
-
-    std::vector<int> label(static_cast<size_t>(n), -1);
-    int numClusters = 0;
-
-    for (int i = 0; i < n; ++i) {
-        if (label[i] != -1) continue;
-        label[i] = numClusters++;
-        // BFS
-        for (int j = i + 1; j < n; ++j) {
-            if (label[j] == -1) {
-                float d = Vec3::distance(players[static_cast<size_t>(i)]->getPosition(),
-                                         players[static_cast<size_t>(j)]->getPosition());
-                if (d <= CLUSTER_RADIUS) label[j] = label[i];
-            }
-        }
-    }
-    return numClusters;
-}
-
 // ─── calcPlayerCentroid ───────────────────────────────────────────────────────
 
 Vec3 PlatoonLeader::calcPlayerCentroid(const Room& room) const {
@@ -361,6 +395,43 @@ Vec3 PlatoonLeader::calcPlayerCentroid(const Room& room) const {
     Vec3 sum{};
     for (Player* p : players) sum += p->getPosition();
     return sum / static_cast<float>(players.size());
+}
+
+int PlatoonLeader::clusterPlayers(const Room& room) const {
+    const auto& players = room.getLivingPlayers();
+    int count = static_cast<int>(players.size());
+    if (count <= 1) return count;
+
+    std::vector<bool> visited(static_cast<size_t>(count), false);
+    int clusters = 0;
+    float clusterRadiusSq = CLUSTER_RADIUS * CLUSTER_RADIUS;
+
+    for (int i = 0; i < count; ++i) {
+        if (visited[static_cast<size_t>(i)]) continue;
+
+        ++clusters;
+        std::vector<int> stack;
+        stack.push_back(i);
+        visited[static_cast<size_t>(i)] = true;
+
+        while (!stack.empty()) {
+            int current = stack.back();
+            stack.pop_back();
+
+            Vec3 currentPos = players[static_cast<size_t>(current)]->getPosition();
+            for (int j = 0; j < count; ++j) {
+                if (visited[static_cast<size_t>(j)]) continue;
+
+                Vec3 otherPos = players[static_cast<size_t>(j)]->getPosition();
+                if (Vec3::distanceSq(currentPos, otherPos) <= clusterRadiusSq) {
+                    visited[static_cast<size_t>(j)] = true;
+                    stack.push_back(j);
+                }
+            }
+        }
+    }
+
+    return clusters;
 }
 
 // ─── selectPrimaryTarget ─────────────────────────────────────────────────────
@@ -373,6 +444,61 @@ Player* PlatoonLeader::selectPrimaryTarget(Room& room) const {
         if (s > bestScore) { bestScore = s; best = p; }
     }
     return best;
+}
+
+// ─── assignSquadsToPlayers ───────────────────────────────────────────────────
+// 부대-플레이어 거리 행렬 기반 균등 greedy 배정.
+// maxPerPlayer = ceil(N/P) 제한으로 어느 플레이어도 완전히 무시되지 않도록 보장.
+
+void PlatoonLeader::assignSquadsToPlayers(const Room& room,
+    const std::vector<TacticalSquad*>& liveSquads,
+    std::vector<uint32_t>& outTargetIds) const
+{
+    const auto& players = room.getLivingPlayers();
+    int numSquads  = static_cast<int>(liveSquads.size());
+    int numPlayers = static_cast<int>(players.size());
+
+    // 플레이어가 없거나 1명이면 기존 값(primaryTargetId_) 유지
+    if (numPlayers <= 1) return;
+
+    // ceil(numSquads / numPlayers) — 플레이어당 최대 배정 부대 수
+    int maxPerPlayer = (numSquads + numPlayers - 1) / numPlayers;
+
+    // 각 부대의 중심점 계산 (살아있는 멤버 위치 평균)
+    struct DistEntry { float dist; int squadIdx; int playerIdx; };
+    std::vector<DistEntry> entries;
+    entries.reserve(static_cast<size_t>(numSquads * numPlayers));
+
+    for (int si = 0; si < numSquads; ++si) {
+        Vec3 centroid{};
+        int  cnt = 0;
+        for (uint32_t mid : liveSquads[static_cast<size_t>(si)]->getMembers()) {
+            Actor* a = room.findActorById(mid);
+            if (a && a->isAlive()) { centroid += a->getPosition(); ++cnt; }
+        }
+        if (cnt > 0) centroid = centroid / static_cast<float>(cnt);
+        else         centroid = position_;
+
+        for (int pi = 0; pi < numPlayers; ++pi) {
+            float d = Vec3::distance(centroid, players[static_cast<size_t>(pi)]->getPosition());
+            entries.push_back({ d, si, pi });
+        }
+    }
+
+    std::sort(entries.begin(), entries.end(),
+        [](const DistEntry& a, const DistEntry& b) { return a.dist < b.dist; });
+
+    std::vector<bool> squadDone(static_cast<size_t>(numSquads), false);
+    std::vector<int>  playerCount(static_cast<size_t>(numPlayers), 0);
+
+    for (const auto& e : entries) {
+        if (squadDone[static_cast<size_t>(e.squadIdx)]) continue;
+        if (playerCount[static_cast<size_t>(e.playerIdx)] >= maxPerPlayer) continue;
+        outTargetIds[static_cast<size_t>(e.squadIdx)] =
+            players[static_cast<size_t>(e.playerIdx)]->getId();
+        squadDone[static_cast<size_t>(e.squadIdx)]   = true;
+        playerCount[static_cast<size_t>(e.playerIdx)]++;
+    }
 }
 
 float PlatoonLeader::evaluatePlayerScore(const Player* p) const {
@@ -409,8 +535,8 @@ std::vector<Vec3> PlatoonLeader::calcSquadBoxOffsets(int numSquads) const {
     std::vector<Vec3> offsets;
     offsets.reserve(static_cast<size_t>(numSquads));
     for (int i = 0; i < numSquads; ++i) {
-        int   col    = i % cols;
-        int   row    = i / cols;
+        int   col        = i % cols;
+        int   row        = i / cols;
         float colOff     = (static_cast<float>(col) - static_cast<float>(cols - 1) * 0.5f) * BOX_SQUAD_SPACING;
         float rowOff     = (static_cast<float>(row) - static_cast<float>(rows - 1) * 0.5f) * BOX_SQUAD_SPACING;
         float halfCols   = static_cast<float>(cols - 1) * 0.5f;
