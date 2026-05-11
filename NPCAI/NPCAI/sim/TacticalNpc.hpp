@@ -29,6 +29,7 @@ enum class TacticalCommandType {
     Idle,           // 전투 해제
     Confused,       // PlatoonLeader 사망: 방황
     HoldSlot,       // assignedSlot 이동 후 유지 (공격 안 함, 경계용)
+    GuardSlot,      // HoldSlot처럼 이동/정지하되 도착 후 가장 가까운 플레이어 주시
 };
 
 struct TacticalCommand {
@@ -102,6 +103,7 @@ protected:
     Vec3             assignedSlot_{};      // Flank/HoldSlot 목적지 (월드 좌표)
     Vec3             slotRefTargetPos_{};  // 슬롯 발행 시점의 타겟 위치 (유효성 체크용)
     float            abandonDist_{ 15.f }; // Flank 슬롯 포기 거리
+    bool             guardNearestPlayer_{ false };
     Vec3             spawnPos_;
     int              squadId_{ -1 };
     std::string      logPrefix_{};

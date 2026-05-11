@@ -214,28 +214,64 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
             break;
         }
 
+        case SquadOrderType::GuardBoss: {
+            Vec3 guardDir{ std::cosf(ord.sectorAngle), 0.f, std::sinf(ord.sectorAngle) };
+            Vec3 squadCenter = ord.tacticCenter + guardDir * ord.approachRadius;
+
+            Vec3 faceDir = ord.formationTargetPos - squadCenter;
+            float fl = faceDir.length();
+            if (fl > 0.01f) faceDir = faceDir / fl;
+            else            faceDir = guardDir * -1.f;
+
+            std::vector<Vec3> slots = calcDenseSlots(squadCenter, faceDir, count);
+
+            for (int i = 0; i < count; ++i) {
+                Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
+                if (auto* tnpc = dynamic_cast<TacticalNpc*>(a)) {
+                    TacticalCommand cmd;
+                    cmd.type       = TacticalCommandType::GuardSlot;
+                    cmd.targetId   = ord.targetId;
+                    cmd.slotOffset = slots[static_cast<size_t>(i)];
+                    tnpc->receiveCommand(cmd);
+                }
+            }
+            break;
+        }
+
+        case SquadOrderType::RetreatFormUp: {
+            // 박스/밀집 대형을 만들지 않고, 현재 배치를 유지한 채 공통 이동량으로 후퇴한다.
+            Vec3 retreatDelta = ord.tacticCenter - ord.leaderPos;
+
+            for (int i = 0; i < count; ++i) {
+                Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
+                if (auto* tnpc = dynamic_cast<TacticalNpc*>(a)) {
+                    TacticalCommand cmd;
+                    cmd.type       = TacticalCommandType::HoldSlot;
+                    cmd.targetId   = ord.targetId;
+                    cmd.slotOffset = tnpc->getPosition() + retreatDelta;
+                    tnpc->receiveCommand(cmd);
+                }
+            }
+            break;
+        }
+
         case SquadOrderType::BoxAdvance: {
             Actor* targetActor = room.findActorById(ord.targetId);
             if (!targetActor || !targetActor->isAlive()) return;
-            Vec3 targetPos = ord.formationTargetPos;
+            Vec3 boxCenter = ord.tacticCenter;
+            Vec3 faceTargetPos = ord.formationTargetPos;
 
-            // leaderPos → targetPos 방향을 forward로, sectorPos(상대 오프셋)로 부대 중심 계산
-            Vec3  toTarget = (targetPos - ord.leaderPos);
+            // 보스 중심 박스 대형: 위치 기준은 tacticCenter, 방향만 플레이어 centroid를 바라본다.
+            Vec3  toTarget = (faceTargetPos - boxCenter);
             float d        = toTarget.length();
             Vec3  forward  = (d > 0.01f) ? (toTarget / d) : Vec3{ 1.f, 0.f, 0.f };
             Vec3  right{ -forward.z, 0.f, forward.x };
 
-            // 앞면(front face)이 approachRadius 위치에 오도록 center를 halfDepth만큼 뒤로 정렬
-            int   rcols     = static_cast<int>(std::ceilf(std::sqrtf(static_cast<float>(count))));
-            int   rrows     = (count + rcols - 1) / rcols;
-            float halfDepth = static_cast<float>(rrows - 1) * 0.5f * memberSeparationRadius_;
-
-            Vec3 squadCenter = (targetPos - forward * ord.approachRadius)
+            Vec3 squadCenter = boxCenter
                                + right   * ord.sectorPos.x
-                               - forward * ord.sectorPos.z
-                               - forward * halfDepth;
+                               - forward * ord.sectorPos.z;
 
-            Vec3  faceDir = (targetPos - squadCenter);
+            Vec3  faceDir = (faceTargetPos - squadCenter);
             float fl      = faceDir.length();
             if (fl > 0.01f) faceDir = faceDir / fl; else faceDir = forward;
 

@@ -79,10 +79,12 @@ void TacticalNpc::consumePendingCommand() {
 
     switch (pendingCmd_.type) {
         case TacticalCommandType::EngageTarget:
+            guardNearestPlayer_ = false;
             targetId_ = pendingCmd_.targetId;
             transitionTo(TacticalNpcState::Chase, "명령: EngageTarget");
             break;
         case TacticalCommandType::FlankTarget:
+            guardNearestPlayer_ = false;
             targetId_          = pendingCmd_.targetId;
             assignedSlot_      = pendingCmd_.slotOffset;
             slotRefTargetPos_  = pendingCmd_.slotRefTargetPos;
@@ -91,15 +93,24 @@ void TacticalNpc::consumePendingCommand() {
             transitionTo(TacticalNpcState::Flank, "명령: FlankTarget");
             break;
         case TacticalCommandType::HoldSlot:
+            guardNearestPlayer_ = false;
             targetId_     = pendingCmd_.targetId;
             assignedSlot_ = pendingCmd_.slotOffset;
             transitionTo(TacticalNpcState::HoldSlot, "명령: HoldSlot");
             break;
+        case TacticalCommandType::GuardSlot:
+            guardNearestPlayer_ = true;
+            targetId_     = pendingCmd_.targetId;
+            assignedSlot_ = pendingCmd_.slotOffset;
+            transitionTo(TacticalNpcState::HoldSlot, "명령: GuardSlot");
+            break;
         case TacticalCommandType::Idle:
+            guardNearestPlayer_ = false;
             targetId_ = 0;
             transitionTo(TacticalNpcState::Idle, "명령: Idle");
             break;
         case TacticalCommandType::Confused:
+            guardNearestPlayer_ = false;
             targetId_ = 0;
             transitionTo(TacticalNpcState::Idle, "명령: Confused");
             break;
@@ -273,6 +284,18 @@ void TacticalNpc::updateFlank(float dt, Room& room) {
 
 void TacticalNpc::updateHoldSlot(float dt, Room& room) {
     Actor* target = resolveTarget(room);
+    if (guardNearestPlayer_) {
+        target = nullptr;
+        float bestDistSq = -1.f;
+        for (Player* p : room.getLivingPlayers()) {
+            float dSq = Vec3::distanceSq(position_, p->getPosition());
+            if (bestDistSq < 0.f || dSq < bestDistSq) {
+                bestDistSq = dSq;
+                target = p;
+            }
+        }
+    }
+
     if (!target) {
         targetId_ = 0;
         transitionTo(TacticalNpcState::Idle, "타겟 소실 (HoldSlot 중)");
