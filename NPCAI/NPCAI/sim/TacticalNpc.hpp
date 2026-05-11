@@ -17,6 +17,7 @@ enum class TacticalNpcState {
     AttackWindup  = 2,  // 공격 준비 (이동 없음)
     AttackRecover = 3,  // 공격 후 쿨다운
     Flank         = 4,  // FlankTarget 명령: assignedSlot 위치까지 이동
+    ChargeThrough = 5,
     Dead          = 7,  // 종료 상태
     HoldSlot      = 8,  // DenseHold/Encircle/BoxAdvance 명령: 슬롯 이동 후 유지
 };
@@ -30,6 +31,7 @@ enum class TacticalCommandType {
     Confused,       // PlatoonLeader 사망: 방황
     HoldSlot,       // assignedSlot 이동 후 유지 (공격 안 함, 경계용)
     GuardSlot,      // HoldSlot처럼 이동/정지하되 도착 후 가장 가까운 플레이어 주시
+    ChargeThrough,
 };
 
 struct TacticalCommand {
@@ -39,6 +41,12 @@ struct TacticalCommand {
     Vec3                slotRefTargetPos = {};     // 슬롯 계산 시점의 타겟 위치 (유효성 체크용)
     float               abandonDist      = 15.f;  // 타겟 이탈 시 슬롯 포기 거리 (Flank 전용)
     float               speedMult        = 1.f;   // Flank 이동 속도 배율 (동시 도착용)
+    std::vector<uint32_t> targetIds       = {};
+    Vec3                chargeDir        = {};
+    Vec3                chargeCenter     = {};
+    float               impactRadius     = 3.f;
+    float               impactDamage     = 0.f;
+    float               passDistance     = 6.f;
 };
 
 // ─── TacticalNpcConfig ───────────────────────────────────────────────────────
@@ -73,10 +81,12 @@ public:
     Vec3             getSpawnPos()      const { return spawnPos_; }
     Vec3             getAssignedSlot()  const { return assignedSlot_; }
     float            getAttackRange()   const { return attackRange_; }
+    float            getAttackDamage()  const { return attackDamage_; }
     float            getSeparationRadius() const { return separationRadius_; }
     float            getWindupProgress()   const;
     float            getRecoverProgress()  const;
     bool             isAtSlot()           const;  // Flank/HoldSlot 슬롯 도착 여부
+    bool             isChargeComplete()   const { return chargeComplete_; }
 
     void setSquadId(int id) { squadId_ = id; }
 
@@ -89,6 +99,7 @@ protected:
     void updateAttackWindup (float dt, Room& room);
     void updateAttackRecover(float dt, Room& room);
     void updateFlank        (float dt, Room& room);
+    void updateChargeThrough(float dt, Room& room);
     void updateHoldSlot     (float dt, Room& room);
     void updateDead         ();
 
@@ -103,6 +114,14 @@ protected:
     Vec3             assignedSlot_{};      // Flank/HoldSlot 목적지 (월드 좌표)
     Vec3             slotRefTargetPos_{};  // 슬롯 발행 시점의 타겟 위치 (유효성 체크용)
     float            abandonDist_{ 15.f }; // Flank 슬롯 포기 거리
+    std::vector<uint32_t> chargeTargetIds_{};
+    std::vector<uint32_t> chargeHitIds_{};
+    Vec3             chargeDir_{};
+    Vec3             chargeCenter_{};
+    float            impactRadius_{ 3.f };
+    float            impactDamage_{ 0.f };
+    float            passDistance_{ 6.f };
+    bool             chargeComplete_{ false };
     bool             guardNearestPlayer_{ false };
     Vec3             spawnPos_;
     int              squadId_{ -1 };

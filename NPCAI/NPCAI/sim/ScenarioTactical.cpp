@@ -36,6 +36,22 @@ void ScenarioTactical::setup(Room& room) {
         {  20.f, 0.f, -20.f },
     }, /*loop=*/true);
 
+    //auto p3 = std::make_shared<Player>("P3", Vec3{ -3.f, 0.f, 3.f }, 9999.f, 7.f);
+    //room.addActor(p3);
+    //room.getDummyController().addControl(p3->getId(), {
+    //    { -3.f, 0.f,   3.f },
+    //    { -25.f, 0.f,  25.f },
+    //    {  25.f, 0.f,  25.f },
+    //}, /*loop=*/true);
+
+    //auto p4 = std::make_shared<Player>("P4", Vec3{ 0.f, 0.f, -3.f }, 9999.f, 7.f);
+    //room.addActor(p4);
+    //room.getDummyController().addControl(p4->getId(), {
+    //    {  0.f, 0.f,  -3.f },
+    //    {  25.f, 0.f, -25.f },
+    //    { -25.f, 0.f, -25.f },
+    //}, /*loop=*/true);
+
     // ── NPC 공통 설정 ─────────────────────────────────────────────────────────
     TacticalNpcConfig cfg;
     cfg.maxHp             = 80.f;
@@ -106,8 +122,8 @@ void ScenarioTactical::setup(Room& room) {
     }
     room.addTacticalSquad(std::move(squadC));
 
-    std::cout << "[Sim] ScenarioTactical: P1(인간) + P2(더미) + Boss(Leader) + Squad A/B/C 각 20명\n";
-    std::cout << "화살표키로 P1 이동. P1-P2 거리 10m 이내: 포위 / 초과: 2초 후 각개격파.\n";
+    std::cout << "[Sim] ScenarioTactical: P1(human) + P2/P3/P4(dummy) + Boss + Squad A/B/C x20\n";
+    std::cout << "Cluster radius 20m. 1 cluster: encircle; 2+: vigilance then divide-and-conquer.\n";
 }
 
 } // namespace sim

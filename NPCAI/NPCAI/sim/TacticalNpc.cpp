@@ -17,6 +17,7 @@ static const char* tacticalStateStr(TacticalNpcState s) {
         case TacticalNpcState::AttackWindup:  return "AttackWindup";
         case TacticalNpcState::AttackRecover: return "AttackRecover";
         case TacticalNpcState::Flank:         return "Flank";
+        case TacticalNpcState::ChargeThrough: return "ChargeThrough";
         case TacticalNpcState::Dead:          return "Dead";
         case TacticalNpcState::HoldSlot:      return "HoldSlot";
     }
@@ -85,6 +86,7 @@ void TacticalNpc::consumePendingCommand() {
             break;
         case TacticalCommandType::FlankTarget:
             guardNearestPlayer_ = false;
+            chargeComplete_ = false;
             targetId_          = pendingCmd_.targetId;
             assignedSlot_      = pendingCmd_.slotOffset;
             slotRefTargetPos_  = pendingCmd_.slotRefTargetPos;
@@ -92,8 +94,24 @@ void TacticalNpc::consumePendingCommand() {
             speedMult_         = pendingCmd_.speedMult;
             transitionTo(TacticalNpcState::Flank, "명령: FlankTarget");
             break;
+        case TacticalCommandType::ChargeThrough:
+            guardNearestPlayer_ = false;
+            targetId_          = pendingCmd_.targetId;
+            assignedSlot_      = pendingCmd_.slotOffset;
+            chargeTargetIds_   = pendingCmd_.targetIds;
+            chargeHitIds_.clear();
+            chargeDir_         = pendingCmd_.chargeDir.normalized();
+            chargeCenter_      = pendingCmd_.chargeCenter;
+            impactRadius_      = pendingCmd_.impactRadius;
+            impactDamage_      = pendingCmd_.impactDamage;
+            passDistance_      = pendingCmd_.passDistance;
+            speedMult_         = pendingCmd_.speedMult;
+            chargeComplete_    = false;
+            transitionTo(TacticalNpcState::ChargeThrough, "명령: ChargeThrough");
+            break;
         case TacticalCommandType::HoldSlot:
             guardNearestPlayer_ = false;
+            chargeComplete_ = false;
             targetId_     = pendingCmd_.targetId;
             assignedSlot_ = pendingCmd_.slotOffset;
             transitionTo(TacticalNpcState::HoldSlot, "명령: HoldSlot");
@@ -106,11 +124,13 @@ void TacticalNpc::consumePendingCommand() {
             break;
         case TacticalCommandType::Idle:
             guardNearestPlayer_ = false;
+            chargeComplete_ = false;
             targetId_ = 0;
             transitionTo(TacticalNpcState::Idle, "명령: Idle");
             break;
         case TacticalCommandType::Confused:
             guardNearestPlayer_ = false;
+            chargeComplete_ = false;
             targetId_ = 0;
             transitionTo(TacticalNpcState::Idle, "명령: Confused");
             break;
@@ -138,6 +158,7 @@ void TacticalNpc::update(float dt, Room& room) {
         case TacticalNpcState::AttackWindup:  updateAttackWindup (dt, room); break;
         case TacticalNpcState::AttackRecover: updateAttackRecover(dt, room); break;
         case TacticalNpcState::Flank:    updateFlank   (dt, room); break;
+        case TacticalNpcState::ChargeThrough: updateChargeThrough(dt, room); break;
         case TacticalNpcState::HoldSlot: updateHoldSlot(dt, room); break;
         case TacticalNpcState::Dead:          /* 종료 상태 */                 break;
     }
@@ -279,6 +300,56 @@ void TacticalNpc::updateFlank(float dt, Room& room) {
     position_ += moveDir * (moveSpeed_ * TACTICAL_SPEED_MULT * speedMult_ * dt);
 }
 
+// ─── ChargeThrough ────────────────────────────────────────────────────────────
+// WedgeCharge 전용 관통 돌진. 충돌 피해는 멤버별/플레이어별 1회만 적용한다.
+
+void TacticalNpc::updateChargeThrough(float dt, Room& room) {
+    Actor* target = resolveTarget(room);
+
+    if (chargeComplete_) {
+        if (target) {
+            Vec3 dir = target->getPosition() - position_;
+            if (dir.length() > 0.1f) facing_ = dir.normalized();
+        }
+        return;
+    }
+
+    if (chargeDir_.lengthSq() < 0.01f) {
+        Vec3 dir = assignedSlot_ - position_;
+        chargeDir_ = (dir.length() > 0.01f) ? dir.normalized() : Vec3{ 1.f, 0.f, 0.f };
+    }
+
+    for (uint32_t pid : chargeTargetIds_) {
+        Actor* a = room.findActorById(pid);
+        if (!a || !a->isAlive()) continue;
+
+        bool alreadyHit = std::find(chargeHitIds_.begin(), chargeHitIds_.end(), pid)
+                          != chargeHitIds_.end();
+        if (!alreadyHit &&
+            Vec3::distanceSq(position_, a->getPosition()) <= impactRadius_ * impactRadius_) {
+            a->takeDamage(impactDamage_);
+            chargeHitIds_.push_back(pid);
+
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "charge hit %s for %.0f  (hp=%.1f)",
+                a->getName().c_str(), impactDamage_, a->getHp());
+            Logger::get().log(logPrefix_, buf);
+        }
+    }
+
+    float distToExit = Vec3::distance(position_, assignedSlot_);
+    if (distToExit < 0.75f) {
+        chargeComplete_ = true;
+        facing_ = chargeDir_;
+        return;
+    }
+
+    Vec3 toExit = assignedSlot_ - position_;
+    Vec3 moveDir = (toExit.length() > 0.01f) ? toExit.normalized() : chargeDir_;
+    facing_ = moveDir;
+    position_ += moveDir * (moveSpeed_ * TACTICAL_SPEED_MULT * speedMult_ * dt);
+}
+
 // ─── HoldSlot ─────────────────────────────────────────────────────────────────
 // 슬롯까지 이동 후 대기. 타겟이 범위 내여도 공격하지 않는다 (경계 상태).
 
@@ -332,6 +403,8 @@ bool TacticalNpc::isAtSlot() const {
     switch (state_) {
         case TacticalNpcState::HoldSlot:
             return Vec3::distance(position_, assignedSlot_) < separationRadius_ * 0.25f;
+        case TacticalNpcState::ChargeThrough:
+            return chargeComplete_;
         case TacticalNpcState::AttackWindup:
         case TacticalNpcState::AttackRecover:
             return true;   // 전투 중: 대형 완성으로 간주

@@ -7,6 +7,12 @@
 
 namespace sim {
 
+static constexpr float WEDGE_EXIT_DISTANCE = 35.f;
+static constexpr float WEDGE_PREP_APEX_DISTANCE = 10.f;
+static constexpr float WEDGE_PASS_DISTANCE = 6.f;
+static constexpr float WEDGE_IMPACT_RADIUS = 3.f;
+static constexpr float WEDGE_SPEED_MULT    = 1.35f;
+
 TacticalSquad::TacticalSquad(int squadId, float memberAttackRange, float memberSeparationRadius)
     : squadId_(squadId)
     , memberAttackRange_(memberAttackRange)
@@ -27,6 +33,10 @@ void TacticalSquad::removeMember(uint32_t npcId) {
 void TacticalSquad::receiveOrder(const SquadOrder& order) {
     currentOrder_ = order;
     orderDirty_   = true;
+    wedgePrepared_ = false;
+    wedgeMemberIds_.clear();
+    wedgePrepareSlots_.clear();
+    wedgeExitSlots_.clear();
 }
 
 void TacticalSquad::updateBoxLeaderPos(const Vec3& pos) {
@@ -44,11 +54,17 @@ void TacticalSquad::update(float /*dt*/, Room& room) {
         // 새 명령 수신 시 1회 계산 (FlankLeft/Right/Encircle/DenseHold/DenseAdvance)
         pushCommandsToMembers(room);
         orderDirty_ = false;
+        return;
     } else if (currentOrder_.type == SquadOrderType::BoxAdvance) {
-        // BoxAdvance: 공격 사이클 후 Chase 복귀 NPC 재명령
+        pushCommandsToMembers(room);
+        return;
+    }
+    if (currentOrder_.type == SquadOrderType::WedgeCharge &&
+        !wedgePrepared_ && areMembersAtSlots(room)) {
+        wedgePrepared_ = true;
         pushCommandsToMembers(room);
     }
-    // Encircle/DenseHold: 슬롯 고정 — 재계산 없음
+    // Encircle/DenseHold/WedgeCharge: 슬롯/돌진 목표 고정 — 재계산 없음
 }
 
 // ─── removeDeadMembers ────────────────────────────────────────────────────────
@@ -61,6 +77,49 @@ void TacticalSquad::removeDeadMembers(Room& room) {
                 return !a || !a->isAlive();
             }),
         memberIds_.end());
+}
+
+Vec3 TacticalSquad::calcCentroid(Room& room) const {
+    Vec3 sum{};
+    int count = 0;
+    for (uint32_t id : memberIds_) {
+        Actor* a = room.findActorById(id);
+        if (a && a->isAlive()) {
+            sum += a->getPosition();
+            ++count;
+        }
+    }
+    return (count > 0) ? (sum / static_cast<float>(count)) : Vec3{};
+}
+
+bool TacticalSquad::areMembersAtSlots(Room& room) const {
+    bool anyAlive = false;
+    for (uint32_t id : memberIds_) {
+        Actor* a = room.findActorById(id);
+        if (!a || !a->isAlive()) continue;
+        anyAlive = true;
+        auto* tnpc = dynamic_cast<TacticalNpc*>(a);
+        if (tnpc && !tnpc->isAtSlot()) return false;
+    }
+    return anyAlive;
+}
+
+bool TacticalSquad::areChargeMembersComplete(Room& room) const {
+    bool anyAlive = false;
+    for (uint32_t id : memberIds_) {
+        Actor* a = room.findActorById(id);
+        if (!a || !a->isAlive()) continue;
+        anyAlive = true;
+        auto* tnpc = dynamic_cast<TacticalNpc*>(a);
+        if (tnpc) {
+            TacticalNpcState st = tnpc->getState();
+            if (st == TacticalNpcState::AttackWindup ||
+                st == TacticalNpcState::AttackRecover)
+                continue;
+            if (!tnpc->isChargeComplete()) return false;
+        }
+    }
+    return anyAlive;
 }
 
 // ─── calcEncircleSlots ───────────────────────────────────────────────────────
@@ -109,6 +168,35 @@ std::vector<Vec3> TacticalSquad::calcDenseSlots(const Vec3& center,
         float colOff = (static_cast<float>(col) - static_cast<float>(cols - 1) * 0.5f) * spacing;
         float rowOff = (static_cast<float>(row) - static_cast<float>(rows - 1) * 0.5f) * spacing;
         slots.push_back(center + right * colOff + forward * rowOff);
+    }
+    return slots;
+}
+
+std::vector<Vec3> TacticalSquad::calcWedgeSlots(const Vec3& apex,
+                                                const Vec3& forward,
+                                                int count) const {
+    std::vector<Vec3> slots;
+    slots.reserve(static_cast<size_t>(count));
+    if (count <= 0) return slots;
+
+    Vec3 fwd = (forward.lengthSq() > 0.01f) ? forward.normalized() : Vec3{ 1.f, 0.f, 0.f };
+    Vec3 right{ -fwd.z, 0.f, fwd.x };
+    float spacing = std::max(memberSeparationRadius_ * 0.75f, 1.5f);
+    float rowSpacing = std::max(memberSeparationRadius_ * 0.55f, 1.25f);
+
+    int placed = 0;
+    int row = 0;
+    while (placed < count) {
+        int rowCount = std::min(row + 1, count - placed);
+        float backOffset = static_cast<float>(row) * rowSpacing;
+
+        for (int col = 0; col < rowCount; ++col) {
+            float lateral = (static_cast<float>(col) -
+                             static_cast<float>(rowCount - 1) * 0.5f) * spacing;
+            slots.push_back(apex - fwd * backOffset + right * lateral);
+            ++placed;
+        }
+        ++row;
     }
     return slots;
 }
@@ -176,6 +264,89 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
                     cmd.slotOffset = slots[static_cast<size_t>(bestSlot)];
                     tnpc->receiveCommand(cmd);
                 }
+            }
+            break;
+        }
+
+        case SquadOrderType::WedgeCharge: {
+            Actor* targetActor = room.findActorById(ord.targetId);
+            if (!targetActor || !targetActor->isAlive()) return;
+
+            Vec3 centroid = calcCentroid(room);
+            Vec3 targetCenter = ord.tacticCenter;
+            Vec3 forward = targetCenter - centroid;
+            float flen = forward.length();
+            if (flen > 0.01f) forward = forward / flen;
+            else              forward = Vec3{ 1.f, 0.f, 0.f };
+
+            if (!wedgePrepared_) {
+                Vec3 prepareApex = centroid + forward * WEDGE_PREP_APEX_DISTANCE;
+                std::vector<Vec3> slots = calcWedgeSlots(prepareApex, forward, count);
+                Vec3 exitApex = targetCenter + forward * WEDGE_EXIT_DISTANCE;
+
+                wedgeMemberIds_.clear();
+                wedgePrepareSlots_.clear();
+                wedgeExitSlots_.clear();
+
+                std::vector<bool> slotUsed(slots.size(), false);
+                for (int i = 0; i < count; ++i) {
+                    Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
+                    auto* tnpc = dynamic_cast<TacticalNpc*>(a);
+                    if (!tnpc) continue;
+
+                    int bestSlot = -1;
+                    float bestDist = -1.f;
+                    for (int j = 0; j < static_cast<int>(slots.size()); ++j) {
+                        if (slotUsed[static_cast<size_t>(j)]) continue;
+                        float d = Vec3::distance(tnpc->getPosition(), slots[static_cast<size_t>(j)]);
+                        if (bestDist < 0.f || d < bestDist) {
+                            bestDist = d;
+                            bestSlot = j;
+                        }
+                    }
+                    if (bestSlot < 0) continue;
+                    slotUsed[static_cast<size_t>(bestSlot)] = true;
+
+                    Vec3 prepareSlot = slots[static_cast<size_t>(bestSlot)];
+                    Vec3 rel = prepareSlot - prepareApex;
+                    Vec3 exitSlot = exitApex + rel;
+
+                    wedgeMemberIds_.push_back(tnpc->getId());
+                    wedgePrepareSlots_.push_back(prepareSlot);
+                    wedgeExitSlots_.push_back(exitSlot);
+
+                    TacticalCommand cmd;
+                    cmd.type       = TacticalCommandType::HoldSlot;
+                    cmd.targetId   = ord.targetId;
+                    cmd.slotOffset = prepareSlot;
+                    tnpc->receiveCommand(cmd);
+                }
+                return;
+            }
+
+            for (size_t i = 0; i < wedgeMemberIds_.size(); ++i) {
+                Actor* a = room.findActorById(wedgeMemberIds_[i]);
+                auto* tnpc = dynamic_cast<TacticalNpc*>(a);
+                if (!tnpc) continue;
+
+                TacticalNpcState st = tnpc->getState();
+                if (st == TacticalNpcState::AttackWindup ||
+                    st == TacticalNpcState::AttackRecover ||
+                    st == TacticalNpcState::ChargeThrough)
+                    continue;
+
+                TacticalCommand cmd;
+                cmd.type         = TacticalCommandType::ChargeThrough;
+                cmd.targetId     = ord.targetId;
+                cmd.targetIds    = ord.targetIds;
+                cmd.slotOffset   = wedgeExitSlots_[i];
+                cmd.chargeDir    = forward;
+                cmd.chargeCenter = targetCenter;
+                cmd.impactRadius = std::max(WEDGE_IMPACT_RADIUS, memberAttackRange_);
+                cmd.impactDamage = tnpc->getAttackDamage();
+                cmd.passDistance = WEDGE_PASS_DISTANCE;
+                cmd.speedMult    = WEDGE_SPEED_MULT;
+                tnpc->receiveCommand(cmd);
             }
             break;
         }

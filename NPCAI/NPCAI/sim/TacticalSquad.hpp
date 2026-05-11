@@ -16,6 +16,7 @@ enum class SquadOrderType {
     BoxAdvance,    // 보스 중심 박스 대형: sectorPos 상대 오프셋으로 이동
     GuardBoss,     // 보스 중심 3방향 경계 대형
     RetreatFormUp, // 전술 발동 직후 대형을 만들지 않고 공통 방향으로 후퇴
+    WedgeCharge,   // 쐐기 대형으로 플레이어 군집을 관통 돌진
 };
 
 struct SquadOrder {
@@ -28,6 +29,7 @@ struct SquadOrder {
     Vec3           sectorPos          = {};  // BoxAdvance 부대 상대 오프셋
     Vec3           formationTargetPos = {};  // 대형이 바라볼 타겟/플레이어 centroid
     Vec3           tacticCenter       = {};  // 포위/경계 중심 또는 후퇴 목표 위치
+    std::vector<uint32_t> targetIds    = {};  // WedgeCharge 대상 군집 플레이어들
 };
 
 // ─── TacticalSquad ───────────────────────────────────────────────────────────
@@ -55,6 +57,9 @@ public:
     void removeDeadMembers(Room& room);
     // BoxAdvance 중 leaderPos 갱신 (기존 호출 호환용)
     void updateBoxLeaderPos(const Vec3& pos);
+    Vec3 calcCentroid(Room& room) const;
+    bool areMembersAtSlots(Room& room) const;
+    bool areChargeMembersComplete(Room& room) const;
 
 private:
     void pushCommandsToMembers(Room& room);
@@ -63,6 +68,7 @@ private:
     std::vector<Vec3> calcEncircleSlots(const Vec3& targetPos, float sectorAngle,
                                         float sectorSpan, float radius, int count) const;
     std::vector<Vec3> calcDenseSlots(const Vec3& center, const Vec3& forward, int count) const;
+    std::vector<Vec3> calcWedgeSlots(const Vec3& apex, const Vec3& forward, int count) const;
 
     int                   squadId_;
     float                 memberAttackRange_;
@@ -70,6 +76,10 @@ private:
     std::vector<uint32_t> memberIds_;
     SquadOrder            currentOrder_{};
     bool                  orderDirty_{ false }; // 새 명령 수신 후 1회 슬롯 재계산
+    bool                  wedgePrepared_{ false };
+    std::vector<uint32_t> wedgeMemberIds_{};
+    std::vector<Vec3>     wedgePrepareSlots_{};
+    std::vector<Vec3>     wedgeExitSlots_{};
 };
 
 } // namespace sim
