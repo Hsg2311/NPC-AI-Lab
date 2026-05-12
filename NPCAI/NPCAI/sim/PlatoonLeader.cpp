@@ -308,7 +308,7 @@ void PlatoonLeader::evaluateTactics(Room& room) {
         return;
     }
 
-    // 경계 전술: 보스를 중심으로 3방향 GuardBoss 대형을 만들고 이후 재판정하지 않는다.
+    // 경계 전술: 보스를 중심으로 3방향 GuardBoss 대형을 만든다.
     if (leaderPhase_ == LeaderPhase::Vigilance) {
         if (phaseOrderIssued_) return;
 
@@ -562,106 +562,67 @@ void PlatoonLeader::issueDivideAndConquer(Room& room,
             return a.score > b.score;
         });
 
-    if (sorted.size() == 2) {
-        const PlayerCluster& chargeCluster = sorted[0];
-        const PlayerCluster& encircleCluster = sorted[1];
+    const PlayerCluster& chargeCluster = sorted[0];
 
-        int chargeSquadIdx = 0;
-        float bestDist = -1.f;
-        for (int i = 0; i < static_cast<int>(liveSquads.size()); ++i) {
-            float d = Vec3::distance(liveSquads[static_cast<size_t>(i)]->calcCentroid(room),
-                                     chargeCluster.centroid);
-            if (bestDist < 0.f || d < bestDist) {
-                bestDist = d;
-                chargeSquadIdx = i;
-            }
-        }
-
-        TacticalSquad* chargeSquad = liveSquads[static_cast<size_t>(chargeSquadIdx)];
-        SquadOrder charge;
-        charge.type         = SquadOrderType::WedgeCharge;
-        charge.targetId     = chargeCluster.representativeId;
-        charge.targetIds    = chargeCluster.playerIds;
-        charge.tacticCenter = chargeCluster.centroid;
-        chargeSquad->receiveOrder(charge);
-        divideTasks_.push_back({ chargeSquad, DivideTaskType::Charge,
-                                 chargeCluster.representativeId, chargeCluster.playerIds });
-
-        std::vector<TacticalSquad*> encircleSquads;
-        for (int i = 0; i < static_cast<int>(liveSquads.size()); ++i) {
-            if (i != chargeSquadIdx)
-                encircleSquads.push_back(liveSquads[static_cast<size_t>(i)]);
-        }
-
-        constexpr float TWO_PI = 2.f * 3.14159265f;
-        int totalMembers = 0;
-        for (auto* sq : encircleSquads)
-            totalMembers += static_cast<int>(sq->getMembers().size());
-        if (totalMembers < 1) totalMembers = 1;
-
-        float angleAccum = 0.f;
-        for (auto* sq : encircleSquads) {
-            int memberCount = static_cast<int>(sq->getMembers().size());
-            float fraction = static_cast<float>(memberCount) / static_cast<float>(totalMembers);
-            float sectorSpan = TWO_PI * fraction;
-
-            SquadOrder ord;
-            ord.type           = SquadOrderType::Encircle;
-            ord.targetId       = encircleCluster.representativeId;
-            ord.sectorAngle    = angleAccum + sectorSpan * 0.5f;
-            ord.sectorSpan     = sectorSpan;
-            ord.approachRadius = DIVIDE_ENCIRCLE_RADIUS;
-            ord.tacticCenter   = encircleCluster.centroid;
-            sq->receiveOrder(ord);
-
-            divideTasks_.push_back({ sq, DivideTaskType::Encircle,
-                                     encircleCluster.representativeId, encircleCluster.playerIds });
-            angleAccum += sectorSpan;
-        }
-        return;
-    }
-
-    int targetCount = std::min(static_cast<int>(liveSquads.size()),
-                               std::min(3, static_cast<int>(sorted.size())));
-    if (targetCount <= 0) return;
-
-    struct DistEntry { float dist; int squadIdx; int clusterIdx; };
-    std::vector<DistEntry> entries;
-    for (int si = 0; si < static_cast<int>(liveSquads.size()); ++si) {
-        Vec3 squadCent = liveSquads[static_cast<size_t>(si)]->calcCentroid(room);
-        for (int ci = 0; ci < targetCount; ++ci) {
-            float d = Vec3::distance(squadCent, sorted[static_cast<size_t>(ci)].centroid);
-            entries.push_back({ d, si, ci });
+    int chargeSquadIdx = 0;
+    float bestDist = -1.f;
+    for (int i = 0; i < static_cast<int>(liveSquads.size()); ++i) {
+        float d = Vec3::distance(liveSquads[static_cast<size_t>(i)]->calcCentroid(room),
+                                 chargeCluster.centroid);
+        if (bestDist < 0.f || d < bestDist) {
+            bestDist = d;
+            chargeSquadIdx = i;
         }
     }
 
-    std::sort(entries.begin(), entries.end(),
-        [](const DistEntry& a, const DistEntry& b) { return a.dist < b.dist; });
+    TacticalSquad* chargeSquad = liveSquads[static_cast<size_t>(chargeSquadIdx)];
+    SquadOrder charge;
+    charge.type         = SquadOrderType::WedgeCharge;
+    charge.targetId     = chargeCluster.representativeId;
+    charge.targetIds    = chargeCluster.playerIds;
+    charge.tacticCenter = chargeCluster.centroid;
+    chargeSquad->receiveOrder(charge);
+    divideTasks_.push_back({ chargeSquad, DivideTaskType::Charge,
+                             chargeCluster.representativeId, chargeCluster.playerIds });
 
-    std::vector<bool> squadUsed(liveSquads.size(), false);
-    std::vector<bool> clusterUsed(static_cast<size_t>(targetCount), false);
-    for (const auto& e : entries) {
-        if (squadUsed[static_cast<size_t>(e.squadIdx)] ||
-            clusterUsed[static_cast<size_t>(e.clusterIdx)])
-            continue;
+    Vec3 supportCentroid{};
+    int supportCount = 0;
+    uint32_t supportTargetId = 0;
+    for (size_t i = 1; i < sorted.size(); ++i) {
+        const PlayerCluster& cluster = sorted[i];
+        supportCentroid += cluster.centroid;
+        ++supportCount;
+        if (supportTargetId == 0)
+            supportTargetId = cluster.representativeId;
+    }
+    if (supportCount == 0) return;
+    supportCentroid = supportCentroid / static_cast<float>(supportCount);
 
-        TacticalSquad* sq = liveSquads[static_cast<size_t>(e.squadIdx)];
-        const PlayerCluster& cluster = sorted[static_cast<size_t>(e.clusterIdx)];
+    Vec3 blockDir = supportCentroid - chargeCluster.centroid;
+    float blockLen = blockDir.length();
+    if (blockLen > 0.01f) blockDir = blockDir / blockLen;
+    else                  blockDir = Vec3{ 1.f, 0.f, 0.f };
 
-        SquadOrder ord;
-        ord.type         = SquadOrderType::WedgeCharge;
-        ord.targetId     = cluster.representativeId;
-        ord.targetIds    = cluster.playerIds;
-        ord.tacticCenter = cluster.centroid;
-        sq->receiveOrder(ord);
+    Vec3 blockCenter = (chargeCluster.centroid + supportCentroid) * 0.5f;
+    Vec3 blockRight{ -blockDir.z, 0.f, blockDir.x };
+    float baseAngle = std::atan2f(blockRight.z, blockRight.x);
 
-        divideTasks_.push_back({ sq, DivideTaskType::Charge,
-                                 cluster.representativeId, cluster.playerIds });
+    int screenIdx = 0;
+    for (int i = 0; i < static_cast<int>(liveSquads.size()); ++i) {
+        if (i == chargeSquadIdx) continue;
 
-        squadUsed[static_cast<size_t>(e.squadIdx)] = true;
-        clusterUsed[static_cast<size_t>(e.clusterIdx)] = true;
-
-        if (static_cast<int>(divideTasks_.size()) >= targetCount) break;
+        float sideSign = (screenIdx % 2 == 0) ? 1.f : -1.f;
+        SquadOrder screen;
+        screen.type               = SquadOrderType::GuardBoss;
+        screen.targetId           = (supportTargetId != 0) ? supportTargetId
+                                                           : chargeCluster.representativeId;
+        screen.sectorAngle        = baseAngle + (sideSign < 0.f ? 3.14159265f : 0.f);
+        screen.approachRadius     = SCREEN_BLOCK_SPACING *
+                                    (1.f + 0.5f * static_cast<float>(screenIdx / 2));
+        screen.tacticCenter       = blockCenter;
+        screen.formationTargetPos = supportCentroid;
+        liveSquads[static_cast<size_t>(i)]->receiveOrder(screen);
+        ++screenIdx;
     }
 }
 
@@ -672,35 +633,18 @@ void PlatoonLeader::updateDivideAndConquer(float dt, Room& room) {
         return;
     }
 
-    bool hasEncircleTask = false;
-    bool allEncircleCompleted = true;
     for (auto& task : divideTasks_) {
         if (!task.squad || task.squad->isEmpty()) {
             task.taskCompleted = true;
         } else if (!task.taskCompleted) {
             if (task.type == DivideTaskType::Charge)
                 task.taskCompleted = task.squad->areChargeMembersComplete(room);
-            else if (task.type == DivideTaskType::Encircle)
-                task.taskCompleted = task.squad->areMembersAtSlots(room);
-        }
-
-        if (task.type == DivideTaskType::Encircle) {
-            hasEncircleTask = true;
-            if (!task.taskCompleted)
-                allEncircleCompleted = false;
         }
     }
 
     bool allProtected = true;
     for (auto& task : divideTasks_) {
-        bool readyToEngage = false;
-        if (task.type == DivideTaskType::Charge) {
-            readyToEngage = task.taskCompleted;
-        } else if (task.type == DivideTaskType::Encircle) {
-            readyToEngage = task.taskCompleted && hasEncircleTask && allEncircleCompleted;
-        }
-
-        if (readyToEngage && !task.engageIssued) {
+        if (task.taskCompleted && !task.engageIssued) {
             uint32_t targetId = selectReplacementTarget(room, task.clusterPlayerIds);
             if (targetId != 0 && task.squad && !task.squad->isEmpty()) {
                 SquadOrder ord;

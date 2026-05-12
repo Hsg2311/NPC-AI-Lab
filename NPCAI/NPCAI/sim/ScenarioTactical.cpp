@@ -55,7 +55,7 @@ void ScenarioTactical::setup(Room& room) {
     // ── NPC 공통 설정 ─────────────────────────────────────────────────────────
     TacticalNpcConfig cfg;
     cfg.maxHp             = 80.f;
-    cfg.moveSpeed         = 10.f;
+    cfg.moveSpeed         = 15.f;
     cfg.attackRange       = 2.f;
     cfg.attackDamage      = 10.f;
     cfg.attackWindupTime  = 0.35f;
@@ -65,7 +65,7 @@ void ScenarioTactical::setup(Room& room) {
 
     TacticalNpcConfig leaderCfg = cfg;
     leaderCfg.maxHp       = 200.f;
-    leaderCfg.moveSpeed   = 10.f;
+    leaderCfg.moveSpeed   = 15.f;
     leaderCfg.attackRange = 2.5f;
 
     // ── PlatoonLeader ─────────────────────────────────────────────────────────

@@ -47,8 +47,7 @@ private:
 
     enum class DivideTaskType {
         None,
-        Charge,
-        Encircle
+        Charge
     };
 
     struct DivideSquadTask {
@@ -102,12 +101,12 @@ private:
     static constexpr float TACTIC_INTERVAL          = 1.f;
     static constexpr float CLUSTER_RADIUS           = 20.f;  // 플레이어 군집 판단 거리
     static constexpr float ENCIRCLE_RADIUS          = 50.0f; // 포위 슬롯 반경
-    static constexpr float DIVIDE_ENCIRCLE_RADIUS   = 24.0f; // 각개격파 보조 포위 반경
     static constexpr float TACTIC_HP_THRESHOLD      = 0.70f; // 리더 HP 70% 이하 시 전술 발동
     static constexpr float TACTIC_SQUAD_RATIO       = 0.80f; // 부대 생존율 80% 이하 시 전술 발동
     static constexpr float TACTIC_COOLDOWN_DURATION = 8.0f;  // 포위 완료 후 쿨타임
     static constexpr float TACTIC_FAIL_COOLDOWN_DURATION = 5.0f; // 실패/예외 쿨타임
     static constexpr float DIVIDE_ENGAGE_PROTECT_DURATION = 3.0f;
+    static constexpr float SCREEN_BLOCK_SPACING     = 12.0f; // 각개격파 차단 경계 Squad 간격
     static constexpr float BOX_FRONT_OFFSET         = 15.f;  // 보스 앞쪽 박스 대형 중심 거리
     static constexpr float BOX_SQUAD_SPACING        = 35.f;  // 박스 대형 부대 간격
     static constexpr float BOX_ARC_DEPTH            = 10.f;  // 측면 부대를 당기는 호형 깊이

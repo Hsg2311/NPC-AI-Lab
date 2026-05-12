@@ -270,25 +270,18 @@ clusters.size() >= 2  -> DivideAndConquer
 
 `DivideAndConquer`는 경계 완료 시점에도 플레이어 군집이 2개 이상일 때 선택된다. 리더는 `buildPlayerClusters()`로 플레이어 군집을 만들고, 군집 점수와 Squad 위치를 기준으로 Squad별 임무를 배정한다.
 
-플레이어 군집이 2개인 경우:
+플레이어 군집이 2개 이상인 경우:
 
 ```text
 점수가 높은 군집       -> 가장 가까운 Squad 1개가 WedgeCharge
-다른 군집             -> 나머지 Squad들이 Encircle
+나머지 Squad          -> 돌진 대상 군집과 나머지 군집 사이 차단 경계
 ```
 
-포위 보조 반경은 일반 포위보다 작은 `DIVIDE_ENCIRCLE_RADIUS`를 사용한다. 포위에 참여한 Squad들은 각각 자기 섹터의 슬롯으로 이동하지만, **모든 포위 Squad가 슬롯에 도착한 뒤에만 동시에 Engage로 전환**한다.
-
-플레이어 군집이 3개 이상인 경우:
-
-```text
-최대 3개 군집과 Squad를 거리순으로 1:1 매칭
-각 Squad는 배정된 군집에 WedgeCharge
-```
+돌진하지 않는 Squad에는 `GuardBoss` 명령을 재사용해 차단 경계 위치를 발행한다. 차단 중심은 돌진 대상 군집과 나머지 군집 centroid 평균의 중간 지점이며, Squad들은 이 중심의 좌우에 배치되어 합류 경로를 지연시킨다.
 
 `WedgeCharge`는 먼저 쐐기 준비 슬롯을 만들고 멤버를 `HoldSlot`으로 이동시킨 뒤, 준비가 끝나면 `ChargeThrough` 명령을 발행한다. `ChargeThrough` 중에는 대상 군집의 플레이어에게 멤버별 1회 충돌 피해를 적용하고, 돌진 종료 지점에 도착하면 완료로 본다.
 
-`WedgeCharge` 임무는 자기 돌진이 끝나면 바로 `Engage`로 전환한다. `Encircle` 임무는 포위에 참여한 모든 Squad가 슬롯에 도착한 뒤 함께 `Engage`로 전환한다. 모든 임무가 `Engage`로 전환되고 `DIVIDE_ENGAGE_PROTECT_DURATION`이 지나면 `Cooldown`에 진입한다.
+`WedgeCharge` 임무는 자기 돌진이 끝나면 바로 `Engage`로 전환한다. 돌진 Squad가 `Engage`로 전환되고 `DIVIDE_ENGAGE_PROTECT_DURATION`이 지나면 `Cooldown`에 진입한다.
 
 `DivideAndConquer` 명령 발행 직전 플레이어가 다시 1개 군집으로 모이면 각개격파를 취소하고 `Encircle`로 전환한다.
 
@@ -485,12 +478,12 @@ else:
 | `TACTIC_INTERVAL` | 1.0s | 전술 평가 주기 |
 | `CLUSTER_RADIUS` | 20.0 | 플레이어 군집 판단 거리 |
 | `ENCIRCLE_RADIUS` | 50.0 | 포위 반경 |
-| `DIVIDE_ENCIRCLE_RADIUS` | 24.0 | 각개격파 보조 포위 반경 |
 | `TACTIC_HP_THRESHOLD` | 0.70 | Boss HP 기반 전술 발동 임계값 |
 | `TACTIC_SQUAD_RATIO` | 0.80 | Squad 생존 비율 기반 전술 발동 임계값 |
 | `TACTIC_COOLDOWN_DURATION` | 8.0s | 포위 완료 후 쿨타임 |
 | `TACTIC_FAIL_COOLDOWN_DURATION` | 5.0s | 예외/실패 쿨타임 |
 | `DIVIDE_ENGAGE_PROTECT_DURATION` | 3.0s | 각개격파 임무별 Engage 유지 후 완료 판정 시간 |
+| `SCREEN_BLOCK_SPACING` | 12.0 | 각개격파 차단 경계 Squad 간격 |
 | `BOX_FRONT_OFFSET` | 15.0 | 보스 앞쪽 박스 중심 거리 |
 | `BOX_SQUAD_SPACING` | 35.0 | 박스 대형 Squad 간격 |
 | `BOX_ARC_DEPTH` | 10.0 | 측면 Squad를 앞쪽으로 당기는 호형 깊이 |
