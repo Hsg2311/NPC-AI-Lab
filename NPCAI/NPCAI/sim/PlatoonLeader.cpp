@@ -672,7 +672,8 @@ void PlatoonLeader::updateDivideAndConquer(float dt, Room& room) {
         return;
     }
 
-    bool allProtected = true;
+    bool hasEncircleTask = false;
+    bool allEncircleCompleted = true;
     for (auto& task : divideTasks_) {
         if (!task.squad || task.squad->isEmpty()) {
             task.taskCompleted = true;
@@ -683,7 +684,23 @@ void PlatoonLeader::updateDivideAndConquer(float dt, Room& room) {
                 task.taskCompleted = task.squad->areMembersAtSlots(room);
         }
 
-        if (task.taskCompleted && !task.engageIssued) {
+        if (task.type == DivideTaskType::Encircle) {
+            hasEncircleTask = true;
+            if (!task.taskCompleted)
+                allEncircleCompleted = false;
+        }
+    }
+
+    bool allProtected = true;
+    for (auto& task : divideTasks_) {
+        bool readyToEngage = false;
+        if (task.type == DivideTaskType::Charge) {
+            readyToEngage = task.taskCompleted;
+        } else if (task.type == DivideTaskType::Encircle) {
+            readyToEngage = task.taskCompleted && hasEncircleTask && allEncircleCompleted;
+        }
+
+        if (readyToEngage && !task.engageIssued) {
             uint32_t targetId = selectReplacementTarget(room, task.clusterPlayerIds);
             if (targetId != 0 && task.squad && !task.squad->isEmpty()) {
                 SquadOrder ord;

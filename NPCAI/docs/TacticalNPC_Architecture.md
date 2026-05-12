@@ -1,6 +1,6 @@
 # Tactical NPC 시스템 구조
 
-> 갱신: 2026-05-11  
+> 갱신: 2026-05-12  
 > 대상: `sim/PlatoonLeader`, `sim/TacticalSquad`, `sim/TacticalNpc`, `sim/Room`, `sim/ScenarioTactical`
 
 Tactical NPC 시스템은 **지휘관 - 부대 - 개별 NPC**의 3계층 구조로 구성된다.
@@ -93,7 +93,7 @@ Boss는 같은 설정을 기반으로 HP 200, 공격 사거리 2.5를 사용한�
 - 주 목표 플레이어 선택
 - 보스 중심 박스 대형 명령 발행
 - 전술 발동 조건 확인
-- 공통 후퇴, 포위, 경계 단계 전환
+- 공통 후퇴, 포위, 경계, 각개격파 단계 전환
 - 리더 사망 시 모든 Squad에 `Confused` 명령 발행
 
 ### 3-2. 목표 선택
@@ -108,7 +108,7 @@ score     = 0.5 * distScore + 0.5 * hpScore
 
 ### 3-3. LeaderPhase 흐름
 
-현재 리더 단계는 다음 6개다.
+현재 리더 단계는 다음 7개다.
 
 ```text
 BoxAdvance
@@ -116,6 +116,7 @@ Engage
 TacticalRetreat
 Encircle
 Vigilance
+DivideAndConquer
 Cooldown
 ```
 
@@ -130,6 +131,12 @@ Cooldown
 
 포위 완료:
   Encircle -> Cooldown
+
+경계 완료:
+  Vigilance -> Encircle 또는 DivideAndConquer
+
+각개격파 완료:
+  DivideAndConquer -> Cooldown
 
 쿨타임 종료:
   전술 해금 상태면 TacticalRetreat부터 다시 시작
@@ -234,7 +241,7 @@ sectorAngle  = angleAccum + sectorSpan_s / 2
 
 ### 3-8. Vigilance
 
-`Vigilance`는 박스 대형 완료 시점에 플레이어 군집이 2개 이상일 때 선택된다. 이 단계는 보스를 중심으로 한 경계 대형이며, 한 번 진입하면 플레이어가 다시 모여도 포위로 전환하지 않는다.
+`Vigilance`는 박스 대형 완료 시점에 플레이어 군집이 2개 이상일 때 선택된다. 이 단계는 보스를 중심으로 한 경계 대형이며, 경계 슬롯에 모든 멤버가 도착하면 플레이어 군집을 다시 판정한다.
 
 리더는 각 Squad에 `GuardBoss` 명령을 보낸다.
 
@@ -248,12 +255,53 @@ squadCenter_i  = bossPos + direction(squadAngle_i) * VIGILANCE_GUARD_RADIUS
 
 Squad 내부는 `calcDenseSlots()`로 밀집 슬롯을 만들고, 멤버에게 `GuardSlot`을 발행한다. `GuardSlot`은 `HoldSlot` 상태를 재사용하지만 공격하지 않고 가장 가까운 살아 있는 플레이어를 바라본다.
 
-### 3-9. Cooldown
+경계 대형 완료 후 재판정 결과에 따라 다음 단계가 정해진다.
 
-포위 완료 후에는 `Cooldown`에 진입한다.
+```text
+clusters.size() <= 1  -> Encircle
+clusters.size() >= 2  -> DivideAndConquer
+```
+
+즉, 플레이어가 경계 중 다시 모이면 포위로 전환하고, 계속 분산되어 있으면 각개격파를 시작한다.
+
+주의할 점은 `Vigilance`의 탈출 조건이 시간 기반이 아니라 `allMembersArrived(room)` 기반이라는 것이다. 따라서 살아 있는 멤버 중 하나라도 `GuardSlot`에 도착하지 못하면 군집 재판정이 실행되지 않고 경계 상태가 유지될 수 있다. 예를 들어 슬롯 판정 반경이 너무 좁거나, separation force 때문에 슬롯 근처에서 밀려나거나, 이동 경로가 막혀 `isAtSlot()`이 계속 false를 반환하는 경우가 이에 해당한다.
+
+### 3-9. DivideAndConquer
+
+`DivideAndConquer`는 경계 완료 시점에도 플레이어 군집이 2개 이상일 때 선택된다. 리더는 `buildPlayerClusters()`로 플레이어 군집을 만들고, 군집 점수와 Squad 위치를 기준으로 Squad별 임무를 배정한다.
+
+플레이어 군집이 2개인 경우:
+
+```text
+점수가 높은 군집       -> 가장 가까운 Squad 1개가 WedgeCharge
+다른 군집             -> 나머지 Squad들이 Encircle
+```
+
+포위 보조 반경은 일반 포위보다 작은 `DIVIDE_ENCIRCLE_RADIUS`를 사용한다. 포위에 참여한 Squad들은 각각 자기 섹터의 슬롯으로 이동하지만, **모든 포위 Squad가 슬롯에 도착한 뒤에만 동시에 Engage로 전환**한다.
+
+플레이어 군집이 3개 이상인 경우:
+
+```text
+최대 3개 군집과 Squad를 거리순으로 1:1 매칭
+각 Squad는 배정된 군집에 WedgeCharge
+```
+
+`WedgeCharge`는 먼저 쐐기 준비 슬롯을 만들고 멤버를 `HoldSlot`으로 이동시킨 뒤, 준비가 끝나면 `ChargeThrough` 명령을 발행한다. `ChargeThrough` 중에는 대상 군집의 플레이어에게 멤버별 1회 충돌 피해를 적용하고, 돌진 종료 지점에 도착하면 완료로 본다.
+
+`WedgeCharge` 임무는 자기 돌진이 끝나면 바로 `Engage`로 전환한다. `Encircle` 임무는 포위에 참여한 모든 Squad가 슬롯에 도착한 뒤 함께 `Engage`로 전환한다. 모든 임무가 `Engage`로 전환되고 `DIVIDE_ENGAGE_PROTECT_DURATION`이 지나면 `Cooldown`에 진입한다.
+
+`DivideAndConquer` 명령 발행 직전 플레이어가 다시 1개 군집으로 모이면 각개격파를 취소하고 `Encircle`로 전환한다.
+
+### 3-10. Cooldown
+
+포위 또는 각개격파 완료 후에는 `Cooldown`에 진입한다.
 
 ```text
 leaderPhase_ == Encircle && phaseOrderIssued_ && allMembersArrived()
+  -> tacticCooldown_ = TACTIC_COOLDOWN_DURATION
+  -> enterPhase(Cooldown)
+
+leaderPhase_ == DivideAndConquer && allTasksEngagedForProtectDuration
   -> tacticCooldown_ = TACTIC_COOLDOWN_DURATION
   -> enterPhase(Cooldown)
 ```
@@ -288,6 +336,7 @@ leaderPhase_ == Encircle && phaseOrderIssued_ && allMembersArrived()
 | `BoxAdvance` | `HoldSlot` | 보스 앞쪽 박스 대형 슬롯으로 이동 |
 | `GuardBoss` | `GuardSlot` | 보스 중심 경계 대형 |
 | `RetreatFormUp` | `HoldSlot` | 현재 배치를 유지한 채 공통 후퇴 |
+| `WedgeCharge` | `HoldSlot` -> `ChargeThrough` | 쐐기 준비 대형 후 대상 군집 관통 돌진 |
 
 `receiveOrder()`는 명령을 저장하고 `orderDirty_ = true`로 표시한다. 다음 `update()`에서 명령을 슬롯으로 변환한다.
 
@@ -329,6 +378,18 @@ retreatDelta = retreatTarget - leaderStartPos
 slot         = npcCurrentPos + retreatDelta
 ```
 
+#### WedgeCharge
+
+`WedgeCharge`는 대상 군집 중심 방향으로 쐐기 대형을 준비한 뒤 돌진한다.
+
+```text
+forward     = normalize(targetClusterCenter - squadCentroid)
+prepareApex = squadCentroid + forward * WEDGE_PREP_APEX_DISTANCE
+exitApex    = targetClusterCenter + forward * WEDGE_EXIT_DISTANCE
+```
+
+멤버는 먼저 `prepareApex` 기준 쐐기 슬롯으로 이동한다. 준비가 끝난 뒤 같은 상대 배치를 `exitApex` 기준으로 옮긴 지점을 돌진 종료 슬롯으로 사용한다.
+
 ---
 
 ## 5. TacticalNpc
@@ -357,6 +418,7 @@ update(dt)
 | 2 | `AttackWindup` | 공격 준비, 이동 없음 |
 | 3 | `AttackRecover` | 공격 후 회복 |
 | 4 | `Flank` | 지정 슬롯으로 고속 이동 후 교전 |
+| 5 | `ChargeThrough` | 각개격파 쐐기 대형 관통 돌진 |
 | 7 | `Dead` | 사망 |
 | 8 | `HoldSlot` | 슬롯까지 이동 후 위치 유지 |
 
@@ -364,6 +426,7 @@ update(dt)
 |---|---|---|
 | `EngageTarget` | `Chase` | `targetId_` |
 | `FlankTarget` | `Flank` | `targetId_`, `assignedSlot_`, `slotRefTargetPos_`, `abandonDist_`, `speedMult_` |
+| `ChargeThrough` | `ChargeThrough` | `targetId`, `targetIds`, `slotOffset`, `chargeDir`, `chargeCenter`, 충돌 피해 설정 |
 | `HoldSlot` | `HoldSlot` | `targetId_`, `assignedSlot_` |
 | `GuardSlot` | `HoldSlot` | `targetId_`, `assignedSlot_`, `guardNearestPlayer_ = true` |
 | `Idle` | `Idle` | `targetId_ = 0` |
@@ -389,6 +452,7 @@ else:
 | 상태 | 조건 |
 |---|---|
 | `HoldSlot` | `distance(pos, slot) < separationRadius * 0.25` |
+| `ChargeThrough` | `chargeComplete_ == true` |
 | `AttackWindup` | true |
 | `AttackRecover` | true |
 
@@ -421,10 +485,12 @@ else:
 | `TACTIC_INTERVAL` | 1.0s | 전술 평가 주기 |
 | `CLUSTER_RADIUS` | 20.0 | 플레이어 군집 판단 거리 |
 | `ENCIRCLE_RADIUS` | 50.0 | 포위 반경 |
+| `DIVIDE_ENCIRCLE_RADIUS` | 24.0 | 각개격파 보조 포위 반경 |
 | `TACTIC_HP_THRESHOLD` | 0.70 | Boss HP 기반 전술 발동 임계값 |
 | `TACTIC_SQUAD_RATIO` | 0.80 | Squad 생존 비율 기반 전술 발동 임계값 |
 | `TACTIC_COOLDOWN_DURATION` | 8.0s | 포위 완료 후 쿨타임 |
 | `TACTIC_FAIL_COOLDOWN_DURATION` | 5.0s | 예외/실패 쿨타임 |
+| `DIVIDE_ENGAGE_PROTECT_DURATION` | 3.0s | 각개격파 임무별 Engage 유지 후 완료 판정 시간 |
 | `BOX_FRONT_OFFSET` | 15.0 | 보스 앞쪽 박스 중심 거리 |
 | `BOX_SQUAD_SPACING` | 35.0 | 박스 대형 Squad 간격 |
 | `BOX_ARC_DEPTH` | 10.0 | 측면 Squad를 앞쪽으로 당기는 호형 깊이 |
@@ -433,9 +499,18 @@ else:
 | `REGROUP_DIST` | 70.0 | 공통 후퇴 거리 |
 | `VIGILANCE_GUARD_RADIUS` | 20.0 | 경계 대형의 보스 주변 거리 |
 
+### TacticalSquad
+
+| 상수 | 값 | 의미 |
+|---|---:|---|
+| `WEDGE_PREP_APEX_DISTANCE` | 10.0 | 쐐기 준비 apex를 Squad 중심 앞쪽에 두는 거리 |
+| `WEDGE_EXIT_DISTANCE` | 35.0 | 대상 군집 중심을 지난 돌진 종료 apex 거리 |
+| `WEDGE_PASS_DISTANCE` | 6.0 | 돌진 통과 거리 설정 |
+| `WEDGE_IMPACT_RADIUS` | 3.0 | 돌진 충돌 판정 반경 |
+| `WEDGE_SPEED_MULT` | 1.35 | 쐐기 돌진 추가 속도 배율 |
+
 ### TacticalNpc
 
 | 상수 | 값 | 의미 |
 |---|---:|---|
-| `TACTICAL_SPEED_MULT` | 3.0 | `Flank`, `HoldSlot`, Boss 후퇴 이동 속도 배율 |
-
+| `TACTICAL_SPEED_MULT` | 3.0 | `Flank`, `HoldSlot`, `ChargeThrough`, Boss 후퇴 이동 속도 배율 |
