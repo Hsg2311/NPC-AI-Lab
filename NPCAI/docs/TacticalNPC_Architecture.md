@@ -451,6 +451,12 @@ else:
 
 그 외 상태는 false다.
 
+### 5-4. 플레이어 소프트 차단
+
+플레이어는 NPC를 하드 벽처럼 완전히 막지 않는다. 대신 이동 예상 위치가 살아 있는 일반 NPC 또는 TacticalNpc의 소프트 차단 반경 안에 들어오면 이동량을 줄이고 NPC 바깥 방향으로 약하게 밀어낸다. 이 보정은 플레이어 이동에만 적용되며, NPC 이동 로직은 변경하지 않는다.
+
+`Player::update()`는 목표점으로 향하는 기본 이동량을 계산한 뒤 `Room::adjustPlayerMoveForNpcSoftBlock()`으로 보정한다. 플레이어 업데이트는 `spatialGrid` 재구성보다 먼저 실행되므로, 이 helper는 grid 대신 현재 NPC 컨테이너를 직접 순회한다.
+
 ---
 
 ## 6. 디버그 시각화
@@ -501,6 +507,14 @@ else:
 | `WEDGE_PASS_DISTANCE` | 6.0 | 돌진 통과 거리 설정 |
 | `WEDGE_IMPACT_RADIUS` | 3.0 | 돌진 충돌 판정 반경 |
 | `WEDGE_SPEED_MULT` | 1.35 | 쐐기 돌진 추가 속도 배율 |
+
+### Room
+
+| 상수 | 값 | 의미 |
+|---|---:|---|
+| `SOFT_BLOCK_RADIUS` | 2.4 | 플레이어 이동 보정이 시작되는 NPC 주변 반경 |
+| `SOFT_BLOCK_MIN_SPEED` | 0.35 | 가장 강하게 막혔을 때 유지되는 최소 이동 비율 |
+| `SOFT_BLOCK_PUSH_SPEED` | 5.0 | NPC 바깥 방향으로 미는 최대 속도 |
 
 ### TacticalNpc
 

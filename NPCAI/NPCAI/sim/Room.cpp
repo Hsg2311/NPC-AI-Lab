@@ -17,6 +17,9 @@ namespace sim {
 // gridKey 인코딩 상수 — 월드 좌표 ±60,000 유닛까지 충돌 없이 커버
 static constexpr int   GRID_COORD_OFFSET = 10000;
 static constexpr int64_t GRID_COORD_RANGE = 20001LL;
+static constexpr float SOFT_BLOCK_RADIUS = 2.4f;
+static constexpr float SOFT_BLOCK_MIN_SPEED = 0.35f;
+static constexpr float SOFT_BLOCK_PUSH_SPEED = 5.0f;
 
 Room::Room(uint32_t roomId, uint32_t dumpInterval)
     : roomId_(roomId), dumpInterval_(dumpInterval)
@@ -165,6 +168,49 @@ void Room::findNearbyNpcPositions(const Vec3& from, float radius,
             }
         }
     }
+}
+
+Vec3 Room::adjustPlayerMoveForNpcSoftBlock(const Vec3& playerPos,
+                                           const Vec3& desiredMove,
+                                           float dt) const {
+    if (desiredMove.lengthSq() < 1e-6f)
+        return desiredMove;
+
+    Vec3 predicted = playerPos + desiredMove;
+    Vec3 push{};
+    float strongest = 0.f;
+    const float radiusSq = SOFT_BLOCK_RADIUS * SOFT_BLOCK_RADIUS;
+
+    auto accumulateBlock = [&](const Actor* actor) {
+        if (!actor || !actor->isAlive()) return;
+
+        Vec3 away = predicted - actor->getPosition();
+        float distSq = away.lengthSq();
+        if (distSq >= radiusSq) return;
+
+        float dist = std::sqrt(std::max(distSq, 1e-6f));
+        float t = 1.f - (dist / SOFT_BLOCK_RADIUS);
+        if (t > strongest) strongest = t;
+
+        Vec3 pushDir = (dist > 1e-3f) ? (away / dist) : desiredMove.normalized() * -1.f;
+        push += pushDir * t;
+    };
+
+    for (const auto& [id, npc] : npcs_)
+        accumulateBlock(npc.get());
+    for (const auto& [id, tnpc] : tacticalNpcs_)
+        accumulateBlock(tnpc.get());
+
+    float speedScale = 1.f - strongest * (1.f - SOFT_BLOCK_MIN_SPEED);
+    Vec3 adjusted = desiredMove * speedScale;
+
+    float pushLen = push.length();
+    if (pushLen > 1e-3f) {
+        float maxPush = SOFT_BLOCK_PUSH_SPEED * dt;
+        adjusted += (push / pushLen) * std::min(pushLen * maxPush, maxPush);
+    }
+
+    return adjusted;
 }
 
 // ─── applyDamageToActorsInRange ──────────────────────────────────────────────

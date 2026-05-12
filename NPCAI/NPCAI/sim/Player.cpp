@@ -39,12 +39,16 @@ void Player::update(float dt, Room& room) {
     Vec3  dir  = moveTarget_ - position_;
     float dist = dir.length();
     if (dist >= 0.05f) {
-        facing_ = dir.normalized();
+        Vec3 moveDir = dir.normalized();
         float step = moveSpeed_ * dt;
-        if (step >= dist)
-            position_ = moveTarget_;
-        else
-            position_ += facing_ * step;
+        Vec3 desiredMove = moveDir * ((step >= dist) ? dist : step);
+        Vec3 adjustedMove = room.adjustPlayerMoveForNpcSoftBlock(position_, desiredMove, dt);
+        if (adjustedMove.lengthSq() > 1e-6f) {
+            facing_ = adjustedMove.normalized();
+            position_ += adjustedMove;
+        } else {
+            facing_ = moveDir;
+        }
     }
 
     updateAttack(dt, room);

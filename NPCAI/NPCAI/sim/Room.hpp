@@ -48,6 +48,9 @@ public:
     const std::vector<Player*>& getLivingPlayers() const;
     void findNearbyNpcPositions(const Vec3& from, float radius, uint32_t excludeId,
                                 std::vector<Vec3>& out) const;
+    Vec3 adjustPlayerMoveForNpcSoftBlock(const Vec3& playerPos,
+                                         const Vec3& desiredMove,
+                                         float dt) const;
     int  countNpcsTargeting(uint32_t playerId) const;
 
     // 플레이어 공격: 범위 내 생존 NPC + TacticalNpc에게 피해 적용
