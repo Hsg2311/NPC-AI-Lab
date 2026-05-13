@@ -22,6 +22,9 @@ enum class SquadOrderType {
 struct SquadOrder {
     SquadOrderType type               = SquadOrderType::Idle;
     uint32_t       targetId           = 0;
+    float          slotSpacingScale   = 1.f; // GuardBoss/Dense slots spacing multiplier
+    float          slotColumnScale    = 1.f; // Dense slot column count multiplier
+    int            slotColumnCount    = 0;   // Fixed dense slot columns, 0 = auto
     float          sectorAngle        = 0.f; // Encircle/GuardBoss 중심 각도
     float          sectorSpan         = 0.f; // Encircle 섹터 폭
     float          approachRadius     = 5.f; // Encircle/GuardBoss 반경
@@ -67,7 +70,10 @@ private:
     // ── 슬롯 계산 ─────────────────────────────────────────────────────────────
     std::vector<Vec3> calcEncircleSlots(const Vec3& targetPos, float sectorAngle,
                                         float sectorSpan, float radius, int count) const;
-    std::vector<Vec3> calcDenseSlots(const Vec3& center, const Vec3& forward, int count) const;
+    std::vector<Vec3> calcDenseSlots(const Vec3& center, const Vec3& forward,
+                                     int count, float spacingScale = 1.f,
+                                     float columnScale = 1.f,
+                                     int fixedColumnCount = 0) const;
     std::vector<Vec3> calcWedgeSlots(const Vec3& apex, const Vec3& forward, int count) const;
 
     int                   squadId_;

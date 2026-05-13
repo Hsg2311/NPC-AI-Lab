@@ -147,19 +147,28 @@ std::vector<Vec3> TacticalSquad::calcEncircleSlots(const Vec3& targetPos,
 
 std::vector<Vec3> TacticalSquad::calcDenseSlots(const Vec3& center,
                                                   const Vec3& forward,
-                                                  int count) const {
+                                                  int count,
+                                                  float spacingScale,
+                                                  float columnScale,
+                                                  int fixedColumnCount) const {
     std::vector<Vec3> slots;
     slots.reserve(static_cast<size_t>(count));
     if (count <= 0) return slots;
 
-    float spacing = memberSeparationRadius_;
+    float spacing = memberSeparationRadius_ * spacingScale;
     if (spacing < 1.2f) spacing = 1.2f;
 
     // XZ 평면 우방향 벡터
     Vec3 right{ -forward.z, 0.f, forward.x };
 
-    int cols = static_cast<int>(std::ceilf(std::sqrtf(static_cast<float>(count))));
+    int cols = fixedColumnCount;
+    if (cols <= 0) {
+        if (columnScale < 1.f) columnScale = 1.f;
+        cols = static_cast<int>(std::ceilf(std::sqrtf(static_cast<float>(count)) *
+                                           columnScale));
+    }
     if (cols < 1) cols = 1;
+    if (cols > count) cols = count;
     int rows = (count + cols - 1) / cols;
 
     for (int i = 0; i < count; ++i) {
@@ -394,7 +403,10 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
             if (fl > 0.01f) faceDir = faceDir / fl;
             else            faceDir = guardDir * -1.f;
 
-            std::vector<Vec3> slots = calcDenseSlots(squadCenter, faceDir, count);
+            std::vector<Vec3> slots = calcDenseSlots(squadCenter, faceDir, count,
+                                                     ord.slotSpacingScale,
+                                                     ord.slotColumnScale,
+                                                     ord.slotColumnCount);
 
             for (int i = 0; i < count; ++i) {
                 Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);

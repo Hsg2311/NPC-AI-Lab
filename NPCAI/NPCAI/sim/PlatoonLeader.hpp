@@ -47,7 +47,8 @@ private:
 
     enum class DivideTaskType {
         None,
-        Charge
+        Charge,
+        Screen
     };
 
     struct DivideSquadTask {
@@ -106,7 +107,11 @@ private:
     static constexpr float TACTIC_COOLDOWN_DURATION = 8.0f;  // 포위 완료 후 쿨타임
     static constexpr float TACTIC_FAIL_COOLDOWN_DURATION = 5.0f; // 실패/예외 쿨타임
     static constexpr float DIVIDE_ENGAGE_PROTECT_DURATION = 3.0f;
-    static constexpr float SCREEN_BLOCK_SPACING     = 12.0f; // 각개격파 차단 경계 Squad 간격
+    static constexpr float SCREEN_BLOCK_SPACING     = 8.0f;  // 각개격파 차단 경계 Squad 간격
+    static constexpr float SCREEN_SLOT_SPACING_SCALE = 0.65f; // 각개격파 차단 Squad 내부 슬롯 간격 배율
+    static constexpr float SCREEN_SLOT_COLUMN_SCALE = 2.0f;  // 각개격파 차단 Squad 자동 가로 전개 배율
+    static constexpr int   SCREEN_SLOT_COLUMN_COUNT = 10;    // 각개격파 차단 Squad 고정 열 수
+    static constexpr float SCREEN_BLOCK_CENTER_BIAS = 0.6f; // 돌진 대상 -> 차단 대상 군집 방향 배치 비율
     static constexpr float BOX_FRONT_OFFSET         = 15.f;  // 보스 앞쪽 박스 대형 중심 거리
     static constexpr float BOX_SQUAD_SPACING        = 35.f;  // 박스 대형 부대 간격
     static constexpr float BOX_ARC_DEPTH            = 10.f;  // 측면 부대를 당기는 호형 깊이

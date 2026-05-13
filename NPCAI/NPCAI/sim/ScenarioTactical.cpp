@@ -22,13 +22,13 @@ namespace sim {
 
 void ScenarioTactical::setup(Room& room) {
     // ── 플레이어 ──────────────────────────────────────────────────────────────
-    auto p1 = std::make_shared<Player>("P1", Vec3{ 0.f, 0.f, 0.f }, 10000.f, 20.f);
+    auto p1 = std::make_shared<Player>("P1", Vec3{ 0.f, 0.f, 0.f }, 500.f, 15.f);
     room.addActor(p1);
     controlledPlayer_ = p1.get();
 
     // P2: 더미 플레이어 — 웨이포인트를 따라 자동 이동, 실질 무적(HP 9999)
     // 삼각형 루트: P1 근처(집결) → 좌하단(분산) → 우하단(분산) → 반복
-    auto p2 = std::make_shared<Player>("P2", Vec3{ 3.f, 0.f, 3.f }, 9999.f, 7.f);
+    auto p2 = std::make_shared<Player>("P2", Vec3{ 3.f, 0.f, 3.f }, 9999.f, 15.f);
     room.addActor(p2);
     room.getDummyController().addControl(p2->getId(), {
         {  3.f, 0.f,   3.f },
@@ -55,7 +55,7 @@ void ScenarioTactical::setup(Room& room) {
     // ── NPC 공통 설정 ─────────────────────────────────────────────────────────
     TacticalNpcConfig cfg;
     cfg.maxHp             = 80.f;
-    cfg.moveSpeed         = 15.f;
+    cfg.moveSpeed         = 17.f;
     cfg.attackRange       = 2.f;
     cfg.attackDamage      = 10.f;
     cfg.attackWindupTime  = 0.35f;
@@ -65,7 +65,7 @@ void ScenarioTactical::setup(Room& room) {
 
     TacticalNpcConfig leaderCfg = cfg;
     leaderCfg.maxHp       = 200.f;
-    leaderCfg.moveSpeed   = 15.f;
+    leaderCfg.moveSpeed   = 20.f;
     leaderCfg.attackRange = 2.5f;
 
     // ── PlatoonLeader ─────────────────────────────────────────────────────────

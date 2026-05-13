@@ -588,12 +588,15 @@ void PlatoonLeader::issueDivideAndConquer(Room& room,
     Vec3 supportCentroid{};
     int supportCount = 0;
     uint32_t supportTargetId = 0;
+    std::vector<uint32_t> supportPlayerIds;
     for (size_t i = 1; i < sorted.size(); ++i) {
         const PlayerCluster& cluster = sorted[i];
         supportCentroid += cluster.centroid;
         ++supportCount;
         if (supportTargetId == 0)
             supportTargetId = cluster.representativeId;
+        supportPlayerIds.insert(supportPlayerIds.end(),
+                                cluster.playerIds.begin(), cluster.playerIds.end());
     }
     if (supportCount == 0) return;
     supportCentroid = supportCentroid / static_cast<float>(supportCount);
@@ -603,7 +606,9 @@ void PlatoonLeader::issueDivideAndConquer(Room& room,
     if (blockLen > 0.01f) blockDir = blockDir / blockLen;
     else                  blockDir = Vec3{ 1.f, 0.f, 0.f };
 
-    Vec3 blockCenter = (chargeCluster.centroid + supportCentroid) * 0.5f;
+    Vec3 blockCenter = chargeCluster.centroid +
+                       (supportCentroid - chargeCluster.centroid) *
+                       SCREEN_BLOCK_CENTER_BIAS;
     Vec3 blockRight{ -blockDir.z, 0.f, blockDir.x };
     float baseAngle = std::atan2f(blockRight.z, blockRight.x);
 
@@ -616,12 +621,19 @@ void PlatoonLeader::issueDivideAndConquer(Room& room,
         screen.type               = SquadOrderType::GuardBoss;
         screen.targetId           = (supportTargetId != 0) ? supportTargetId
                                                            : chargeCluster.representativeId;
+        screen.slotSpacingScale   = SCREEN_SLOT_SPACING_SCALE;
+        screen.slotColumnScale    = SCREEN_SLOT_COLUMN_SCALE;
+        screen.slotColumnCount    = SCREEN_SLOT_COLUMN_COUNT;
         screen.sectorAngle        = baseAngle + (sideSign < 0.f ? 3.14159265f : 0.f);
         screen.approachRadius     = SCREEN_BLOCK_SPACING *
                                     (1.f + 0.5f * static_cast<float>(screenIdx / 2));
         screen.tacticCenter       = blockCenter;
         screen.formationTargetPos = supportCentroid;
         liveSquads[static_cast<size_t>(i)]->receiveOrder(screen);
+        divideTasks_.push_back({ liveSquads[static_cast<size_t>(i)],
+                                 DivideTaskType::Screen,
+                                 screen.targetId,
+                                 supportPlayerIds });
         ++screenIdx;
     }
 }
@@ -637,14 +649,35 @@ void PlatoonLeader::updateDivideAndConquer(float dt, Room& room) {
         if (!task.squad || task.squad->isEmpty()) {
             task.taskCompleted = true;
         } else if (!task.taskCompleted) {
-            if (task.type == DivideTaskType::Charge)
-                task.taskCompleted = task.squad->areChargeMembersComplete(room);
+            switch (task.type) {
+                case DivideTaskType::Charge:
+                    task.taskCompleted = task.squad->areChargeMembersComplete(room);
+                    break;
+                case DivideTaskType::Screen:
+                    task.taskCompleted = task.squad->areMembersAtSlots(room);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    bool allScreensCompleted = true;
+    for (const auto& task : divideTasks_) {
+        if (task.type == DivideTaskType::Screen && !task.taskCompleted) {
+            allScreensCompleted = false;
+            break;
         }
     }
 
     bool allProtected = true;
     for (auto& task : divideTasks_) {
         if (task.taskCompleted && !task.engageIssued) {
+            if (task.type == DivideTaskType::Screen && !allScreensCompleted) {
+                allProtected = false;
+                continue;
+            }
+
             uint32_t targetId = selectReplacementTarget(room, task.clusterPlayerIds);
             if (targetId != 0 && task.squad && !task.squad->isEmpty()) {
                 SquadOrder ord;

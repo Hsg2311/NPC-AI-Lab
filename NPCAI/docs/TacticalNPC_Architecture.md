@@ -277,11 +277,11 @@ clusters.size() >= 2  -> DivideAndConquer
 나머지 Squad          -> 돌진 대상 군집과 나머지 군집 사이 차단 경계
 ```
 
-돌진하지 않는 Squad에는 `GuardBoss` 명령을 재사용해 차단 경계 위치를 발행한다. 차단 중심은 돌진 대상 군집과 나머지 군집 centroid 평균의 중간 지점이며, Squad들은 이 중심의 좌우에 배치되어 합류 경로를 지연시킨다.
+돌진하지 않는 Squad에는 `GuardBoss` 명령을 재사용해 차단 경계 위치를 발행한다. 차단 중심은 돌진 대상 군집에서 나머지 군집 centroid 방향으로 `SCREEN_BLOCK_CENTER_BIAS`만큼 이동한 지점이며, Squad들은 이 중심의 좌우에 배치되어 합류 경로를 지연시킨다. 각개격파 차단 경계는 `SCREEN_BLOCK_SPACING`, `SCREEN_SLOT_SPACING_SCALE`, `SCREEN_SLOT_COLUMN_SCALE`, `SCREEN_SLOT_COLUMN_COUNT`를 적용해 보스 중심 경계보다 더 촘촘하고 얇은 차단선을 만든다. 기본 20명 Squad에서는 `SCREEN_SLOT_COLUMN_COUNT = 10`으로 10열 x 2행 배치를 목표로 한다.
 
 `WedgeCharge`는 먼저 쐐기 준비 슬롯을 만들고 멤버를 `HoldSlot`으로 이동시킨 뒤, 준비가 끝나면 `ChargeThrough` 명령을 발행한다. `ChargeThrough` 중에는 대상 군집의 플레이어에게 멤버별 1회 충돌 피해를 적용하고, 돌진 종료 지점에 도착하면 완료로 본다.
 
-`WedgeCharge` 임무는 자기 돌진이 끝나면 바로 `Engage`로 전환한다. 돌진 Squad가 `Engage`로 전환되고 `DIVIDE_ENGAGE_PROTECT_DURATION`이 지나면 `Cooldown`에 진입한다.
+`WedgeCharge` 임무는 자기 돌진이 끝나면 바로 `Engage`로 전환한다. 차단 경계 Squad들은 모든 차단 Squad가 각자 `GuardSlot`에 도착할 때까지 `HoldSlot`을 유지하고, 차단선이 완성된 순간 함께 `Engage`로 전환한다. 돌진 Squad와 차단 Squad가 `Engage`로 전환되고 `DIVIDE_ENGAGE_PROTECT_DURATION`이 지나면 `Cooldown`에 진입한다.
 
 `DivideAndConquer` 명령 발행 직전 플레이어가 다시 1개 군집으로 모이면 각개격파를 취소하고 `Encircle`로 전환한다.
 
@@ -489,7 +489,11 @@ else:
 | `TACTIC_COOLDOWN_DURATION` | 8.0s | 포위 완료 후 쿨타임 |
 | `TACTIC_FAIL_COOLDOWN_DURATION` | 5.0s | 예외/실패 쿨타임 |
 | `DIVIDE_ENGAGE_PROTECT_DURATION` | 3.0s | 각개격파 임무별 Engage 유지 후 완료 판정 시간 |
-| `SCREEN_BLOCK_SPACING` | 12.0 | 각개격파 차단 경계 Squad 간격 |
+| `SCREEN_BLOCK_SPACING` | 8.0 | 각개격파 차단 경계 Squad 간격 |
+| `SCREEN_SLOT_SPACING_SCALE` | 0.65 | 각개격파 차단 Squad 내부 슬롯 간격 배율 |
+| `SCREEN_SLOT_COLUMN_SCALE` | 2.0 | 각개격파 차단 Squad 자동 가로 전개 배율 |
+| `SCREEN_SLOT_COLUMN_COUNT` | 10 | 각개격파 차단 Squad 고정 열 수 |
+| `SCREEN_BLOCK_CENTER_BIAS` | 0.65 | 돌진 대상 군집에서 차단 대상 군집 방향으로 차단 중심을 당기는 비율 |
 | `BOX_FRONT_OFFSET` | 15.0 | 보스 앞쪽 박스 중심 거리 |
 | `BOX_SQUAD_SPACING` | 35.0 | 박스 대형 Squad 간격 |
 | `BOX_ARC_DEPTH` | 10.0 | 측면 Squad를 앞쪽으로 당기는 호형 깊이 |
