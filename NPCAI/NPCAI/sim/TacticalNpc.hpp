@@ -42,6 +42,7 @@ struct TacticalCommand {
     float               abandonDist      = 15.f;  // 타겟 이탈 시 슬롯 포기 거리 (Flank 전용)
     float               speedMult        = 1.f;   // Flank 이동 속도 배율 (동시 도착용)
     std::vector<uint32_t> targetIds       = {};
+    uint32_t            chargeId          = 0;
     Vec3                chargeDir        = {};
     Vec3                chargeCenter     = {};
     float               impactRadius     = 3.f;
@@ -114,8 +115,7 @@ protected:
     Vec3             assignedSlot_{};      // Flank/HoldSlot 목적지 (월드 좌표)
     Vec3             slotRefTargetPos_{};  // 슬롯 발행 시점의 타겟 위치 (유효성 체크용)
     float            abandonDist_{ 15.f }; // Flank 슬롯 포기 거리
-    std::vector<uint32_t> chargeTargetIds_{};
-    std::vector<uint32_t> chargeHitIds_{};
+    uint32_t         chargeId_{ 0 };
     Vec3             chargeDir_{};
     Vec3             chargeCenter_{};
     float            impactRadius_{ 3.f };

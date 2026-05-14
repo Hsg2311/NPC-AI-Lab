@@ -98,8 +98,7 @@ void TacticalNpc::consumePendingCommand() {
             guardNearestPlayer_ = false;
             targetId_          = pendingCmd_.targetId;
             assignedSlot_      = pendingCmd_.slotOffset;
-            chargeTargetIds_   = pendingCmd_.targetIds;
-            chargeHitIds_.clear();
+            chargeId_          = pendingCmd_.chargeId;
             chargeDir_         = pendingCmd_.chargeDir.normalized();
             chargeCenter_      = pendingCmd_.chargeCenter;
             impactRadius_      = pendingCmd_.impactRadius;
@@ -319,20 +318,15 @@ void TacticalNpc::updateChargeThrough(float dt, Room& room) {
         chargeDir_ = (dir.length() > 0.01f) ? dir.normalized() : Vec3{ 1.f, 0.f, 0.f };
     }
 
-    for (uint32_t pid : chargeTargetIds_) {
-        Actor* a = room.findActorById(pid);
-        if (!a || !a->isAlive()) continue;
+    float impactRadiusSq = impactRadius_ * impactRadius_;
+    for (Player* p : room.getLivingPlayers()) {
+        if (!p || Vec3::distanceSq(position_, p->getPosition()) > impactRadiusSq)
+            continue;
 
-        bool alreadyHit = std::find(chargeHitIds_.begin(), chargeHitIds_.end(), pid)
-                          != chargeHitIds_.end();
-        if (!alreadyHit &&
-            Vec3::distanceSq(position_, a->getPosition()) <= impactRadius_ * impactRadius_) {
-            a->takeDamage(impactDamage_);
-            chargeHitIds_.push_back(pid);
-
-            char buf[128];
-            std::snprintf(buf, sizeof(buf), "charge hit %s for %.0f  (hp=%.1f)",
-                a->getName().c_str(), impactDamage_, a->getHp());
+        if (room.tryApplyWedgeChargeHit(chargeId_, *p, impactDamage_)) {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "charge %u hit %s for %.0f  (hp=%.1f)",
+                chargeId_, p->getName().c_str(), impactDamage_, p->getHp());
             Logger::get().log(logPrefix_, buf);
         }
     }

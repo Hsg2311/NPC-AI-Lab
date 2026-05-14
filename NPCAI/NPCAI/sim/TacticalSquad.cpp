@@ -12,6 +12,7 @@ static constexpr float WEDGE_PREP_APEX_DISTANCE = 10.f;
 static constexpr float WEDGE_PASS_DISTANCE = 6.f;
 static constexpr float WEDGE_IMPACT_RADIUS = 3.f;
 static constexpr float WEDGE_SPEED_MULT    = 1.35f;
+static constexpr float WEDGE_CHARGE_DAMAGE = 35.f;
 
 TacticalSquad::TacticalSquad(int squadId, float memberAttackRange, float memberSeparationRadius)
     : squadId_(squadId)
@@ -37,6 +38,7 @@ void TacticalSquad::receiveOrder(const SquadOrder& order) {
     wedgeMemberIds_.clear();
     wedgePrepareSlots_.clear();
     wedgeExitSlots_.clear();
+    activeWedgeChargeId_ = 0;
 }
 
 void TacticalSquad::updateBoxLeaderPos(const Vec3& pos) {
@@ -63,6 +65,12 @@ void TacticalSquad::update(float /*dt*/, Room& room) {
         !wedgePrepared_ && areMembersAtSlots(room)) {
         wedgePrepared_ = true;
         pushCommandsToMembers(room);
+    }
+    if (currentOrder_.type == SquadOrderType::WedgeCharge &&
+        wedgePrepared_ && activeWedgeChargeId_ != 0 &&
+        areChargeMembersComplete(room)) {
+        room.endWedgeCharge(activeWedgeChargeId_);
+        activeWedgeChargeId_ = 0;
     }
     // Encircle/DenseHold/WedgeCharge: 슬롯/돌진 목표 고정 — 재계산 없음
 }
@@ -333,6 +341,9 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
                 return;
             }
 
+            if (activeWedgeChargeId_ == 0)
+                activeWedgeChargeId_ = room.beginWedgeCharge();
+
             for (size_t i = 0; i < wedgeMemberIds_.size(); ++i) {
                 Actor* a = room.findActorById(wedgeMemberIds_[i]);
                 auto* tnpc = dynamic_cast<TacticalNpc*>(a);
@@ -348,11 +359,12 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
                 cmd.type         = TacticalCommandType::ChargeThrough;
                 cmd.targetId     = ord.targetId;
                 cmd.targetIds    = ord.targetIds;
+                cmd.chargeId     = activeWedgeChargeId_;
                 cmd.slotOffset   = wedgeExitSlots_[i];
                 cmd.chargeDir    = forward;
                 cmd.chargeCenter = targetCenter;
                 cmd.impactRadius = std::max(WEDGE_IMPACT_RADIUS, memberAttackRange_);
-                cmd.impactDamage = tnpc->getAttackDamage();
+                cmd.impactDamage = WEDGE_CHARGE_DAMAGE;
                 cmd.passDistance = WEDGE_PASS_DISTANCE;
                 cmd.speedMult    = WEDGE_SPEED_MULT;
                 tnpc->receiveCommand(cmd);

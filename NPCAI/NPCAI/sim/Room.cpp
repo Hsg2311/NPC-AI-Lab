@@ -239,6 +239,38 @@ int Room::applyDamageToActorsInRange(const Vec3& center, float radius, float dam
 // ─── countNpcsTargeting ──────────────────────────────────────────────────────
 // B: aggroCount_ 캐시 조회 O(1) (rebuildAggroCount()에서 틱당 1회 재구성)
 
+// WedgeCharge hit registry.
+
+uint32_t Room::beginWedgeCharge() {
+    uint32_t chargeId = nextWedgeChargeId_++;
+    if (nextWedgeChargeId_ == 0)
+        nextWedgeChargeId_ = 1;
+    wedgeChargeHits_[chargeId];
+    return chargeId;
+}
+
+bool Room::tryApplyWedgeChargeHit(uint32_t chargeId, Player& player, float damage) {
+    if (chargeId == 0 || !player.isAlive())
+        return false;
+
+    auto& hits = wedgeChargeHits_[chargeId];
+    uint32_t playerId = player.getId();
+    if (hits.find(playerId) != hits.end())
+        return false;
+
+    player.takeDamage(damage);
+    hits.insert(playerId);
+    return true;
+}
+
+void Room::endWedgeCharge(uint32_t chargeId) {
+    if (chargeId == 0)
+        return;
+    wedgeChargeHits_.erase(chargeId);
+}
+
+// countNpcsTargeting.
+
 int Room::countNpcsTargeting(uint32_t playerId) const {
     auto it = aggroCount_.find(playerId);
     return (it != aggroCount_.end()) ? it->second : 0;

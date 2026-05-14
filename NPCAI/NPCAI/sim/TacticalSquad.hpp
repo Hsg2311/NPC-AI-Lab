@@ -86,6 +86,7 @@ private:
     std::vector<uint32_t> wedgeMemberIds_{};
     std::vector<Vec3>     wedgePrepareSlots_{};
     std::vector<Vec3>     wedgeExitSlots_{};
+    uint32_t              activeWedgeChargeId_{ 0 };
 };
 
 } // namespace sim

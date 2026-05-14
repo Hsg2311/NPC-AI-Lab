@@ -4,6 +4,7 @@
 #include "NpcGroup.hpp"
 #include "TacticalSquad.hpp"
 #include <unordered_map>
+#include <unordered_set>
 #include <memory>
 #include <cstdint>
 #include <vector>
@@ -56,6 +57,11 @@ public:
     // 플레이어 공격: 범위 내 생존 NPC + TacticalNpc에게 피해 적용
     int  applyDamageToActorsInRange (const Vec3& center, float radius, float damage);
 
+    // 쐐기 돌진: 같은 돌진에서는 플레이어당 1회만 피해 적용
+    uint32_t beginWedgeCharge();
+    bool     tryApplyWedgeChargeHit(uint32_t chargeId, Player& player, float damage);
+    void     endWedgeCharge(uint32_t chargeId);
+
     // ── NpcGroup 관리 ─────────────────────────────────────────────────────────
     // 그룹 생성 후 Room이 소유; 반환된 포인터는 Room 생존 기간 동안 유효
     NpcGroup* createNpcGroup(const Vec3& center, float radius,
@@ -103,6 +109,9 @@ private:
     std::unordered_map<uint32_t, std::shared_ptr<TacticalNpc>> tacticalNpcs_{};
     std::vector<std::unique_ptr<TacticalSquad>>                 tacticalSquads_{};
     std::vector<PlatoonLeader*>                                  platoonLeaders_{};  // 비소유
+
+    uint32_t nextWedgeChargeId_{ 1 };
+    std::unordered_map<uint32_t, std::unordered_set<uint32_t>> wedgeChargeHits_{};
 };
 
 } // namespace sim

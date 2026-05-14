@@ -22,7 +22,7 @@ namespace sim {
 
 void ScenarioTactical::setup(Room& room) {
     // ── 플레이어 ──────────────────────────────────────────────────────────────
-    auto p1 = std::make_shared<Player>("P1", Vec3{ 0.f, 0.f, 0.f }, 500.f, 15.f);
+    auto p1 = std::make_shared<Player>("P1", Vec3{ 0.f, 0.f, 0.f }, 1000.f, 15.f);
     room.addActor(p1);
     controlledPlayer_ = p1.get();
 
