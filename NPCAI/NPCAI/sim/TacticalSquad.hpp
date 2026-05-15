@@ -19,6 +19,7 @@ enum class SquadOrderType {
     WedgeCharge,   // 쐐기 대형으로 플레이어 군집을 관통 돌진
     FormationHold,
     FormationGuard,
+    RingGuard,
 };
 
 struct SquadOrder {

@@ -890,12 +890,13 @@ void GrandBaumMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader)
 
         if (hpRatio <= grandBaumA_) {
             enterPhase(Phase::ShieldWall, "GrandBaum ShieldWall activated", leader);
+            applyShieldWallProtection(room, leader, true);
             issueShieldWall(room, leader);
         }
     }
 
     if (phase_ == Phase::ShieldWall) {
-        shieldWallTimer_ += dt;
+        applyShieldWallProtection(room, leader, true);
 
         orderRefreshTimer_ -= dt;
         if (orderRefreshTimer_ <= 0.f) {
@@ -904,16 +905,21 @@ void GrandBaumMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader)
         }
 
         TacticalSquad* ambushSquad = squads.size() >= 4 ? squads[3] : nullptr;
-        updateAmbush(dt, room, leader, ambushSquad);
-
-        bool tacticComplete = ambushEngageIssued_ &&
-                              areShieldWallSquadsReady(room, leader);
-        if (tacticComplete || shieldWallTimer_ >= SHIELDWALL_MAX_DURATION) {
+        if (isAmbushSquadAnnihilated(ambushSquad)) {
+            applyShieldWallProtection(room, leader, false);
             issueEngage(room, leader);
             tacticCooldown_ = TACTIC_COOLDOWN_DURATION;
-            enterPhase(Phase::Cooldown, "GrandBaum ShieldWall finished - cooldown", leader);
+            enterPhase(Phase::Cooldown, "GrandBaum ShieldWall finished - ambush squad annihilated", leader);
+            return;
         }
+
+        updateAmbush(dt, room, leader, ambushSquad);
     }
+}
+
+void GrandBaumMidBossTactic::onLeaderDead(Room& room, PlatoonLeader& leader) {
+    applyShieldWallProtection(room, leader, false);
+    MidBossTacticBase::onLeaderDead(room, leader);
 }
 
 void GrandBaumMidBossTactic::enterPhase(Phase next, const char* reason,
@@ -930,13 +936,15 @@ void GrandBaumMidBossTactic::enterPhase(Phase next, const char* reason,
     if (next == Phase::ShieldWall) {
         orderRefreshTimer_ = ORDER_REFRESH_INTERVAL;
         ambushPrepTimer_ = 0.f;
-        shieldWallTimer_ = 0.f;
         ambushEngageIssued_ = false;
+        ambushStage_ = AmbushStage::WideFlank;
         return;
     }
 
-    if (next == Phase::Cooldown)
+    if (next == Phase::Cooldown) {
         engageRefreshTimer_ = ENGAGE_REFRESH_INTERVAL;
+        ambushStage_ = AmbushStage::WideFlank;
+    }
 }
 
 void GrandBaumMidBossTactic::issueEngage(Room& room, PlatoonLeader& leader) {
@@ -968,8 +976,6 @@ void GrandBaumMidBossTactic::issueEngage(Room& room, PlatoonLeader& leader) {
 void GrandBaumMidBossTactic::issueShieldWall(Room& room, PlatoonLeader& leader) {
     const auto& squads = leader.getSquads();
     uint32_t targetId = selectNearestPlayerId(room, leader.getPosition());
-    if (targetId == 0)
-        return;
 
     Vec3 leaderPos = leader.getPosition();
     Vec3 playerCentroid = calcPlayerCentroid(room, leaderPos);
@@ -978,32 +984,39 @@ void GrandBaumMidBossTactic::issueShieldWall(Room& room, PlatoonLeader& leader) 
         forward = forward.normalized();
     else
         forward = Vec3{ 1.f, 0.f, 0.f };
-    Vec3 right{ -forward.z, 0.f, forward.x };
 
-    Vec3 frontCenter = leaderPos + forward * SHIELD_FRONT_DIST;
-    Vec3 leftCenter = frontCenter - right * SHIELD_SIDE_OFFSET;
-    Vec3 rightCenter = frontCenter + right * SHIELD_SIDE_OFFSET;
-
-    auto issueFormation = [&](TacticalSquad* squad, SquadOrderType type, const Vec3& center) {
+    std::vector<TacticalSquad*> slimeSquads;
+    int totalSlimeMembers = 0;
+    const size_t slimeIndices[] = { 0, 1, 2 };
+    for (size_t idx : slimeIndices) {
+        if (idx >= squads.size())
+            continue;
+        TacticalSquad* squad = squads[idx];
         if (!squad || squad->isEmpty())
-            return;
-        SquadOrder ord;
-        ord.type = type;
-        ord.targetId = targetId;
-        ord.tacticCenter = center;
-        ord.formationTargetPos = playerCentroid;
-        ord.slotSpacingScale = 0.75f;
-        ord.slotColumnScale = 2.0f;
-        squad->receiveOrder(ord);
-    };
+            continue;
+        slimeSquads.push_back(squad);
+        totalSlimeMembers += static_cast<int>(squad->getMembers().size());
+    }
 
-    if (squads.size() >= 3) {
-        issueFormation(squads[2], SquadOrderType::FormationGuard, frontCenter);
-        issueFormation(squads[0], SquadOrderType::FormationGuard, leftCenter);
-        issueFormation(squads[1], SquadOrderType::FormationGuard, rightCenter);
-    } else {
-        for (TacticalSquad* squad : squads)
-            issueFormation(squad, SquadOrderType::FormationGuard, frontCenter);
+    if (!slimeSquads.empty() && totalSlimeMembers > 0) {
+        constexpr float TWO_PI = 2.f * 3.14159265f;
+        float angleAccum = std::atan2f(forward.z, forward.x) - 3.14159265f;
+        for (TacticalSquad* squad : slimeSquads) {
+            float fraction = static_cast<float>(squad->getMembers().size()) /
+                             static_cast<float>(totalSlimeMembers);
+            float sectorSpan = TWO_PI * fraction;
+
+            SquadOrder ord;
+            ord.type = SquadOrderType::RingGuard;
+            ord.targetId = targetId;
+            ord.tacticCenter = leaderPos;
+            ord.sectorAngle = angleAccum + sectorSpan * 0.5f;
+            ord.sectorSpan = sectorSpan;
+            ord.approachRadius = SHIELD_RING_RADIUS;
+            squad->receiveOrder(ord);
+
+            angleAccum += sectorSpan;
+        }
     }
 
     if (!ambushEngageIssued_ && squads.size() >= 4) {
@@ -1017,8 +1030,31 @@ void GrandBaumMidBossTactic::issueShieldWall(Room& room, PlatoonLeader& leader) 
         else
             rearDir = forward;
 
+        Vec3 sideDir{ -rearDir.z, 0.f, rearDir.x };
+        TacticalSquad* ambushSquad = squads[3];
+        Vec3 ambushCentroid = ambushSquad && !ambushSquad->isEmpty()
+            ? ambushSquad->calcCentroid(room)
+            : leaderPos;
+        float sideSign = ((ambushCentroid - playerCentroid).dot(sideDir) >= 0.f)
+            ? 1.f : -1.f;
+
         Vec3 ambushCenter = playerCentroid + rearDir * AMBUSH_REAR_DIST;
-        issueFormation(squads[3], SquadOrderType::FormationHold, ambushCenter);
+        if (ambushStage_ == AmbushStage::WideFlank) {
+            ambushCenter = playerCentroid +
+                rearDir * AMBUSH_WIDE_REAR_DIST +
+                sideDir * (sideSign * AMBUSH_WIDE_SIDE_DIST);
+        }
+
+        if (ambushSquad && !ambushSquad->isEmpty()) {
+            SquadOrder ord;
+            ord.type = SquadOrderType::FormationHold;
+            ord.targetId = targetId;
+            ord.tacticCenter = ambushCenter;
+            ord.formationTargetPos = playerCentroid;
+            ord.slotSpacingScale = 0.75f;
+            ord.slotColumnScale = 2.0f;
+            ambushSquad->receiveOrder(ord);
+        }
     }
 }
 
@@ -1029,6 +1065,18 @@ void GrandBaumMidBossTactic::updateAmbush(float dt, Room& room,
         return;
 
     ambushPrepTimer_ += dt;
+    if (ambushStage_ == AmbushStage::WideFlank) {
+        if (!ambushSquad->areMembersAtSlots(room) &&
+            ambushPrepTimer_ < AMBUSH_WIDE_MAX_PREP_TIME)
+            return;
+
+        ambushStage_ = AmbushStage::RearApproach;
+        ambushPrepTimer_ = 0.f;
+        orderRefreshTimer_ = 0.f;
+        Logger::get().log(leader.getName(), "GrandBaum ambush squad reached wide flank");
+        return;
+    }
+
     if (!ambushSquad->areMembersAtSlots(room) &&
         ambushPrepTimer_ < AMBUSH_MAX_PREP_TIME)
         return;
@@ -1043,36 +1091,35 @@ void GrandBaumMidBossTactic::updateAmbush(float dt, Room& room,
     ambushSquad->receiveOrder(ord);
 
     ambushEngageIssued_ = true;
+    ambushStage_ = AmbushStage::Engaged;
     Logger::get().log(leader.getName(), "GrandBaum ambush squad engaged");
 }
 
-bool GrandBaumMidBossTactic::areShieldWallSquadsReady(
-    Room& room, const PlatoonLeader& leader) const {
+bool GrandBaumMidBossTactic::isAmbushSquadAnnihilated(
+    TacticalSquad* ambushSquad) const {
+    return !ambushSquad || ambushSquad->isEmpty();
+}
+
+void GrandBaumMidBossTactic::applyShieldWallProtection(
+    Room& room, PlatoonLeader& leader, bool enabled) {
+    float multiplier = enabled ? SHIELDWALL_DAMAGE_MULT : 1.f;
+    leader.setDamageTakenMultiplier(multiplier);
+
     const auto& squads = leader.getSquads();
-    if (squads.empty())
-        return true;
-
-    if (squads.size() < 3) {
-        for (TacticalSquad* squad : squads) {
-            if (!squad || squad->isEmpty())
-                continue;
-            if (!squad->areMembersAtSlots(room))
-                return false;
-        }
-        return true;
-    }
-
-    const size_t wallIndices[] = { 0, 1, 2 };
-    for (size_t idx : wallIndices) {
+    const size_t slimeIndices[] = { 0, 1, 2 };
+    for (size_t idx : slimeIndices) {
         if (idx >= squads.size())
             continue;
         TacticalSquad* squad = squads[idx];
-        if (!squad || squad->isEmpty())
+        if (!squad)
             continue;
-        if (!squad->areMembersAtSlots(room))
-            return false;
+
+        for (uint32_t memberId : squad->getMembers()) {
+            Actor* actor = room.findActorById(memberId);
+            if (actor)
+                actor->setDamageTakenMultiplier(multiplier);
+        }
     }
-    return true;
 }
 
 uint32_t GrandBaumMidBossTactic::selectAmbushTarget(

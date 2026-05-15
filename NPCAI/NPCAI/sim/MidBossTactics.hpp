@@ -126,6 +126,7 @@ public:
 
     const char* name() const override { return "GrandBaumMidBossTactic"; }
     void update(float dt, Room& room, PlatoonLeader& leader) override;
+    void onLeaderDead(Room& room, PlatoonLeader& leader) override;
 
 private:
     enum class Phase {
@@ -134,12 +135,19 @@ private:
         Cooldown
     };
 
+    enum class AmbushStage {
+        WideFlank,
+        RearApproach,
+        Engaged
+    };
+
     void enterPhase(Phase next, const char* reason, PlatoonLeader& leader);
     void issueEngage(Room& room, PlatoonLeader& leader);
     void issueShieldWall(Room& room, PlatoonLeader& leader);
     void updateAmbush(float dt, Room& room, PlatoonLeader& leader,
                       TacticalSquad* ambushSquad);
-    bool areShieldWallSquadsReady(Room& room, const PlatoonLeader& leader) const;
+    bool isAmbushSquadAnnihilated(TacticalSquad* ambushSquad) const;
+    void applyShieldWallProtection(Room& room, PlatoonLeader& leader, bool enabled);
     uint32_t selectAmbushTarget(Room& room, const PlatoonLeader& leader,
                                 TacticalSquad* ambushSquad) const;
 
@@ -148,20 +156,22 @@ private:
     float engageRefreshTimer_{ 0.f };
     float orderRefreshTimer_{ 0.f };
     float ambushPrepTimer_{ 0.f };
-    float shieldWallTimer_{ 0.f };
     float tacticCooldown_{ 0.f };
     bool engageOrderIssued_{ false };
     bool ambushEngageIssued_{ false };
+    AmbushStage ambushStage_{ AmbushStage::WideFlank };
 
     static constexpr float ENGAGE_REFRESH_INTERVAL = 1.0f;
     static constexpr float ORDER_REFRESH_INTERVAL = 0.5f;
     static constexpr float TACTIC_COOLDOWN_DURATION = 8.0f;
-    static constexpr float SHIELDWALL_MAX_DURATION = 6.0f;
-    static constexpr float SHIELD_FRONT_DIST      = 8.f;
-    static constexpr float SHIELD_SIDE_OFFSET     = 10.f;
     static constexpr float AMBUSH_REAR_DIST       = 18.f;
     static constexpr float AMBUSH_MAX_PREP_TIME   = 4.f;
     static constexpr float AMBUSH_CLUSTER_RADIUS  = 20.f;
+    static constexpr float SHIELD_RING_RADIUS     = 12.f;
+    static constexpr float SHIELDWALL_DAMAGE_MULT = 0.3f;
+    static constexpr float AMBUSH_WIDE_REAR_DIST  = 12.f;
+    static constexpr float AMBUSH_WIDE_SIDE_DIST  = 28.f;
+    static constexpr float AMBUSH_WIDE_MAX_PREP_TIME = 3.f;
 };
 
 } // namespace sim

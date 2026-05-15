@@ -236,6 +236,7 @@ Cooldown
   Engage -> ShieldWall
 
 ShieldWall 완료:
+  (ㄹ) 뱀 부대 전멸
   모든 Squad -> Engage
   Cooldown
 
@@ -243,7 +244,7 @@ Cooldown 종료:
   Engage 복귀
 ```
 
-`ShieldWall` 안에서 `(ㄹ) 부대 주의-기습`이 함께 진행된다. `(ㄹ)`이 후방 접근 후 `Engage`에 들어가고 방패벽 부대가 슬롯에 도착하면 전술 완료로 본다. 너무 오래 걸리는 경우 `SHIELDWALL_MAX_DURATION` 이후 전술을 종료하고 전 부대를 `Engage`로 되돌린다.
+`ShieldWall` 안에서 `(ㄹ) 부대 주의-기습`이 함께 진행된다. `(ㄱ)/(ㄴ)/(ㄷ)` 슬라임 부대는 중간보스를 원 형태로 포위하고 바깥쪽을 바라보며 지킨다. `(ㄹ)` 뱀 부대는 넓게 우회한 뒤 플레이어 군집 후방으로 들어가 고립 처단 타겟을 공격한다. 방패벽은 `(ㄹ)` 뱀 부대가 전멸하면 종료된다.
 
 일반 `Engage` 상태에서는 고블린과 같은 공용 타겟 분배 helper를 사용한다. 각 Squad 중심과 플레이어 위치를 비교해 가까운 플레이어에게 배정하되, 한 플레이어에게 모든 Squad가 몰리지 않도록 플레이어별 최대 배정 수를 제한한다.
 
@@ -264,29 +265,31 @@ leader.hp / leader.maxHp <= grandBaumA
 ```text
 playerCentroid = 살아있는 플레이어 위치 평균
 forward        = normalize(playerCentroid - grandBaumPos)
-right          = (-forward.z, 0, forward.x)
 
-frontCenter = grandBaumPos + forward * SHIELD_FRONT_DIST
-leftCenter  = frontCenter - right * SHIELD_SIDE_OFFSET
-rightCenter = frontCenter + right * SHIELD_SIDE_OFFSET
+slimeRingCenter = grandBaumPos
+slimeRingRadius = SHIELD_RING_RADIUS
+slimeFacing     = normalize(slimeSlot - grandBaumPos)
 ```
+
+방패벽 중 `GrandBaum` 중간보스와 `(ㄱ)/(ㄴ)/(ㄷ)` 슬라임 부대는 받는 피해가 `70%` 감소한다. 구현상 피해 배율은 `SHIELDWALL_DAMAGE_MULT = 0.3f`이며, `(ㄹ)` 뱀 부대에는 적용하지 않는다.
 
 부대 해석:
 
 | 부대 순서 | 의미 | 명령 |
 |---|---|---|
-| `squads[0]` | (ㄱ) 좌측 슬라임 방패벽 | `FormationGuard` |
-| `squads[1]` | (ㄴ) 우측 슬라임 방패벽 | `FormationGuard` |
-| `squads[2]` | (ㄷ) 전방 슬라임 방패벽 | `FormationGuard` |
-| `squads[3]` | (ㄹ) 뱀족 고립 처단형 후방 기습 | `FormationHold` 후 `Engage` |
+| `squads[0]` | (ㄱ) 슬라임 원형 호위 | `RingGuard` |
+| `squads[1]` | (ㄴ) 슬라임 원형 호위 | `RingGuard` |
+| `squads[2]` | (ㄷ) 슬라임 원형 호위 | `RingGuard` |
+| `squads[3]` | (ㄹ) 뱀족 우회 후방 기습 | `FormationHold` 2단계 후 `Engage` |
 
 ### 5-3. (ㄹ) 주의-기습
 
 - 플레이어 평균 facing의 반대 방향을 후방으로 본다.
 - 평균 facing이 유효하지 않으면 그랜드밤에서 플레이어 centroid로 향하는 방향을 fallback으로 사용한다.
-- 뱀 부대는 `AMBUSH_REAR_DIST`만큼 떨어진 후방 위치로 `FormationHold` 이동한다.
+- 뱀 부대는 먼저 `AMBUSH_WIDE_SIDE_DIST`만큼 측면으로 크게 우회한 뒤, `AMBUSH_REAR_DIST`만큼 떨어진 후방 위치로 이동한다.
 - 후방 슬롯에 도착하거나 `AMBUSH_MAX_PREP_TIME`이 지나면 고립 처단 타겟을 골라 `Engage`로 전환한다.
-- 전술 종료 시 `(ㄱ)/(ㄴ)/(ㄷ)` 방패벽 부대도 다시 `Engage`를 받는다.
+- 전술 종료 조건은 `(ㄹ)` 뱀 부대 전멸이다.
+- 전술 종료 시 피해 감소를 해제하고 `(ㄱ)/(ㄴ)/(ㄷ)` 방패벽 부대도 다시 `Engage`를 받는다.
 
 고립 처단 타겟 선정:
 
@@ -338,8 +341,9 @@ targetScore =
 | `WedgeCharge` | `HoldSlot` -> `ChargeThrough` | 쐐기 대형 준비 후 돌진 |
 | `FormationHold` | `HoldSlot` | 지정 중심/방향 밀집 대형 후 대기 |
 | `FormationGuard` | `GuardSlot` | 지정 중심/방향 밀집 대형 후 경계 |
+| `RingGuard` | `HoldSlot` | 지정 중심을 원형으로 둘러싸고 바깥쪽을 바라봄 |
 
-`FormationHold`와 `FormationGuard`는 종족을 모르는 공용 대형 명령이다. 그랜드밤 방패벽은 이 명령을 사용하지만, `TacticalSquad`는 그 명령이 그랜드밤 전술인지 알지 않는다.
+`FormationHold`, `FormationGuard`, `RingGuard`는 종족을 모르는 공용 대형 명령이다. 그랜드밤 방패벽은 이 명령들을 사용하지만, `TacticalSquad`는 그 명령이 그랜드밤 전술인지 알지 않는다.
 
 ### 6-3. 슬롯 계산
 
@@ -360,6 +364,13 @@ Encircle 슬롯:
 
 ```text
 slot_i = tacticCenter + direction(theta_i) * approachRadius
+```
+
+RingGuard 슬롯:
+
+```text
+slot_i = tacticCenter + direction(theta_i) * approachRadius
+facing = normalize(slot_i - tacticCenter)
 ```
 
 WedgeCharge 슬롯:
@@ -480,7 +491,7 @@ else if (race == GrandBaum) { ... }
 |---|---|
 | `MidBossTacticBase` | 공용 helper, 종족별 전술 상수 없음 |
 | `GoblinMidBossTactic` | `TACTIC_INTERVAL`, `CLUSTER_RADIUS`, `ENCIRCLE_RADIUS`, `TACTIC_HP_THRESHOLD`, `BOX_FRONT_OFFSET`, `REGROUP_DIST` |
-| `GrandBaumMidBossTactic` | `ENGAGE_REFRESH_INTERVAL`, `ORDER_REFRESH_INTERVAL`, `TACTIC_COOLDOWN_DURATION`, `SHIELDWALL_MAX_DURATION`, `SHIELD_FRONT_DIST`, `SHIELD_SIDE_OFFSET`, `AMBUSH_REAR_DIST`, `AMBUSH_MAX_PREP_TIME`, `AMBUSH_CLUSTER_RADIUS` |
+| `GrandBaumMidBossTactic` | `ENGAGE_REFRESH_INTERVAL`, `ORDER_REFRESH_INTERVAL`, `TACTIC_COOLDOWN_DURATION`, `SHIELD_RING_RADIUS`, `SHIELDWALL_DAMAGE_MULT`, `AMBUSH_REAR_DIST`, `AMBUSH_WIDE_SIDE_DIST`, `AMBUSH_MAX_PREP_TIME`, `AMBUSH_CLUSTER_RADIUS` |
 | `TacticalSquad` | `WEDGE_EXIT_DISTANCE`, `WEDGE_PREP_APEX_DISTANCE`, `WEDGE_IMPACT_RADIUS`, `WEDGE_SPEED_MULT` |
 | `TacticalNpc` | `TACTICAL_SPEED_MULT` |
 | `Room` | `SOFT_BLOCK_RADIUS`, `SOFT_BLOCK_MIN_SPEED`, `SOFT_BLOCK_PUSH_SPEED` |

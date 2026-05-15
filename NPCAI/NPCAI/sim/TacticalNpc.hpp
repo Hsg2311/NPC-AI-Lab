@@ -48,6 +48,8 @@ struct TacticalCommand {
     float               impactRadius     = 3.f;
     float               impactDamage     = 0.f;
     float               passDistance     = 6.f;
+    bool                useHoldFacing    = false;
+    Vec3                holdFacing       = {};
 };
 
 // ─── TacticalNpcConfig ───────────────────────────────────────────────────────
@@ -123,6 +125,8 @@ protected:
     float            passDistance_{ 6.f };
     bool             chargeComplete_{ false };
     bool             guardNearestPlayer_{ false };
+    bool             useHoldFacing_{ false };
+    Vec3             holdFacing_{};
     Vec3             spawnPos_;
     int              squadId_{ -1 };
     std::string      logPrefix_{};

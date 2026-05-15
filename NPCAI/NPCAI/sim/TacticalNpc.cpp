@@ -81,11 +81,13 @@ void TacticalNpc::consumePendingCommand() {
     switch (pendingCmd_.type) {
         case TacticalCommandType::EngageTarget:
             guardNearestPlayer_ = false;
+            useHoldFacing_ = false;
             targetId_ = pendingCmd_.targetId;
             transitionTo(TacticalNpcState::Chase, "명령: EngageTarget");
             break;
         case TacticalCommandType::FlankTarget:
             guardNearestPlayer_ = false;
+            useHoldFacing_ = false;
             chargeComplete_ = false;
             targetId_          = pendingCmd_.targetId;
             assignedSlot_      = pendingCmd_.slotOffset;
@@ -96,6 +98,7 @@ void TacticalNpc::consumePendingCommand() {
             break;
         case TacticalCommandType::ChargeThrough:
             guardNearestPlayer_ = false;
+            useHoldFacing_ = false;
             targetId_          = pendingCmd_.targetId;
             assignedSlot_      = pendingCmd_.slotOffset;
             chargeId_          = pendingCmd_.chargeId;
@@ -110,6 +113,8 @@ void TacticalNpc::consumePendingCommand() {
             break;
         case TacticalCommandType::HoldSlot:
             guardNearestPlayer_ = false;
+            useHoldFacing_ = pendingCmd_.useHoldFacing;
+            holdFacing_ = pendingCmd_.holdFacing;
             chargeComplete_ = false;
             targetId_     = pendingCmd_.targetId;
             assignedSlot_ = pendingCmd_.slotOffset;
@@ -117,18 +122,22 @@ void TacticalNpc::consumePendingCommand() {
             break;
         case TacticalCommandType::GuardSlot:
             guardNearestPlayer_ = true;
+            useHoldFacing_ = pendingCmd_.useHoldFacing;
+            holdFacing_ = pendingCmd_.holdFacing;
             targetId_     = pendingCmd_.targetId;
             assignedSlot_ = pendingCmd_.slotOffset;
             transitionTo(TacticalNpcState::HoldSlot, "명령: GuardSlot");
             break;
         case TacticalCommandType::Idle:
             guardNearestPlayer_ = false;
+            useHoldFacing_ = false;
             chargeComplete_ = false;
             targetId_ = 0;
             transitionTo(TacticalNpcState::Idle, "명령: Idle");
             break;
         case TacticalCommandType::Confused:
             guardNearestPlayer_ = false;
+            useHoldFacing_ = false;
             chargeComplete_ = false;
             targetId_ = 0;
             transitionTo(TacticalNpcState::Idle, "명령: Confused");
@@ -362,6 +371,20 @@ void TacticalNpc::updateHoldSlot(float dt, Room& room) {
     }
 
     if (!target) {
+        if (useHoldFacing_) {
+            float distToSlot = Vec3::distance(position_, assignedSlot_);
+            if (distToSlot < separationRadius_ * 0.25f) {
+                if (holdFacing_.lengthSq() > 0.01f)
+                    facing_ = holdFacing_.normalized();
+                return;
+            }
+
+            Vec3 slotDir = (assignedSlot_ - position_).normalized();
+            facing_ = slotDir;
+            position_ += slotDir * (moveSpeed_ * TACTICAL_SPEED_MULT * dt);
+            return;
+        }
+
         targetId_ = 0;
         transitionTo(TacticalNpcState::Idle, "타겟 소실 (HoldSlot 중)");
         return;
@@ -369,6 +392,11 @@ void TacticalNpc::updateHoldSlot(float dt, Room& room) {
 
     float distToSlot = Vec3::distance(position_, assignedSlot_);
     if (distToSlot < separationRadius_ * 0.25f) {
+        if (useHoldFacing_ && holdFacing_.lengthSq() > 0.01f) {
+            facing_ = holdFacing_.normalized();
+            return;
+        }
+
         // 슬롯 도착 — 타겟 방향으로 facing 유지
         Vec3 dir = target->getPosition() - position_;
         if (dir.length() > 0.1f) facing_ = dir.normalized();

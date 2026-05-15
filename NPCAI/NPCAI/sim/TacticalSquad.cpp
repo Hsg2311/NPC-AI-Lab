@@ -464,6 +464,48 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
             break;
         }
 
+        case SquadOrderType::RingGuard: {
+            std::vector<Vec3> slots = calcEncircleSlots(
+                ord.tacticCenter, ord.sectorAngle, ord.sectorSpan,
+                ord.approachRadius, count);
+
+            std::vector<bool> slotUsed(static_cast<size_t>(count), false);
+            for (int i = 0; i < count; ++i) {
+                Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
+                auto* tnpc = dynamic_cast<TacticalNpc*>(a);
+                if (!tnpc || !tnpc->isAlive()) continue;
+
+                int bestSlot = -1;
+                float bestDist = -1.f;
+                for (int j = 0; j < count; ++j) {
+                    if (slotUsed[static_cast<size_t>(j)]) continue;
+                    float d = Vec3::distance(tnpc->getPosition(), slots[static_cast<size_t>(j)]);
+                    if (bestDist < 0.f || d < bestDist) {
+                        bestDist = d;
+                        bestSlot = j;
+                    }
+                }
+                if (bestSlot < 0) continue;
+                slotUsed[static_cast<size_t>(bestSlot)] = true;
+
+                Vec3 slot = slots[static_cast<size_t>(bestSlot)];
+                Vec3 outward = slot - ord.tacticCenter;
+                if (outward.lengthSq() > 0.01f)
+                    outward = outward.normalized();
+                else
+                    outward = Vec3{ 1.f, 0.f, 0.f };
+
+                TacticalCommand cmd;
+                cmd.type = TacticalCommandType::HoldSlot;
+                cmd.targetId = ord.targetId;
+                cmd.slotOffset = slot;
+                cmd.useHoldFacing = true;
+                cmd.holdFacing = outward;
+                tnpc->receiveCommand(cmd);
+            }
+            break;
+        }
+
         case SquadOrderType::RetreatFormUp: {
             // 박스/밀집 대형을 만들지 않고, 현재 배치를 유지한 채 공통 이동량으로 후퇴한다.
             Vec3 retreatDelta = ord.tacticCenter - ord.leaderPos;
