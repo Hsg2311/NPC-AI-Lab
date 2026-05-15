@@ -433,6 +433,37 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
             break;
         }
 
+        case SquadOrderType::FormationHold:
+        case SquadOrderType::FormationGuard: {
+            Actor* targetActor = room.findActorById(ord.targetId);
+            if (!targetActor || !targetActor->isAlive()) return;
+
+            Vec3 center = ord.tacticCenter;
+            Vec3 faceDir = ord.formationTargetPos - center;
+            float fl = faceDir.length();
+            if (fl > 0.01f) faceDir = faceDir / fl;
+            else            faceDir = Vec3{ 1.f, 0.f, 0.f };
+
+            std::vector<Vec3> slots = calcDenseSlots(center, faceDir, count,
+                                                     ord.slotSpacingScale,
+                                                     ord.slotColumnScale,
+                                                     ord.slotColumnCount);
+
+            for (int i = 0; i < count; ++i) {
+                Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
+                if (auto* tnpc = dynamic_cast<TacticalNpc*>(a)) {
+                    TacticalCommand cmd;
+                    cmd.type = (ord.type == SquadOrderType::FormationGuard)
+                        ? TacticalCommandType::GuardSlot
+                        : TacticalCommandType::HoldSlot;
+                    cmd.targetId   = ord.targetId;
+                    cmd.slotOffset = slots[static_cast<size_t>(i)];
+                    tnpc->receiveCommand(cmd);
+                }
+            }
+            break;
+        }
+
         case SquadOrderType::RetreatFormUp: {
             // 박스/밀집 대형을 만들지 않고, 현재 배치를 유지한 채 공통 이동량으로 후퇴한다.
             Vec3 retreatDelta = ord.tacticCenter - ord.leaderPos;

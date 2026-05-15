@@ -2,8 +2,9 @@
 #include "../sim/ScenarioSoloNpc.hpp"
 #include "../sim/ScenarioSharedSight.hpp"
 #include "../sim/ScenarioTactical.hpp"
+#include "../sim/ScenarioGrandBaum.hpp"
 #include <cstdio>
-
+#define USE_GRANDBAUM_SCENARIO
 namespace viz {
 
 Application::Application()
@@ -49,7 +50,11 @@ bool Application::init(HINSTANCE hInst, int nCmdShow) {
         return false;
     }
 
+#ifdef USE_GRANDBAUM_SCENARIO
+    scenario_ = std::make_unique<sim::ScenarioGrandBaum>();
+#else
     scenario_ = std::make_unique<sim::ScenarioTactical>();
+#endif
     scenario_->setup(room_);
     controlledPlayer_ = scenario_->controlledPlayer();
 

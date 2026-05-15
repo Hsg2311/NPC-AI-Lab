@@ -1,35 +1,40 @@
-# Tactical NPC 시스템 구조
+# Tactical NPC Architecture
 
-> 갱신: 2026-05-12  
-> 대상: `sim/PlatoonLeader`, `sim/TacticalSquad`, `sim/TacticalNpc`, `sim/Room`, `sim/ScenarioTactical`
+> 갱신: 2026-05-15  
+> 대상: `sim/IMidBossTactic`, `sim/MidBossTactics`, `sim/PlatoonLeader`, `sim/TacticalSquad`, `sim/TacticalNpc`, `sim/Room`
 
-Tactical NPC 시스템은 **지휘관 - 부대 - 개별 NPC**의 3계층 구조로 구성된다.
-상위 계층은 전술 판단과 명령 발행을 담당하고, 하위 계층은 명령을 실제 슬롯 이동과 상태 전이로 실행한다.
+Tactical NPC 시스템은 **전술 전략 - 지휘관 - 부대 - 개별 NPC**의 4계층 구조다.
 
 ```text
-PlatoonLeader
-  전술 판단: 목표 선택, 전술 발동 조건 확인, 단계 전환
-  -> SquadOrder
-
-TacticalSquad
-  부대 명령 변환: SquadOrder를 멤버별 슬롯과 TacticalCommand로 변환
-  -> TacticalCommand
-
-TacticalNpc
-  개별 실행: 명령을 받아 FSM으로 이동, 공격, 정지, 주시를 수행
+Room
+  -> PlatoonLeader
+      -> IMidBossTactic
+          -> MidBossTacticBase
+              -> GoblinMidBossTactic
+              -> GrandBaumMidBossTactic
+      -> TacticalSquad
+          -> TacticalNpc
 ```
+
+핵심 원칙은 다음과 같다.
+
+- `IMidBossTactic` 구현체가 종족별 전술 판단과 전술 상태를 소유한다.
+- `MidBossTacticBase`는 군집 계산, 평균 위치, Engage/Idle 발행 같은 종족 무관 helper만 제공한다.
+- `PlatoonLeader`는 종족을 모르는 공용 지휘관이며, 부대 목록과 전술 객체를 보유한다.
+- `TacticalSquad`는 부대 명령을 멤버별 슬롯과 `TacticalCommand`로 변환한다.
+- `TacticalNpc`는 명령을 받아 개별 FSM으로 이동, 공격, 대기, 돌진을 실행한다.
 
 ---
 
-## 1. 시뮬레이션 갱신 순서
+## 1. 업데이트 순서
 
-`Room::tick(dt)`는 전술 지휘가 먼저 일어나고, 그 결과를 부대와 멤버가 같은 tick 안에서 실행하도록 순서를 고정한다.
+`Room::tick(dt)`는 전술 NPC 시스템이 같은 tick 안에서 상위 판단부터 하위 실행까지 진행되도록 순서를 고정한다.
 
 ```text
 1. Logger tick 동기화
-2. DummyPlayerController 갱신
+2. DummyPlayerController 업데이트
 3. Player 업데이트
-4. NpcGroup 공유 시야 메모리 만료
+4. NpcGroup 공유 시야 메모리 업데이트
 5. livingPlayers / aggroCount / spatialGrid 캐시 재구성
 6. 일반 Npc 업데이트
 7. PlatoonLeader 업데이트
@@ -38,77 +43,100 @@ TacticalNpc
 10. tick 증가
 ```
 
-전술 NPC 관점에서는 7~9번이 핵심이다.
+전술 명령 흐름은 다음과 같다.
 
 ```text
 PlatoonLeader::update()
-  -> evaluateTactics()가 SquadOrder 발행
+  -> tactic_->update(dt, room, leader)
+  -> 종족별 전술이 SquadOrder 발행
 
 TacticalSquad::update()
-  -> SquadOrder를 TacticalCommand로 변환
+  -> SquadOrder를 슬롯과 TacticalCommand로 변환
+  -> 각 TacticalNpc::receiveCommand(cmd)
 
 TacticalNpc::update()
-  -> pendingCmd_ 소비 후 FSM 실행
+  -> pendingCmd_ 소비
+  -> TacticalNpcState별 FSM 실행
 ```
+
+이 구조 때문에 리더가 같은 tick에 내린 명령은 먼저 Squad에서 변환되고, 그 다음 개별 NPC가 실행한다.
 
 ---
 
-## 2. 시나리오 구성
+## 2. PlatoonLeader
 
-`ScenarioTactical`은 전술 AI 검증용 시나리오다.
+`PlatoonLeader`는 `TacticalNpc`를 상속하지만, 현재 구조에서는 종족별 전술을 직접 소유하지 않는다. 고블린 전술 phase, 그랜드밤 방패벽 phase, 각개격파 상태 등은 모두 `IMidBossTactic` 구현체 안에 있다.
 
-| 구성 요소 | 수량 | 초기 위치 / 설정 |
-|---|---:|---|
-| Player P1 | 1 | `(0, 0, 0)`, HP 10000, 이동 속도 20 |
-| Player P2 | 1 | `(3, 0, 3)`, HP 9999, 더미 경로 이동 |
-| Boss / PlatoonLeader | 1 | `(50, 0, 0)`, HP 200 |
-| Squad A | 20 | 좌측/상단 배치 |
-| Squad B | 20 | 중앙/정면 배치 |
-| Squad C | 20 | 우측/하단 배치 |
+`PlatoonLeader`의 책임:
 
-일반 TacticalNpc 기본값:
+- 소속 `TacticalSquad*` 목록 관리
+- `std::unique_ptr<IMidBossTactic>` 보유
+- 매 tick 전술 객체에 업데이트 위임
+- 사망 시 전술 객체의 `onLeaderDead()` 호출
+- 전술 객체가 필요로 하는 공용 조작 API 제공
 
-| 파라미터 | 값 |
-|---|---:|
-| `maxHp` | 80 |
-| `moveSpeed` | 10 |
-| `attackRange` | 2 |
-| `attackDamage` | 10 |
-| `attackWindupTime` | 0.35s |
-| `attackRecoverTime` | 0.70s |
-| `separationRadius` | 6 |
-| `separationWeight` | 1.5 |
+주요 API:
 
-Boss는 같은 설정을 기반으로 HP 200, 공격 사거리 2.5를 사용한다. Boss는 일반 공격 FSM을 직접 수행하기보다 거리 유지와 부대 지휘에 집중한다.
+```cpp
+void addSquad(TacticalSquad* squad);
+const std::vector<TacticalSquad*>& getSquads() const;
+void setTactic(std::unique_ptr<IMidBossTactic> tactic);
+
+void removeDeadMembersFromSquads(Room& room);
+void pushConfusedToSquads(Room& room);
+void setTacticalTarget(uint32_t targetId);
+void transitionTacticalState(TacticalNpcState next, const char* reason);
+float getLeaderMoveSpeed() const;
+```
+
+주의할 점:
+
+- `PlatoonLeader`에는 `LeaderPhase`, `TACTIC_*`, `BOX_*`, `BOSS_KEEP_*` 같은 고블린 전용 상태와 상수가 없다.
+- 새 종족을 추가할 때 `PlatoonLeader`를 상속하거나 수정하지 않고, 새 `IMidBossTactic` 구현체를 만든다.
 
 ---
 
-## 3. PlatoonLeader
+## 3. IMidBossTactic
 
-### 3-1. 역할
+`IMidBossTactic`은 중간보스 종족별 전술의 공통 인터페이스다.
 
-`PlatoonLeader`는 `TacticalNpc`를 상속하지만 일반 멤버처럼 독립 전투를 수행하지 않는다. 주요 책임은 다음과 같다.
+```cpp
+class IMidBossTactic {
+public:
+    virtual ~IMidBossTactic() = default;
 
-- 살아 있는 Squad 목록 관리
-- 주 목표 플레이어 선택
-- 보스 중심 박스 대형 명령 발행
-- 전술 발동 조건 확인
-- 공통 후퇴, 포위, 경계, 각개격파 단계 전환
-- 리더 사망 시 모든 Squad에 `Confused` 명령 발행
-
-### 3-2. 목표 선택
-
-Boss는 살아 있는 모든 플레이어를 점수화하고 가장 높은 점수의 플레이어를 primary target으로 선택한다.
-
-```text
-distScore = 1 / (1 + distance(bossPos, playerPos))
-hpScore   = 1 - playerHp / playerMaxHp
-score     = 0.5 * distScore + 0.5 * hpScore
+    virtual const char* name() const = 0;
+    virtual void update(float dt, Room& room, PlatoonLeader& leader) = 0;
+    virtual void onLeaderDead(Room& room, PlatoonLeader& leader) = 0;
+};
 ```
 
-### 3-3. LeaderPhase 흐름
+구현체의 책임:
 
-현재 리더 단계는 다음 7개다.
+- 전술 발동 조건 판단
+- phase/state 관리
+- 타겟 선정
+- 플레이어 군집 분석
+- `SquadOrder` 발행
+- 리더 사망 시 부대 후속 처리
+
+현재 구현체:
+
+| 구현체 | 역할 |
+|---|---|
+| `MidBossTacticBase` | 종족 무관 공용 helper |
+| `GoblinMidBossTactic` | 기존 고블린 중간보스 전술 전체 |
+| `GrandBaumMidBossTactic` | 그랜드밤 방패벽 및 (ㄹ) 고립 처단형 후방 기습 |
+
+`MidBossTacticBase`는 전술 phase를 갖지 않는다. `PlayerCluster` 생성, 플레이어 centroid/facing 계산, 가장 가까운 플레이어 선택, Squad별 플레이어 타겟 분배, 전체 Squad `Engage`/`Idle` 발행, 리더 사망 시 `Confused` 발행만 담당한다.
+
+---
+
+## 4. GoblinMidBossTactic
+
+`GoblinMidBossTactic`은 기존 고블린 중간보스 전술을 완전히 소유한다.
+
+### 4-1. Phase
 
 ```text
 BoxAdvance
@@ -123,405 +151,338 @@ Cooldown
 기본 흐름:
 
 ```text
-전술 미발동:
+전술 미해금:
   BoxAdvance -> Engage
 
 전술 조건 충족:
-  Engage 또는 BoxAdvance -> TacticalRetreat -> BoxAdvance -> Encircle 또는 Vigilance
+  Engage 또는 BoxAdvance -> TacticalRetreat -> BoxAdvance
 
-포위 완료:
-  Encircle -> Cooldown
+BoxAdvance 완료 후:
+  플레이어 군집 1개 -> Encircle
+  플레이어 군집 2개 이상 -> Vigilance
 
-경계 완료:
-  Vigilance -> Encircle 또는 DivideAndConquer
+Vigilance 완료 후:
+  플레이어 군집 1개 -> Encircle
+  플레이어 군집 2개 이상 -> DivideAndConquer
 
-각개격파 완료:
-  DivideAndConquer -> Cooldown
+Encircle 또는 DivideAndConquer 완료:
+  Cooldown
 
-쿨타임 종료:
-  전술 해금 상태면 TacticalRetreat부터 다시 시작
+Cooldown 종료:
+  전술 해금 상태면 TacticalRetreat부터 재시작
 ```
 
-모든 단계 전환은 `enterPhase(next, reason)`을 통해 이루어진다. 이 함수는 `leaderPhase_`를 갱신하고 `phaseOrderIssued_`를 `false`로 초기화하며 로그를 남긴다.
+### 4-2. 발동 조건
 
-### 3-4. 전술 발동 조건
-
-전술은 플레이어 분산 여부로 발동하지 않는다. 다음 조건 중 하나를 만족할 때만 해금된다.
+고블린 전술 해금은 다음 중 하나를 만족하면 발생한다.
 
 | 조건 | 판정 | 상수 |
 |---|---|---|
-| Boss 체력 감소 | `bossHp / bossMaxHp <= 0.70` | `TACTIC_HP_THRESHOLD` |
-| Squad 손실 | `aliveMembers / initialMembers <= 0.80` | `TACTIC_SQUAD_RATIO` |
+| 리더 체력 감소 | `leader.hp / leader.maxHp <= 0.70` | `TACTIC_HP_THRESHOLD` |
+| 부대 손실 | `aliveMembers / initialMembers <= 0.80` | `TACTIC_SQUAD_RATIO` |
 
-`tacticsUnlocked_`는 단방향 래치다. 한 번 켜지면 이후 전술 사이클은 쿨타임 뒤에도 공통 후퇴부터 다시 시작한다.
+### 4-3. 주요 전술
 
-### 3-5. TacticalRetreat
+`BoxAdvance`:
 
-전술이 해금되면 먼저 Platoon 전체가 플레이어들로부터 후퇴한다.
+- 플레이어 centroid 방향으로 리더 앞쪽에 박스 대형 중심을 만든다.
+- 각 Squad는 박스 offset을 받아 `SquadOrderType::BoxAdvance`를 수행한다.
+- 완료 시 플레이어 군집 수에 따라 `Encircle` 또는 `Vigilance`로 갈라진다.
 
-```text
-playerCentroid = 살아 있는 플레이어 위치 평균
-awayDir        = normalize(bossPos - playerCentroid)
-retreatTarget  = playerCentroid + awayDir * REGROUP_DIST
-```
+`TacticalRetreat`:
 
-Boss는 `retreatTarget`으로 이동한다. 이때 일반 NPC의 슬롯 이동과 속도감을 맞추기 위해 `moveSpeed * TACTICAL_SPEED_MULT`를 사용한다.
+- 플레이어 centroid 반대 방향으로 `REGROUP_DIST`만큼 후퇴한다.
+- Squad는 `RetreatFormUp`으로 현재 배치를 유지한 채 같은 방향으로 이동한다.
 
-Squad 멤버는 새 대형을 만들지 않는다. 리더의 시작 위치와 후퇴 목표의 차이를 공통 이동량으로 사용한다.
+`Encircle`:
 
-```text
-retreatDelta = retreatTarget - leaderStartPos
-npcSlot      = npcCurrentPos + retreatDelta
-```
+- 플레이어 centroid 주변 원형 섹터를 Squad별 생존 인원 비율로 나눈다.
+- Squad는 `Encircle` 명령을 받아 멤버별 `HoldSlot`으로 이동한다.
+- 모든 멤버가 슬롯에 도착하면 `Engage` 후 `Cooldown`에 들어간다.
 
-후퇴 완료 조건은 다음 두 가지를 모두 만족해야 한다.
+`Vigilance`:
 
-- Boss가 `retreatTarget` 근처에 도착
-- 모든 살아 있는 Squad 멤버가 각자 `HoldSlot` 후퇴 슬롯에 도착
+- 리더 주변에 Guard 대형을 만든다.
+- 모든 멤버가 도착하면 플레이어 군집 수를 다시 판단한다.
 
-후퇴 완료 후에는 다시 `BoxAdvance`로 전환한다.
+`DivideAndConquer`:
 
-### 3-6. BoxAdvance
-
-`BoxAdvance`는 이름과 달리 플레이어 근처 접근 대형이 아니라, **보스 앞쪽의 박스 집결 대형**이다. 박스 대형은 초기 정렬과 전술 판단 전 준비 자세 모두에 사용된다.
-
-```text
-playerCentroid = 살아 있는 플레이어 위치 평균
-forward        = normalize(playerCentroid - bossPos)
-right          = (-forward.z, 0, forward.x)
-boxCenter      = bossPos + forward * BOX_FRONT_OFFSET
-```
-
-Squad별 상대 오프셋은 `calcSquadBoxOffsets(numSquads)`로 계산한다.
-
-```text
-rows    = max(1, floor(sqrt(numSquads)))
-cols    = ceil(numSquads / rows)
-colOff  = (col - (cols - 1) / 2) * BOX_SQUAD_SPACING
-rowOff  = (row - (rows - 1) / 2) * BOX_SQUAD_SPACING
-latFrac = abs(col - (cols - 1) / 2) / ((cols - 1) / 2)
-arcZ    = rowOff - BOX_ARC_DEPTH * latFrac
-sectorPos = (colOff, 0, arcZ)
-```
-
-각 Squad 중심은 보스 앞쪽 박스 중심을 기준으로 잡는다.
-
-```text
-squadCenter = boxCenter
-            + right   * sectorPos.x
-            - forward * sectorPos.z
-```
-
-Squad 내부 멤버 슬롯은 기존 `calcDenseSlots(squadCenter, faceDir, count)`로 만든다. 멤버들은 `HoldSlot` 명령을 받아 슬롯까지 이동하고, 도착 후 플레이어 방향을 바라본다.
-
-`BoxAdvance` 완료 순간에만 플레이어 군집 수를 판정한다.
-
-```text
-clusterPlayers(room) == 1  -> Encircle
-clusterPlayers(room) >= 2  -> Vigilance
-```
-
-즉, 후퇴 중이나 박스 대형 진행 중에는 포위/경계를 선택하지 않는다.
-
-### 3-7. Encircle
-
-`Encircle`은 플레이어가 한 군집으로 모여 있을 때 선택된다. 포위 중심은 발행 시점의 플레이어 centroid다.
-
-전체 생존 멤버 수를 기준으로 Squad별 포위 섹터를 나눈다.
-
-```text
-fraction_s   = squadMemberCount / totalMemberCount
-sectorSpan_s = 2π * fraction_s
-sectorAngle  = angleAccum + sectorSpan_s / 2
-```
-
-각 Squad는 `Encircle` 명령을 받고, 내부에서 `calcEncircleSlots()`로 포위 슬롯을 만든 뒤 가장 가까운 슬롯을 greedy 방식으로 배정한다.
-
-포위 슬롯에 모든 멤버가 도착하면 `Cooldown`으로 전환한다.
-
-### 3-8. Vigilance
-
-`Vigilance`는 박스 대형 완료 시점에 플레이어 군집이 2개 이상일 때 선택된다. 이 단계는 보스를 중심으로 한 경계 대형이며, 경계 슬롯에 모든 멤버가 도착하면 플레이어 군집을 다시 판정한다.
-
-리더는 각 Squad에 `GuardBoss` 명령을 보낸다.
-
-```text
-playerCentroid = 살아 있는 플레이어 위치 평균
-forward        = normalize(playerCentroid - bossPos)
-baseAngle      = atan2(forward.z, forward.x)
-squadAngle_i   = baseAngle + 2π * i / numSquads
-squadCenter_i  = bossPos + direction(squadAngle_i) * VIGILANCE_GUARD_RADIUS
-```
-
-Squad 내부는 `calcDenseSlots()`로 밀집 슬롯을 만들고, 멤버에게 `GuardSlot`을 발행한다. `GuardSlot`은 `HoldSlot` 상태를 재사용하지만 공격하지 않고 가장 가까운 살아 있는 플레이어를 바라본다.
-
-경계 대형 완료 후 재판정 결과에 따라 다음 단계가 정해진다.
-
-```text
-clusters.size() <= 1  -> Encircle
-clusters.size() >= 2  -> DivideAndConquer
-```
-
-즉, 플레이어가 경계 중 다시 모이면 포위로 전환하고, 계속 분산되어 있으면 각개격파를 시작한다.
-
-주의할 점은 `Vigilance`의 탈출 조건이 시간 기반이 아니라 `allMembersArrived(room)` 기반이라는 것이다. 따라서 살아 있는 멤버 중 하나라도 `GuardSlot`에 도착하지 못하면 군집 재판정이 실행되지 않고 경계 상태가 유지될 수 있다. 예를 들어 슬롯 판정 반경이 너무 좁거나, separation force 때문에 슬롯 근처에서 밀려나거나, 이동 경로가 막혀 `isAtSlot()`이 계속 false를 반환하는 경우가 이에 해당한다.
-
-### 3-9. DivideAndConquer
-
-`DivideAndConquer`는 경계 완료 시점에도 플레이어 군집이 2개 이상일 때 선택된다. 리더는 `buildPlayerClusters()`로 플레이어 군집을 만들고, 군집 점수와 Squad 위치를 기준으로 Squad별 임무를 배정한다.
-
-플레이어 군집이 2개 이상인 경우:
-
-```text
-점수가 높은 군집       -> 가장 가까운 Squad 1개가 WedgeCharge
-나머지 Squad          -> 돌진 대상 군집과 나머지 군집 사이 차단 경계
-```
-
-돌진하지 않는 Squad에는 `GuardBoss` 명령을 재사용해 차단 경계 위치를 발행한다. 차단 중심은 돌진 대상 군집에서 나머지 군집 centroid 방향으로 `SCREEN_BLOCK_CENTER_BIAS`만큼 이동한 지점이며, Squad들은 이 중심의 좌우에 배치되어 합류 경로를 지연시킨다. 각개격파 차단 경계는 `SCREEN_BLOCK_SPACING`, `SCREEN_SLOT_SPACING_SCALE`, `SCREEN_SLOT_COLUMN_SCALE`, `SCREEN_SLOT_COLUMN_COUNT`를 적용해 보스 중심 경계보다 더 촘촘하고 얇은 차단선을 만든다. 기본 20명 Squad에서는 `SCREEN_SLOT_COLUMN_COUNT = 10`으로 10열 x 2행 배치를 목표로 한다.
-
-`WedgeCharge`는 먼저 쐐기 준비 슬롯을 만들고 멤버를 `HoldSlot`으로 이동시킨 뒤, 준비가 끝나면 `ChargeThrough` 명령을 발행한다. `ChargeThrough` 중에는 대상 군집의 플레이어에게 멤버별 1회 충돌 피해를 적용하고, 돌진 종료 지점에 도착하면 완료로 본다.
-
-`WedgeCharge` 임무는 자기 돌진이 끝나면 바로 `Engage`로 전환한다. 차단 경계 Squad들은 모든 차단 Squad가 각자 `GuardSlot`에 도착할 때까지 `HoldSlot`을 유지하고, 차단선이 완성된 순간 함께 `Engage`로 전환한다. 돌진 Squad와 차단 Squad가 `Engage`로 전환되고 `DIVIDE_ENGAGE_PROTECT_DURATION`이 지나면 `Cooldown`에 진입한다.
-
-`DivideAndConquer` 명령 발행 직전 플레이어가 다시 1개 군집으로 모이면 각개격파를 취소하고 `Encircle`로 전환한다.
-
-### 3-10. Cooldown
-
-포위 또는 각개격파 완료 후에는 `Cooldown`에 진입한다.
-
-```text
-leaderPhase_ == Encircle && phaseOrderIssued_ && allMembersArrived()
-  -> tacticCooldown_ = TACTIC_COOLDOWN_DURATION
-  -> enterPhase(Cooldown)
-
-leaderPhase_ == DivideAndConquer && allTasksEngagedForProtectDuration
-  -> tacticCooldown_ = TACTIC_COOLDOWN_DURATION
-  -> enterPhase(Cooldown)
-```
-
-쿨타임이 끝났고 전술이 이미 해금된 상태라면 `TacticalRetreat`부터 다시 시작한다.
+- 가장 위협적인 플레이어 군집에 가장 가까운 Squad를 `WedgeCharge`로 배정한다.
+- 나머지 Squad는 `GuardBoss`를 활용해 군집 사이 차단선을 만든다.
+- 돌진/차단 임무가 끝나면 일정 시간 `Engage`를 유지한 뒤 `Cooldown`에 들어간다.
 
 ---
 
-## 4. TacticalSquad
+## 5. GrandBaumMidBossTactic
 
-### 4-1. 역할
+`GrandBaumMidBossTactic`은 그랜드밤 종족 전술만 담당한다. 현재 구현 범위는 `방패벽`과 `(ㄹ) 부대 고립 처단형 주의-기습`이다.
 
-`TacticalSquad`는 Actor가 아니라 지휘 보조 객체다. 멤버 TacticalNpc의 ID 목록을 보유하고, 리더가 발행한 `SquadOrder`를 실제 멤버별 `TacticalCommand`로 변환한다.
+### 5-1. Phase
 
-주요 책임:
+```text
+Engage
+ShieldWall
+Cooldown
+```
 
-- 죽은 멤버 제거
-- `SquadOrder` 저장
-- 대형별 슬롯 계산
-- 멤버에게 `TacticalCommand` 발행
+기본 흐름:
 
-### 4-2. SquadOrderType
+```text
+시작:
+  모든 Squad -> Engage
+  여러 플레이어가 있으면 Squad별로 타겟 분산
 
-현재 Squad 명령은 다음과 같다.
+전술 조건 충족:
+  Engage -> ShieldWall
+
+ShieldWall 완료:
+  모든 Squad -> Engage
+  Cooldown
+
+Cooldown 종료:
+  Engage 복귀
+```
+
+`ShieldWall` 안에서 `(ㄹ) 부대 주의-기습`이 함께 진행된다. `(ㄹ)`이 후방 접근 후 `Engage`에 들어가고 방패벽 부대가 슬롯에 도착하면 전술 완료로 본다. 너무 오래 걸리는 경우 `SHIELDWALL_MAX_DURATION` 이후 전술을 종료하고 전 부대를 `Engage`로 되돌린다.
+
+일반 `Engage` 상태에서는 고블린과 같은 공용 타겟 분배 helper를 사용한다. 각 Squad 중심과 플레이어 위치를 비교해 가까운 플레이어에게 배정하되, 한 플레이어에게 모든 Squad가 몰리지 않도록 플레이어별 최대 배정 수를 제한한다.
+
+### 5-2. 방패벽 발동
+
+발동 조건:
+
+```text
+leader.hp / leader.maxHp <= grandBaumA
+```
+
+기본 `grandBaumA` 값은 `0.5f`다.
+
+전술 재발동은 `TACTIC_COOLDOWN_DURATION` 동안 막힌다. 쿨타임 중에도 부대는 일반 `Engage` 상태를 유지한다.
+
+방패벽 배치:
+
+```text
+playerCentroid = 살아있는 플레이어 위치 평균
+forward        = normalize(playerCentroid - grandBaumPos)
+right          = (-forward.z, 0, forward.x)
+
+frontCenter = grandBaumPos + forward * SHIELD_FRONT_DIST
+leftCenter  = frontCenter - right * SHIELD_SIDE_OFFSET
+rightCenter = frontCenter + right * SHIELD_SIDE_OFFSET
+```
+
+부대 해석:
+
+| 부대 순서 | 의미 | 명령 |
+|---|---|---|
+| `squads[0]` | (ㄱ) 좌측 슬라임 방패벽 | `FormationGuard` |
+| `squads[1]` | (ㄴ) 우측 슬라임 방패벽 | `FormationGuard` |
+| `squads[2]` | (ㄷ) 전방 슬라임 방패벽 | `FormationGuard` |
+| `squads[3]` | (ㄹ) 뱀족 고립 처단형 후방 기습 | `FormationHold` 후 `Engage` |
+
+### 5-3. (ㄹ) 주의-기습
+
+- 플레이어 평균 facing의 반대 방향을 후방으로 본다.
+- 평균 facing이 유효하지 않으면 그랜드밤에서 플레이어 centroid로 향하는 방향을 fallback으로 사용한다.
+- 뱀 부대는 `AMBUSH_REAR_DIST`만큼 떨어진 후방 위치로 `FormationHold` 이동한다.
+- 후방 슬롯에 도착하거나 `AMBUSH_MAX_PREP_TIME`이 지나면 고립 처단 타겟을 골라 `Engage`로 전환한다.
+- 전술 종료 시 `(ㄱ)/(ㄴ)/(ㄷ)` 방패벽 부대도 다시 `Engage`를 받는다.
+
+고립 처단 타겟 선정:
+
+```text
+clusterScore =
+    0.45 * distanceFromLeaderScore
+  + 0.35 * isolationScore
+  + 0.20 * smallClusterScore
+
+targetScore =
+    0.35 * distanceFromAmbushSquadScore
+  + 0.30 * lowHpScore
+  + 0.25 * backFacingScore
+  + 0.10 * rearPositionScore
+```
+
+- 플레이어가 한 군집이면 그 군집 내부의 취약 대상을 고른다.
+- 플레이어가 여러 군집이면 리더에게서 멀고 다른 군집과 떨어진 작은 군집을 우선한다.
+- 플레이어가 모두 흩어져 있으면 가장 고립된 개인을 고르는 형태가 된다.
+- 후보가 없으면 뱀 부대 위치에서 가장 가까운 생존 플레이어로 fallback한다.
+
+현재 코드에는 실제 FOV/은신 판정이 없으므로, 1차 구현은 `Player::getFacing()`과 위치 관계로 “등지고 있음”을 근사한다.
+
+---
+
+## 6. TacticalSquad
+
+`TacticalSquad`는 Actor가 아닌 지휘 보조 객체다. 멤버 `TacticalNpc`의 id 목록을 보유하고, `SquadOrder`를 개별 `TacticalCommand`로 변환한다.
+
+### 6-1. 주요 책임
+
+- 생존 멤버 정리
+- SquadOrder 저장
+- 대형 슬롯 계산
+- 멤버별 TacticalCommand 발행
+- WedgeCharge 준비/돌진 상태 관리
+
+### 6-2. SquadOrderType
 
 | SquadOrderType | 멤버 명령 | 설명 |
 |---|---|---|
 | `Idle` | `Idle` | 전투 해제 |
 | `Engage` | `EngageTarget` | 지정 타겟 추격/공격 |
-| `Encircle` | `HoldSlot` | 플레이어 centroid 주변 포위 슬롯으로 이동 |
+| `Encircle` | `HoldSlot` | 플레이어 centroid 주변 원형 섹터 슬롯으로 이동 |
 | `DenseHold` | `HoldSlot` | 현재 Squad 중심 기준 밀집 대형 |
-| `BoxAdvance` | `HoldSlot` | 보스 앞쪽 박스 대형 슬롯으로 이동 |
-| `GuardBoss` | `GuardSlot` | 보스 중심 경계 대형 |
-| `RetreatFormUp` | `HoldSlot` | 현재 배치를 유지한 채 공통 후퇴 |
-| `WedgeCharge` | `HoldSlot` -> `ChargeThrough` | 쐐기 준비 대형 후 대상 군집 관통 돌진 |
+| `BoxAdvance` | `HoldSlot` | 리더 앞쪽 박스 대형 슬롯으로 이동 |
+| `GuardBoss` | `GuardSlot` | 중심점 주변 Guard 대형 |
+| `RetreatFormUp` | `HoldSlot` | 현재 배치를 유지한 채 후퇴 |
+| `WedgeCharge` | `HoldSlot` -> `ChargeThrough` | 쐐기 대형 준비 후 돌진 |
+| `FormationHold` | `HoldSlot` | 지정 중심/방향 밀집 대형 후 대기 |
+| `FormationGuard` | `GuardSlot` | 지정 중심/방향 밀집 대형 후 경계 |
 
-`receiveOrder()`는 명령을 저장하고 `orderDirty_ = true`로 표시한다. 다음 `update()`에서 명령을 슬롯으로 변환한다.
+`FormationHold`와 `FormationGuard`는 종족을 모르는 공용 대형 명령이다. 그랜드밤 방패벽은 이 명령을 사용하지만, `TacticalSquad`는 그 명령이 그랜드밤 전술인지 알지 않는다.
 
-`BoxAdvance`는 멤버가 공격 사이클 후 `Chase`로 돌아오는 상황을 막기 위해 현재 명령을 반복 발행할 수 있다. 포위, 후퇴, 경계 슬롯은 명령 수신 시점에 고정된다.
+### 6-3. 슬롯 계산
 
-### 4-3. 슬롯 계산
-
-#### Encircle
-
-```text
-slot_i = tacticCenter + (cos(theta_i), 0, sin(theta_i)) * approachRadius
-```
-
-포위 슬롯은 Squad 섹터 안에서 균등 분배한다. 멤버와 슬롯 매칭은 greedy nearest-slot 방식이다.
-
-#### Dense / Box / Guard
-
-밀집 슬롯은 직사각형 격자로 만든다.
+Dense 계열 슬롯:
 
 ```text
-cols    = ceil(sqrt(count))
+spacing = max(memberSeparationRadius * spacingScale, 1.2)
+cols    = fixedColumnCount 또는 ceil(sqrt(count) * columnScale)
 rows    = ceil(count / cols)
-spacing = max(memberSeparationRadius, 1.2)
 right   = (-forward.z, 0, forward.x)
 
 slot_i = center
-       + right   * (col - (cols - 1) / 2) * spacing
-       + forward * (row - (rows - 1) / 2) * spacing
+       + right   * colOffset
+       + forward * rowOffset
 ```
 
-`BoxAdvance`는 보스 앞쪽 박스 중심과 Squad offset을 이용해 Squad 중심을 잡고, `GuardBoss`는 보스 주변 반경에 Squad 중심을 둔다.
-
-#### RetreatFormUp
-
-후퇴는 대형 계산을 하지 않는다.
+Encircle 슬롯:
 
 ```text
-retreatDelta = retreatTarget - leaderStartPos
-slot         = npcCurrentPos + retreatDelta
+slot_i = tacticCenter + direction(theta_i) * approachRadius
 ```
 
-#### WedgeCharge
-
-`WedgeCharge`는 대상 군집 중심 방향으로 쐐기 대형을 준비한 뒤 돌진한다.
+WedgeCharge 슬롯:
 
 ```text
-forward     = normalize(targetClusterCenter - squadCentroid)
 prepareApex = squadCentroid + forward * WEDGE_PREP_APEX_DISTANCE
-exitApex    = targetClusterCenter + forward * WEDGE_EXIT_DISTANCE
+exitApex    = targetCenter  + forward * WEDGE_EXIT_DISTANCE
 ```
-
-멤버는 먼저 `prepareApex` 기준 쐐기 슬롯으로 이동한다. 준비가 끝난 뒤 같은 상대 배치를 `exitApex` 기준으로 옮긴 지점을 돌진 종료 슬롯으로 사용한다.
 
 ---
 
-## 5. TacticalNpc
+## 7. TacticalNpc
 
-### 5-1. 역할
+`TacticalNpc`는 개별 전투 실행 FSM이다. 스스로 목표를 탐색하지 않고, Squad가 내려준 `TacticalCommand`를 실행한다.
 
-`TacticalNpc`는 개별 전투 유닛이다. 스스로 목표를 탐색하지 않고 Squad가 내려준 명령을 `pendingCmd_`에 저장한 뒤 다음 `update()` 시작 시 소비한다.
+### 7-1. 상태
+
+| 값 | 상태 | 의미 |
+|---:|---|---|
+| 0 | `Idle` | 명령 대기 |
+| 1 | `Chase` | 타겟 추격 |
+| 2 | `AttackWindup` | 공격 준비 |
+| 3 | `AttackRecover` | 공격 후 회복 |
+| 4 | `Flank` | 지정 측면 슬롯으로 이동 |
+| 5 | `ChargeThrough` | 쐐기 돌진 |
+| 7 | `Dead` | 사망 |
+| 8 | `HoldSlot` | 지정 슬롯 이동/유지 |
+
+### 7-2. 명령
+
+| TacticalCommandType | 전환 상태 | 주요 데이터 |
+|---|---|---|
+| `EngageTarget` | `Chase` | `targetId` |
+| `FlankTarget` | `Flank` | `targetId`, `slotOffset`, `slotRefTargetPos`, `abandonDist`, `speedMult` |
+| `HoldSlot` | `HoldSlot` | `targetId`, `slotOffset` |
+| `GuardSlot` | `HoldSlot` | `targetId`, `slotOffset`, `guardNearestPlayer_ = true` |
+| `ChargeThrough` | `ChargeThrough` | `targetId`, `slotOffset`, `chargeDir`, `chargeId`, 피해 설정 |
+| `Idle` | `Idle` | 타겟 초기화 |
+| `Confused` | `Idle` | 타겟 초기화 |
+
+`GuardSlot`은 상태 자체는 `HoldSlot`을 사용하지만, 도착 후 고정 타겟 대신 가장 가까운 생존 플레이어를 바라본다.
+
+### 7-3. 명령 소비
 
 ```text
 receiveCommand(cmd)
   -> pendingCmd_ = cmd
 
-update(dt)
+update(dt, room)
   -> consumePendingCommand()
   -> state별 update 함수 실행
 ```
 
-같은 tick에 여러 명령이 들어오면 마지막 명령만 남는다.
+같은 tick에 여러 명령이 들어오면 마지막 `pendingCmd_`만 남는다.
 
-### 5-2. 상태와 명령
+### 7-4. 슬롯 도착 판정
 
-| 값 | 상태 | 동작 |
-|---:|---|---|
-| 0 | `Idle` | 명령 대기 |
-| 1 | `Chase` | 타겟 추격 |
-| 2 | `AttackWindup` | 공격 준비, 이동 없음 |
-| 3 | `AttackRecover` | 공격 후 회복 |
-| 4 | `Flank` | 지정 슬롯으로 고속 이동 후 교전 |
-| 5 | `ChargeThrough` | 각개격파 쐐기 대형 관통 돌진 |
-| 7 | `Dead` | 사망 |
-| 8 | `HoldSlot` | 슬롯까지 이동 후 위치 유지 |
+`isAtSlot()`은 Squad가 대형 완료 여부를 판단할 때 사용한다.
 
-| TacticalCommandType | 전환 상태 | 저장 데이터 |
-|---|---|---|
-| `EngageTarget` | `Chase` | `targetId_` |
-| `FlankTarget` | `Flank` | `targetId_`, `assignedSlot_`, `slotRefTargetPos_`, `abandonDist_`, `speedMult_` |
-| `ChargeThrough` | `ChargeThrough` | `targetId`, `targetIds`, `slotOffset`, `chargeDir`, `chargeCenter`, 충돌 피해 설정 |
-| `HoldSlot` | `HoldSlot` | `targetId_`, `assignedSlot_` |
-| `GuardSlot` | `HoldSlot` | `targetId_`, `assignedSlot_`, `guardNearestPlayer_ = true` |
-| `Idle` | `Idle` | `targetId_ = 0` |
-| `Confused` | `Idle` | `targetId_ = 0` |
+| 상태 | true 조건 |
+|---|---|
+| `HoldSlot` | `distance(position, assignedSlot) < separationRadius * 0.25` |
+| `ChargeThrough` | `chargeComplete_ == true` |
+| `AttackWindup` | 항상 true |
+| `AttackRecover` | 항상 true |
 
-`GuardSlot`은 `HoldSlot` 상태를 재사용한다. 차이는 도착 후 고정 타겟이 아니라 가장 가까운 살아 있는 플레이어를 바라본다는 점이다.
+---
 
-### 5-3. 이동과 슬롯 도착
+## 8. 디버그/시각화
 
-`Chase`와 `Flank`는 진행 방향과 수직인 separation 성분만 더해, 서로 겹치지 않으면서 목표 방향을 유지한다.
+`Room::buildSnapshot()`은 `DebugTacticalNpcEntry`를 만들어 렌더러에 전달한다.
 
-`HoldSlot`은 현재 위치에서 슬롯까지 직선 이동한다. 도착 후에는 공격하지 않고 타겟 방향만 바라본다.
+표시 정보:
+
+- 위치, 방향, HP
+- TacticalNpc state
+- squadId
+- leader 여부
+- targetId
+- assignedSlot
+- windup/recover 진행률
+
+슬롯 마커는 전술 대형이 어느 지점을 목표로 하는지 확인할 때 중요하다.
+
+---
+
+## 9. 확장 규칙
+
+새 중간보스 종족을 추가할 때 권장 순서:
+
+1. `IMidBossTactic`을 상속한 새 전술 클래스를 만든다.
+2. 전술 phase와 상수는 해당 클래스 내부에 둔다.
+3. 기존 `SquadOrderType` 조합으로 표현 가능한지 먼저 확인한다.
+4. 표현이 부족할 때만 공용 `SquadOrderType` 또는 `TacticalCommandType`을 추가한다.
+5. `PlatoonLeader`에는 종족별 상태나 분기문을 추가하지 않는다.
+
+좋은 예:
 
 ```text
-if distance(position, assignedSlot) < separationRadius * 0.25:
-    facing = normalize(targetPos - position)
-else:
-    position += normalize(assignedSlot - position) * moveSpeed * TACTICAL_SPEED_MULT * dt
+OrcMidBossTactic
+  -> FormationGuard, Engage, WedgeCharge 조합
 ```
 
-`isAtSlot()`은 다음 경우 true를 반환한다.
+피해야 할 예:
 
-| 상태 | 조건 |
+```cpp
+if (race == Goblin) { ... }
+else if (race == GrandBaum) { ... }
+```
+
+종족별 전술은 `IMidBossTactic` 구현체에 캡슐화하고, `PlatoonLeader`, `TacticalSquad`, `TacticalNpc`는 공용 실행 계층으로 유지한다.
+
+---
+
+## 10. 주요 상수 위치
+
+| 위치 | 상수 예 |
 |---|---|
-| `HoldSlot` | `distance(pos, slot) < separationRadius * 0.25` |
-| `ChargeThrough` | `chargeComplete_ == true` |
-| `AttackWindup` | true |
-| `AttackRecover` | true |
+| `MidBossTacticBase` | 공용 helper, 종족별 전술 상수 없음 |
+| `GoblinMidBossTactic` | `TACTIC_INTERVAL`, `CLUSTER_RADIUS`, `ENCIRCLE_RADIUS`, `TACTIC_HP_THRESHOLD`, `BOX_FRONT_OFFSET`, `REGROUP_DIST` |
+| `GrandBaumMidBossTactic` | `ENGAGE_REFRESH_INTERVAL`, `ORDER_REFRESH_INTERVAL`, `TACTIC_COOLDOWN_DURATION`, `SHIELDWALL_MAX_DURATION`, `SHIELD_FRONT_DIST`, `SHIELD_SIDE_OFFSET`, `AMBUSH_REAR_DIST`, `AMBUSH_MAX_PREP_TIME`, `AMBUSH_CLUSTER_RADIUS` |
+| `TacticalSquad` | `WEDGE_EXIT_DISTANCE`, `WEDGE_PREP_APEX_DISTANCE`, `WEDGE_IMPACT_RADIUS`, `WEDGE_SPEED_MULT` |
+| `TacticalNpc` | `TACTICAL_SPEED_MULT` |
+| `Room` | `SOFT_BLOCK_RADIUS`, `SOFT_BLOCK_MIN_SPEED`, `SOFT_BLOCK_PUSH_SPEED` |
 
-그 외 상태는 false다.
-
-### 5-4. 플레이어 소프트 차단
-
-플레이어는 NPC를 하드 벽처럼 완전히 막지 않는다. 대신 이동 예상 위치가 살아 있는 일반 NPC 또는 TacticalNpc의 소프트 차단 반경 안에 들어오면 이동량을 줄이고 NPC 바깥 방향으로 약하게 밀어낸다. 이 보정은 플레이어 이동에만 적용되며, NPC 이동 로직은 변경하지 않는다.
-
-`Player::update()`는 목표점으로 향하는 기본 이동량을 계산한 뒤 `Room::adjustPlayerMoveForNpcSoftBlock()`으로 보정한다. 플레이어 업데이트는 `spatialGrid` 재구성보다 먼저 실행되므로, 이 helper는 grid 대신 현재 NPC 컨테이너를 직접 순회한다.
-
----
-
-## 6. 디버그 시각화
-
-`Room::buildSnapshot()`은 TacticalNpc 정보를 `DebugTacticalNpcEntry`로 변환한다. 렌더러는 다음 정보를 표시한다.
-
-- TacticalNpc 위치, 방향, HP
-- 상태 색상
-- Squad ID
-- Boss 여부
-- 타겟 ID
-- 할당 슬롯 좌표
-- Windup / Recover 진행률
-
-슬롯 마커와 NPC 방향선을 보면 현재 대형이 어느 지점을 목표로 하는지 확인할 수 있다. 박스 대형은 보스 앞쪽에 슬롯 마커가 형성되어야 한다.
-
----
-
-## 7. 주요 상수
-
-### PlatoonLeader
-
-| 상수 | 값 | 의미 |
-|---|---:|---|
-| `TACTIC_INTERVAL` | 1.0s | 전술 평가 주기 |
-| `CLUSTER_RADIUS` | 20.0 | 플레이어 군집 판단 거리 |
-| `ENCIRCLE_RADIUS` | 50.0 | 포위 반경 |
-| `TACTIC_HP_THRESHOLD` | 0.70 | Boss HP 기반 전술 발동 임계값 |
-| `TACTIC_SQUAD_RATIO` | 0.80 | Squad 생존 비율 기반 전술 발동 임계값 |
-| `TACTIC_COOLDOWN_DURATION` | 8.0s | 포위 완료 후 쿨타임 |
-| `TACTIC_FAIL_COOLDOWN_DURATION` | 5.0s | 예외/실패 쿨타임 |
-| `DIVIDE_ENGAGE_PROTECT_DURATION` | 3.0s | 각개격파 임무별 Engage 유지 후 완료 판정 시간 |
-| `SCREEN_BLOCK_SPACING` | 8.0 | 각개격파 차단 경계 Squad 간격 |
-| `SCREEN_SLOT_SPACING_SCALE` | 0.65 | 각개격파 차단 Squad 내부 슬롯 간격 배율 |
-| `SCREEN_SLOT_COLUMN_SCALE` | 2.0 | 각개격파 차단 Squad 자동 가로 전개 배율 |
-| `SCREEN_SLOT_COLUMN_COUNT` | 10 | 각개격파 차단 Squad 고정 열 수 |
-| `SCREEN_BLOCK_CENTER_BIAS` | 0.65 | 돌진 대상 군집에서 차단 대상 군집 방향으로 차단 중심을 당기는 비율 |
-| `BOX_FRONT_OFFSET` | 15.0 | 보스 앞쪽 박스 중심 거리 |
-| `BOX_SQUAD_SPACING` | 35.0 | 박스 대형 Squad 간격 |
-| `BOX_ARC_DEPTH` | 10.0 | 측면 Squad를 앞쪽으로 당기는 호형 깊이 |
-| `BOSS_KEEP_DIST` | 18.0 | 일반 교전 중 Boss 유지 거리 |
-| `BOSS_KEEP_TOL` | 2.0 | Boss 거리 유지 허용 오차 |
-| `REGROUP_DIST` | 70.0 | 공통 후퇴 거리 |
-| `VIGILANCE_GUARD_RADIUS` | 20.0 | 경계 대형의 보스 주변 거리 |
-
-### TacticalSquad
-
-| 상수 | 값 | 의미 |
-|---|---:|---|
-| `WEDGE_PREP_APEX_DISTANCE` | 10.0 | 쐐기 준비 apex를 Squad 중심 앞쪽에 두는 거리 |
-| `WEDGE_EXIT_DISTANCE` | 35.0 | 대상 군집 중심을 지난 돌진 종료 apex 거리 |
-| `WEDGE_PASS_DISTANCE` | 6.0 | 돌진 통과 거리 설정 |
-| `WEDGE_IMPACT_RADIUS` | 3.0 | 돌진 충돌 판정 반경 |
-| `WEDGE_SPEED_MULT` | 1.35 | 쐐기 돌진 추가 속도 배율 |
-
-### Room
-
-| 상수 | 값 | 의미 |
-|---|---:|---|
-| `SOFT_BLOCK_RADIUS` | 2.4 | 플레이어 이동 보정이 시작되는 NPC 주변 반경 |
-| `SOFT_BLOCK_MIN_SPEED` | 0.35 | 가장 강하게 막혔을 때 유지되는 최소 이동 비율 |
-| `SOFT_BLOCK_PUSH_SPEED` | 5.0 | NPC 바깥 방향으로 미는 최대 속도 |
-
-### TacticalNpc
-
-| 상수 | 값 | 의미 |
-|---|---:|---|
-| `TACTICAL_SPEED_MULT` | 3.0 | `Flank`, `HoldSlot`, `ChargeThrough`, Boss 후퇴 이동 속도 배율 |
+고블린 전술 상수는 더 이상 `PlatoonLeader`에 있지 않다.

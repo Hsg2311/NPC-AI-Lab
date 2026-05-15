@@ -17,6 +17,8 @@ enum class SquadOrderType {
     GuardBoss,     // 보스 중심 3방향 경계 대형
     RetreatFormUp, // 전술 발동 직후 대형을 만들지 않고 공통 방향으로 후퇴
     WedgeCharge,   // 쐐기 대형으로 플레이어 군집을 관통 돌진
+    FormationHold,
+    FormationGuard,
 };
 
 struct SquadOrder {

@@ -81,7 +81,16 @@
     <ClInclude Include="sim\ScenarioTactical.hpp">
       <Filter>sim\scenario</Filter>
     </ClInclude>
+    <ClInclude Include="sim\ScenarioGrandBaum.hpp">
+      <Filter>sim\scenario</Filter>
+    </ClInclude>
     <ClInclude Include="sim\PlatoonLeader.hpp">
+      <Filter>sim\Actor\tactical npc</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\IMidBossTactic.hpp">
+      <Filter>sim\Actor\tactical npc</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\MidBossTactics.hpp">
       <Filter>sim\Actor\tactical npc</Filter>
     </ClInclude>
     <ClInclude Include="sim\TacticalNpc.hpp">
@@ -131,7 +140,13 @@
     <ClCompile Include="sim\ScenarioTactical.cpp">
       <Filter>sim\scenario</Filter>
     </ClCompile>
+    <ClCompile Include="sim\ScenarioGrandBaum.cpp">
+      <Filter>sim\scenario</Filter>
+    </ClCompile>
     <ClCompile Include="sim\PlatoonLeader.cpp">
+      <Filter>sim\Actor\tactical npc</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\MidBossTactics.cpp">
       <Filter>sim\Actor\tactical npc</Filter>
     </ClCompile>
     <ClCompile Include="sim\TacticalNpc.cpp">

@@ -148,9 +148,12 @@
     <ClInclude Include="sim\Scenario.hpp" />
     <ClInclude Include="sim\ScenarioSoloNpc.hpp" />
     <ClInclude Include="sim\ScenarioSharedSight.hpp" />
+    <ClInclude Include="sim\IMidBossTactic.hpp" />
+    <ClInclude Include="sim\MidBossTactics.hpp" />
     <ClInclude Include="sim\TacticalNpc.hpp" />
     <ClInclude Include="sim\TacticalSquad.hpp" />
     <ClInclude Include="sim\PlatoonLeader.hpp" />
+    <ClInclude Include="sim\ScenarioGrandBaum.hpp" />
     <ClInclude Include="sim\ScenarioTactical.hpp" />
     <ClInclude Include="viz\Renderer.hpp" />
     <ClInclude Include="viz\Application.hpp" />
@@ -166,9 +169,11 @@
     <ClCompile Include="sim\NpcGroup.cpp" />
     <ClCompile Include="sim\ScenarioSoloNpc.cpp" />
     <ClCompile Include="sim\ScenarioSharedSight.cpp" />
+    <ClCompile Include="sim\MidBossTactics.cpp" />
     <ClCompile Include="sim\TacticalNpc.cpp" />
     <ClCompile Include="sim\TacticalSquad.cpp" />
     <ClCompile Include="sim\PlatoonLeader.cpp" />
+    <ClCompile Include="sim\ScenarioGrandBaum.cpp" />
     <ClCompile Include="sim\ScenarioTactical.cpp" />
     <ClCompile Include="viz\Renderer.cpp" />
     <ClCompile Include="viz\Application.cpp" />

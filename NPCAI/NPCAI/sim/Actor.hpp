@@ -26,6 +26,7 @@ public:
     const std::string& getName() const { return name_; }
     Vec3 getPosition() const { return position_; }
     void setPosition(const Vec3& p) { position_ = p; }
+    void setFacing(const Vec3& f) { facing_ = f; }
     float getHp() const { return hp_; }
     float getMaxHp() const { return maxHp_; }
     bool isAlive() const { return alive_; }
