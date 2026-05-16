@@ -20,6 +20,11 @@ static constexpr int64_t GRID_COORD_RANGE = 20001LL;
 static constexpr float SOFT_BLOCK_RADIUS = 2.4f;
 static constexpr float SOFT_BLOCK_MIN_SPEED = 0.35f;
 static constexpr float SOFT_BLOCK_PUSH_SPEED = 5.0f;
+static constexpr float SHIELD_WALL_HARD_BLOCK_RADIUS = 2.6f;
+static constexpr int SHIELD_WALL_HARD_BLOCK_ITERATIONS = 3;
+static constexpr float SHIELD_WALL_KNOCKBACK_PADDING = 0.4f;
+static constexpr float SHIELD_WALL_KNOCKBACK_SPEED = 90.f;
+static constexpr float SHIELD_WALL_KNOCKBACK_DURATION = 0.32f;
 
 Room::Room(uint32_t roomId, uint32_t dumpInterval)
     : roomId_(roomId), dumpInterval_(dumpInterval)
@@ -38,6 +43,22 @@ void Room::addTacticalNpc(std::shared_ptr<TacticalNpc> npc) {
 
 void Room::addTacticalSquad(std::unique_ptr<TacticalSquad> squad) {
     tacticalSquads_.push_back(std::move(squad));
+}
+
+void Room::removeTacticalNpc(uint32_t npcId) {
+    tacticalNpcs_.erase(npcId);
+    shieldWallBlockerIds_.erase(
+        std::remove(shieldWallBlockerIds_.begin(), shieldWallBlockerIds_.end(), npcId),
+        shieldWallBlockerIds_.end());
+}
+
+void Room::removeTacticalSquad(int squadId) {
+    tacticalSquads_.erase(
+        std::remove_if(tacticalSquads_.begin(), tacticalSquads_.end(),
+            [squadId](const std::unique_ptr<TacticalSquad>& squad) {
+                return squad && squad->getSquadId() == squadId;
+            }),
+        tacticalSquads_.end());
 }
 
 void Room::registerPlatoonLeader(PlatoonLeader* leader) {
@@ -172,7 +193,8 @@ void Room::findNearbyNpcPositions(const Vec3& from, float radius,
 
 Vec3 Room::adjustPlayerMoveForNpcSoftBlock(const Vec3& playerPos,
                                            const Vec3& desiredMove,
-                                           float dt) const {
+                                           float dt,
+                                           bool applyShieldWallHardBlock) const {
     if (desiredMove.lengthSq() < 1e-6f)
         return desiredMove;
 
@@ -210,7 +232,96 @@ Vec3 Room::adjustPlayerMoveForNpcSoftBlock(const Vec3& playerPos,
         adjusted += (push / pushLen) * std::min(pushLen * maxPush, maxPush);
     }
 
+    if (applyShieldWallHardBlock && !shieldWallBlockerIds_.empty()) {
+        Vec3 blockedPos = playerPos + adjusted;
+        const float hardRadiusSq =
+            SHIELD_WALL_HARD_BLOCK_RADIUS * SHIELD_WALL_HARD_BLOCK_RADIUS;
+
+        for (int iter = 0; iter < SHIELD_WALL_HARD_BLOCK_ITERATIONS; ++iter) {
+            bool changed = false;
+
+            for (uint32_t blockerId : shieldWallBlockerIds_) {
+                const Actor* blocker = findActorById(blockerId);
+                if (!blocker || !blocker->isAlive())
+                    continue;
+
+                Vec3 fromBlocker = playerPos - blocker->getPosition();
+                Vec3 toBlocker = blockedPos - blocker->getPosition();
+                fromBlocker.y = 0.f;
+                toBlocker.y = 0.f;
+
+                Vec3 move = toBlocker - fromBlocker;
+                float moveLenSq = move.lengthSq();
+                float t = 1.f;
+                if (moveLenSq > 1e-6f)
+                    t = std::max(0.f, std::min(1.f, (-fromBlocker.dot(move)) / moveLenSq));
+
+                Vec3 closest = fromBlocker + move * t;
+                if (closest.lengthSq() >= hardRadiusSq)
+                    continue;
+
+                Vec3 pushDir;
+                if (fromBlocker.lengthSq() >= hardRadiusSq && fromBlocker.lengthSq() > 1e-6f) {
+                    pushDir = fromBlocker.normalized();
+                } else if (toBlocker.lengthSq() > 1e-6f) {
+                    pushDir = toBlocker.normalized();
+                } else if (desiredMove.lengthSq() > 1e-6f) {
+                    pushDir = desiredMove.normalized() * -1.f;
+                } else {
+                    pushDir = Vec3{ 1.f, 0.f, 0.f };
+                }
+
+                blockedPos = blocker->getPosition() +
+                    pushDir * SHIELD_WALL_HARD_BLOCK_RADIUS;
+                blockedPos.y = playerPos.y;
+                changed = true;
+            }
+
+            if (!changed)
+                break;
+        }
+
+        adjusted = blockedPos - playerPos;
+    }
+
     return adjusted;
+}
+
+void Room::setShieldWallBlockers(const std::vector<uint32_t>& blockerIds) {
+    shieldWallBlockerIds_ = blockerIds;
+}
+
+void Room::clearShieldWallBlockers() {
+    shieldWallBlockerIds_.clear();
+}
+
+void Room::knockPlayersOutOfShieldWall(const Vec3& center, float ringRadius) {
+    float safeRadius = ringRadius + SHIELD_WALL_HARD_BLOCK_RADIUS +
+        SHIELD_WALL_KNOCKBACK_PADDING;
+    float safeRadiusSq = safeRadius * safeRadius;
+
+    for (auto& [id, player] : players_) {
+        if (!player || !player->isAlive())
+            continue;
+
+        Vec3 offset = player->getPosition() - center;
+        offset.y = 0.f;
+        float distSq = offset.lengthSq();
+        if (distSq >= safeRadiusSq)
+            continue;
+
+        float dist = std::sqrt(std::max(distSq, 1e-6f));
+        Vec3 outDir = (distSq > 1e-6f) ? (offset / dist) : Vec3{ 1.f, 0.f, 0.f };
+        float requiredSpeed = (safeRadius - dist) / SHIELD_WALL_KNOCKBACK_DURATION;
+        float knockbackSpeed = std::max(SHIELD_WALL_KNOCKBACK_SPEED, requiredSpeed);
+
+        Vec3 targetOffset = player->getMoveTarget() - center;
+        targetOffset.y = 0.f;
+        if (targetOffset.lengthSq() < safeRadiusSq)
+            player->setMoveTarget(center + outDir * safeRadius);
+
+        player->applyKnockback(outDir, knockbackSpeed, SHIELD_WALL_KNOCKBACK_DURATION);
+    }
 }
 
 // ─── applyDamageToActorsInRange ──────────────────────────────────────────────

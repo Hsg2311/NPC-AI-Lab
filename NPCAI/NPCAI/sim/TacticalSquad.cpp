@@ -250,6 +250,22 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
             break;
         }
 
+        case SquadOrderType::DistributedEngage: {
+            if (ord.targetIds.empty())
+                return;
+
+            for (int i = 0; i < count; ++i) {
+                Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
+                if (auto* tnpc = dynamic_cast<TacticalNpc*>(a)) {
+                    TacticalCommand cmd;
+                    cmd.type = TacticalCommandType::EngageTarget;
+                    cmd.targetId = ord.targetIds[static_cast<size_t>(i) % ord.targetIds.size()];
+                    tnpc->receiveCommand(cmd);
+                }
+            }
+            break;
+        }
+
         case SquadOrderType::Encircle: {
             Actor* targetActor = room.findActorById(ord.targetId);
             if (!targetActor || !targetActor->isAlive()) return;
@@ -458,6 +474,7 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
                         : TacticalCommandType::HoldSlot;
                     cmd.targetId   = ord.targetId;
                     cmd.slotOffset = slots[static_cast<size_t>(i)];
+                    cmd.speedMult  = ord.speedMult;
                     tnpc->receiveCommand(cmd);
                 }
             }
@@ -517,6 +534,7 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
                     cmd.type       = TacticalCommandType::HoldSlot;
                     cmd.targetId   = ord.targetId;
                     cmd.slotOffset = tnpc->getPosition() + retreatDelta;
+                    cmd.speedMult  = ord.speedMult;
                     tnpc->receiveCommand(cmd);
                 }
             }

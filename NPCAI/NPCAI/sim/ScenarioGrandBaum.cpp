@@ -12,7 +12,7 @@
 namespace sim {
 
 void ScenarioGrandBaum::setup(Room& room) {
-    auto p1 = std::make_shared<Player>("P1", Vec3{ 0.f, 0.f, 0.f }, 10000.f, 25.f);
+    auto p1 = std::make_shared<Player>("P1", Vec3{ 0.f, 0.f, 0.f }, 10000.f, 45.f);
     room.addActor(p1);
     controlledPlayer_ = p1.get();
 

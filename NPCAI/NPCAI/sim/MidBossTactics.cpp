@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <cmath>
+#include <memory>
+#include <string>
 
 namespace sim {
 
@@ -875,6 +877,10 @@ void GrandBaumMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader)
     }
 
     if (phase_ == Phase::Engage) {
+        TacticalSquad* snakeSquad = leader.getSquads().size() >= 4
+            ? leader.getSquads()[3] : nullptr;
+        updateSnakeEvasion(dt, room, leader, snakeSquad);
+
         if (!engageOrderIssued_) {
             issueEngage(room, leader);
             engageRefreshTimer_ = ENGAGE_REFRESH_INTERVAL;
@@ -889,9 +895,23 @@ void GrandBaumMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader)
         }
 
         if (hpRatio <= grandBaumA_) {
+            TacticalSquad* originalSnakeSquad = squads.size() >= 4 ? squads[3] : nullptr;
+            int liveOriginalSnakes = countLiveMembers(room, originalSnakeSquad);
+            if (liveOriginalSnakes <= 0) {
+                cleanupSnakeWave(room);
+                tacticCooldown_ = TACTIC_COOLDOWN_DURATION;
+                enterPhase(Phase::Cooldown,
+                    "GrandBaum ShieldWall skipped - snake squad already annihilated",
+                    leader);
+                return;
+            }
+
+            originalSnakeCountAtShieldWall_ = liveOriginalSnakes;
+            cleanupSnakeWave(room);
             enterPhase(Phase::ShieldWall, "GrandBaum ShieldWall activated", leader);
             applyShieldWallProtection(room, leader, true);
             issueShieldWall(room, leader);
+            return;
         }
     }
 
@@ -904,21 +924,14 @@ void GrandBaumMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader)
             issueShieldWall(room, leader);
         }
 
-        TacticalSquad* ambushSquad = squads.size() >= 4 ? squads[3] : nullptr;
-        if (isAmbushSquadAnnihilated(ambushSquad)) {
-            applyShieldWallProtection(room, leader, false);
-            issueEngage(room, leader);
-            tacticCooldown_ = TACTIC_COOLDOWN_DURATION;
-            enterPhase(Phase::Cooldown, "GrandBaum ShieldWall finished - ambush squad annihilated", leader);
-            return;
-        }
-
-        updateAmbush(dt, room, leader, ambushSquad);
+        TacticalSquad* originalSnakeSquad = squads.size() >= 4 ? squads[3] : nullptr;
+        updateSnakeAmbush(dt, room, leader, originalSnakeSquad);
     }
 }
 
 void GrandBaumMidBossTactic::onLeaderDead(Room& room, PlatoonLeader& leader) {
     applyShieldWallProtection(room, leader, false);
+    cleanupSnakeWave(room);
     MidBossTacticBase::onLeaderDead(room, leader);
 }
 
@@ -930,20 +943,31 @@ void GrandBaumMidBossTactic::enterPhase(Phase next, const char* reason,
     if (next == Phase::Engage) {
         engageOrderIssued_ = false;
         engageRefreshTimer_ = 0.f;
+        shieldWallRingIssued_ = false;
+        snakeRetreatTimer_ = 0.f;
+        snakeWaveSpawned_ = false;
+        originalSnakeCountAtShieldWall_ = 0;
+        snakeAmbushStage_ = SnakeAmbushStage::Evasion;
+        snakeWanderCenterSet_ = false;
+        snakeIsEvading_       = false;
+        snakeWanderTimer_     = 0.f;
         return;
     }
 
     if (next == Phase::ShieldWall) {
         orderRefreshTimer_ = ORDER_REFRESH_INTERVAL;
-        ambushPrepTimer_ = 0.f;
-        ambushEngageIssued_ = false;
-        ambushStage_ = AmbushStage::WideFlank;
+        snakeRetreatTimer_ = 0.f;
+        snakeWaveSpawned_ = false;
+        shieldWallRingIssued_ = false;
+        snakeAmbushStage_ = SnakeAmbushStage::RetreatingOriginal;
         return;
     }
 
     if (next == Phase::Cooldown) {
         engageRefreshTimer_ = ENGAGE_REFRESH_INTERVAL;
-        ambushStage_ = AmbushStage::WideFlank;
+        shieldWallRingIssued_ = false;
+        snakeRetreatTimer_ = 0.f;
+        snakeWaveSpawned_ = false;
     }
 }
 
@@ -965,7 +989,16 @@ void GrandBaumMidBossTactic::issueEngage(Room& room, PlatoonLeader& leader) {
     std::vector<uint32_t> targets(liveSquads.size(), targetId);
     assignSquadsToPlayers(room, leader, liveSquads, targets);
 
+    TacticalSquad* originalSnakeSquad = leader.getSquads().size() >= 4
+        ? leader.getSquads()[3]
+        : nullptr;
+
     for (size_t i = 0; i < liveSquads.size(); ++i) {
+        if (liveSquads[i] == originalSnakeSquad &&
+            snakeAmbushStage_ == SnakeAmbushStage::Evasion) {
+            continue;  // updateSnakeEvasion이 매 틱 처리
+        }
+
         SquadOrder ord;
         ord.type = SquadOrderType::Engage;
         ord.targetId = targets[i];
@@ -985,119 +1018,340 @@ void GrandBaumMidBossTactic::issueShieldWall(Room& room, PlatoonLeader& leader) 
     else
         forward = Vec3{ 1.f, 0.f, 0.f };
 
-    std::vector<TacticalSquad*> slimeSquads;
-    int totalSlimeMembers = 0;
-    const size_t slimeIndices[] = { 0, 1, 2 };
-    for (size_t idx : slimeIndices) {
-        if (idx >= squads.size())
-            continue;
-        TacticalSquad* squad = squads[idx];
-        if (!squad || squad->isEmpty())
-            continue;
-        slimeSquads.push_back(squad);
-        totalSlimeMembers += static_cast<int>(squad->getMembers().size());
-    }
+    if (!shieldWallRingIssued_) {
+        shieldWallRingCenter_ = leaderPos;
+        shieldWallRingStartAngle_ = std::atan2f(forward.z, forward.x) - 3.14159265f;
+        shieldWallRingIssued_ = true;
+        room.knockPlayersOutOfShieldWall(shieldWallRingCenter_, SHIELD_RING_RADIUS);
 
-    if (!slimeSquads.empty() && totalSlimeMembers > 0) {
+        std::vector<TacticalSquad*> slimeSquads;
+        int totalSlimeMembers = 0;
+        const size_t slimeIndices[] = { 0, 1, 2 };
+        for (size_t idx : slimeIndices) {
+            if (idx >= squads.size())
+                continue;
+            TacticalSquad* squad = squads[idx];
+            if (!squad || squad->isEmpty())
+                continue;
+            slimeSquads.push_back(squad);
+            totalSlimeMembers += static_cast<int>(squad->getMembers().size());
+        }
+
         constexpr float TWO_PI = 2.f * 3.14159265f;
-        float angleAccum = std::atan2f(forward.z, forward.x) - 3.14159265f;
-        for (TacticalSquad* squad : slimeSquads) {
-            float fraction = static_cast<float>(squad->getMembers().size()) /
-                             static_cast<float>(totalSlimeMembers);
-            float sectorSpan = TWO_PI * fraction;
+        float angleAccum = shieldWallRingStartAngle_;
+        if (totalSlimeMembers > 0) {
+            for (TacticalSquad* squad : slimeSquads) {
+                float fraction = static_cast<float>(squad->getMembers().size()) /
+                                 static_cast<float>(totalSlimeMembers);
+                float sectorSpan = TWO_PI * fraction;
 
-            SquadOrder ord;
-            ord.type = SquadOrderType::RingGuard;
-            ord.targetId = targetId;
-            ord.tacticCenter = leaderPos;
-            ord.sectorAngle = angleAccum + sectorSpan * 0.5f;
-            ord.sectorSpan = sectorSpan;
-            ord.approachRadius = SHIELD_RING_RADIUS;
-            squad->receiveOrder(ord);
+                SquadOrder ord;
+                ord.type = SquadOrderType::RingGuard;
+                ord.targetId = targetId;
+                ord.tacticCenter = shieldWallRingCenter_;
+                ord.sectorAngle = angleAccum + sectorSpan * 0.5f;
+                ord.sectorSpan = sectorSpan;
+                ord.approachRadius = SHIELD_RING_RADIUS;
+                squad->receiveOrder(ord);
 
-            angleAccum += sectorSpan;
+                angleAccum += sectorSpan;
+            }
         }
     }
 
-    if (!ambushEngageIssued_ && squads.size() >= 4) {
-        Vec3 fallbackRear = playerCentroid - leaderPos;
-        Vec3 avgFacing = calcAveragePlayerFacing(room, Vec3{});
-        Vec3 rearDir = (avgFacing.lengthSq() > 0.01f)
-            ? avgFacing * -1.f
-            : fallbackRear;
-        if (rearDir.lengthSq() > 0.01f)
-            rearDir = rearDir.normalized();
-        else
-            rearDir = forward;
-
-        Vec3 sideDir{ -rearDir.z, 0.f, rearDir.x };
-        TacticalSquad* ambushSquad = squads[3];
-        Vec3 ambushCentroid = ambushSquad && !ambushSquad->isEmpty()
-            ? ambushSquad->calcCentroid(room)
-            : leaderPos;
-        float sideSign = ((ambushCentroid - playerCentroid).dot(sideDir) >= 0.f)
-            ? 1.f : -1.f;
-
-        Vec3 ambushCenter = playerCentroid + rearDir * AMBUSH_REAR_DIST;
-        if (ambushStage_ == AmbushStage::WideFlank) {
-            ambushCenter = playerCentroid +
-                rearDir * AMBUSH_WIDE_REAR_DIST +
-                sideDir * (sideSign * AMBUSH_WIDE_SIDE_DIST);
-        }
-
-        if (ambushSquad && !ambushSquad->isEmpty()) {
-            SquadOrder ord;
-            ord.type = SquadOrderType::FormationHold;
-            ord.targetId = targetId;
-            ord.tacticCenter = ambushCenter;
-            ord.formationTargetPos = playerCentroid;
-            ord.slotSpacingScale = 0.75f;
-            ord.slotColumnScale = 2.0f;
-            ambushSquad->receiveOrder(ord);
-        }
+    if (snakeAmbushStage_ == SnakeAmbushStage::RetreatingOriginal &&
+        squads.size() >= 4) {
+        issueOriginalSnakeRetreat(room, leader, squads[3]);
     }
 }
 
-void GrandBaumMidBossTactic::updateAmbush(float dt, Room& room,
-                                          PlatoonLeader& leader,
-                                          TacticalSquad* ambushSquad) {
-    if (!ambushSquad || ambushSquad->isEmpty() || ambushEngageIssued_)
-        return;
+int GrandBaumMidBossTactic::countLiveMembers(Room& room, TacticalSquad* squad) const {
+    if (!squad)
+        return 0;
 
-    ambushPrepTimer_ += dt;
-    if (ambushStage_ == AmbushStage::WideFlank) {
-        if (!ambushSquad->areMembersAtSlots(room) &&
-            ambushPrepTimer_ < AMBUSH_WIDE_MAX_PREP_TIME)
-            return;
+    int count = 0;
+    for (uint32_t memberId : squad->getMembers()) {
+        Actor* actor = room.findActorById(memberId);
+        if (actor && actor->isAlive())
+            ++count;
+    }
+    return count;
+}
 
-        ambushStage_ = AmbushStage::RearApproach;
-        ambushPrepTimer_ = 0.f;
-        orderRefreshTimer_ = 0.f;
-        Logger::get().log(leader.getName(), "GrandBaum ambush squad reached wide flank");
-        return;
+int GrandBaumMidBossTactic::calcSnakeWaveSpawnCount(
+    int liveOriginalSnakeCount) const {
+    if (liveOriginalSnakeCount <= 0)
+        return 0;
+
+    int spawnCount = std::min(liveOriginalSnakeCount * SNAKE_WAVE_MULTIPLIER,
+                              SNAKE_WAVE_MAX_COUNT);
+    return (spawnCount / 4) * 4;
+}
+
+TacticalNpcConfig GrandBaumMidBossTactic::findSnakeConfig(
+    Room& room, TacticalSquad* originalSnakeSquad) const {
+    if (originalSnakeSquad) {
+        for (uint32_t memberId : originalSnakeSquad->getMembers()) {
+            auto* snake = dynamic_cast<TacticalNpc*>(room.findActorById(memberId));
+            if (snake)
+                return snake->getConfig();
+        }
     }
 
-    if (!ambushSquad->areMembersAtSlots(room) &&
-        ambushPrepTimer_ < AMBUSH_MAX_PREP_TIME)
+    TacticalNpcConfig cfg;
+    cfg.maxHp = 45.f;
+    cfg.moveSpeed = 18.f;
+    cfg.attackRange = 1.8f;
+    cfg.attackDamage = 12.f;
+    cfg.attackWindupTime = 0.35f;
+    cfg.attackRecoverTime = 0.8f;
+    cfg.separationRadius = 3.f;
+    cfg.separationWeight = 0.9f;
+    return cfg;
+}
+
+void GrandBaumMidBossTactic::pickNewSnakeWanderTarget() {
+    float angle = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX)
+                  * 2.f * 3.14159265f;
+    float dist  = SNAKE_WANDER_RADIUS * (0.3f + 0.7f *
+                  static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX));
+    snakeWanderTarget_ = snakeWanderCenter_ + Vec3{
+        std::cos(angle) * dist, 0.f, std::sin(angle) * dist };
+}
+
+void GrandBaumMidBossTactic::updateSnakeEvasion(
+    float dt, Room& room, PlatoonLeader& /*leader*/, TacticalSquad* snakeSquad) {
+    if (!snakeSquad || snakeSquad->isEmpty())
         return;
 
-    uint32_t targetId = selectAmbushTarget(room, leader, ambushSquad);
+    if (!snakeWanderCenterSet_) {
+        snakeWanderCenter_    = snakeSquad->calcCentroid(room);
+        snakeWanderTarget_    = snakeWanderCenter_;
+        snakeWanderCenterSet_ = true;
+    }
+
+    Vec3     snakeCentroid = snakeSquad->calcCentroid(room);
+    uint32_t targetId      = selectNearestPlayerId(room, snakeCentroid);
+
+    bool     shouldEvade   = false;
+    Vec3     nearestPos    = snakeCentroid;
+    Player*  nearestPlayer = nullptr;
+    if (targetId != 0) {
+        nearestPlayer = selectNearestPlayer(room, snakeCentroid);
+        if (nearestPlayer) {
+            nearestPos        = nearestPlayer->getPosition();
+            float snapDist    = Vec3::distance(snakeCentroid, nearestPos);
+            shouldEvade = snakeIsEvading_
+                ? (snapDist < SNAKE_STOP_EVADE_RANGE)
+                : (snapDist < SNAKE_DETECT_RANGE);
+        }
+    }
+
+    if (shouldEvade != snakeIsEvading_) {
+        snakeWanderTimer_ = 0.f;
+        if (!shouldEvade)
+            snakeWanderCenter_ = snakeCentroid;
+    }
+
+    snakeWanderTimer_ -= dt;
+    snakeIsEvading_    = shouldEvade;
+
+    if (shouldEvade) {
+        if (snakeWanderTimer_ > 0.f)
+            return;
+        snakeWanderTimer_ = SNAKE_EVASION_REFRESH;
+
+        Vec3 fleeDir = snakeCentroid - nearestPos;
+        if (fleeDir.lengthSq() < 0.01f) fleeDir = Vec3{ 1.f, 0.f, 0.f };
+        else                             fleeDir = fleeDir.normalized();
+
+        Vec3 fleeCenter = snakeCentroid + fleeDir * SNAKE_EVASION_RADIUS;
+
+        SquadOrder ord;
+        ord.type               = SquadOrderType::FormationHold;
+        ord.targetId           = targetId;
+        ord.tacticCenter       = fleeCenter;
+        ord.formationTargetPos = fleeCenter + fleeDir * 5.f;
+        ord.slotSpacingScale   = 0.75f;
+        ord.slotColumnScale    = 2.0f;
+        ord.speedMult          = SNAKE_EVASION_SPEED_MULT;
+        snakeSquad->receiveOrder(ord);
+    } else {
+        if (snakeWanderTimer_ > 0.f)
+            return;
+        snakeWanderTimer_ = SNAKE_WANDER_INTERVAL;
+        pickNewSnakeWanderTarget();
+
+        if (targetId == 0) {
+            SquadOrder ord;
+            ord.type = SquadOrderType::Idle;
+            snakeSquad->receiveOrder(ord);
+            return;
+        }
+
+        SquadOrder ord;
+        ord.type               = SquadOrderType::FormationHold;
+        ord.targetId           = targetId;
+        ord.tacticCenter       = snakeWanderTarget_;
+        ord.formationTargetPos = nearestPos;
+        ord.slotSpacingScale   = 0.75f;
+        ord.slotColumnScale    = 2.0f;
+        ord.speedMult          = SNAKE_WANDER_SPEED_MULT;
+        snakeSquad->receiveOrder(ord);
+    }
+}
+
+void GrandBaumMidBossTactic::issueOriginalSnakeRetreat(
+    Room& room, PlatoonLeader& leader, TacticalSquad* originalSnakeSquad) {
+    if (!originalSnakeSquad || originalSnakeSquad->isEmpty())
+        return;
+
+    uint32_t targetId = selectNearestPlayerId(room, leader.getPosition());
     if (targetId == 0)
         return;
 
-    SquadOrder ord;
-    ord.type = SquadOrderType::Engage;
-    ord.targetId = targetId;
-    ambushSquad->receiveOrder(ord);
+    Vec3 snakeCentroid = originalSnakeSquad->calcCentroid(room);
+    Vec3 retreatDir = snakeCentroid - shieldWallRingCenter_;
+    if (retreatDir.lengthSq() <= 0.01f) {
+        Vec3 playerCentroid = calcPlayerCentroid(room, leader.getPosition());
+        retreatDir = shieldWallRingCenter_ - playerCentroid;
+    }
+    if (retreatDir.lengthSq() > 0.01f)
+        retreatDir = retreatDir.normalized();
+    else
+        retreatDir = Vec3{ 1.f, 0.f, 0.f };
 
-    ambushEngageIssued_ = true;
-    ambushStage_ = AmbushStage::Engaged;
-    Logger::get().log(leader.getName(), "GrandBaum ambush squad engaged");
+    Vec3 retreatCenter = shieldWallRingCenter_ + retreatDir * SNAKE_OUTER_RADIUS;
+
+    SquadOrder ord;
+    ord.type = SquadOrderType::FormationHold;
+    ord.targetId = targetId;
+    ord.tacticCenter = retreatCenter;
+    ord.formationTargetPos = shieldWallRingCenter_;
+    ord.slotSpacingScale = 0.75f;
+    ord.slotColumnScale = 2.0f;
+    ord.speedMult = SNAKE_RETREAT_SPEED_MULT;
+    originalSnakeSquad->receiveOrder(ord);
 }
 
-bool GrandBaumMidBossTactic::isAmbushSquadAnnihilated(
-    TacticalSquad* ambushSquad) const {
-    return !ambushSquad || ambushSquad->isEmpty();
+void GrandBaumMidBossTactic::spawnSnakeWave(
+    Room& room, PlatoonLeader& leader, TacticalSquad* originalSnakeSquad) {
+    int spawnCount = calcSnakeWaveSpawnCount(originalSnakeCountAtShieldWall_);
+    if (spawnCount <= 0)
+        return;
+
+    cleanupSnakeWave(room);
+    snakeWaveSpawned_ = true;
+    snakeWaveSquadId_ = SNAKE_WAVE_SQUAD_ID;
+    snakeWaveNpcIds_.clear();
+
+    TacticalNpcConfig cfg = findSnakeConfig(room, originalSnakeSquad);
+    auto waveSquad = std::make_unique<TacticalSquad>(
+        snakeWaveSquadId_, cfg.attackRange, cfg.separationRadius);
+    TacticalSquad* waveSquadPtr = waveSquad.get();
+
+    constexpr float TWO_PI = 2.f * 3.14159265f;
+    for (int i = 0; i < spawnCount; ++i) {
+        float angle = shieldWallRingStartAngle_ +
+            TWO_PI * static_cast<float>(i) / static_cast<float>(spawnCount);
+        Vec3 pos = shieldWallRingCenter_ + Vec3{
+            std::cos(angle) * SNAKE_OUTER_RADIUS,
+            0.f,
+            std::sin(angle) * SNAKE_OUTER_RADIUS
+        };
+
+        std::string name = "WaveSnake" + std::to_string(i + 1);
+        auto snake = std::make_shared<TacticalNpc>(name, pos, cfg);
+        snake->setSquadId(snakeWaveSquadId_);
+        waveSquadPtr->addMember(snake->getId());
+        snakeWaveNpcIds_.push_back(snake->getId());
+        room.addTacticalNpc(snake);
+    }
+
+    issueSnakeWaveEngage(room, waveSquadPtr);
+    room.addTacticalSquad(std::move(waveSquad));
+
+    Logger::get().log(leader.getName(),
+        "GrandBaum snake wave spawned count=" + std::to_string(spawnCount));
+}
+
+void GrandBaumMidBossTactic::issueSnakeWaveEngage(
+    Room& room, TacticalSquad* waveSquad) {
+    if (!waveSquad || waveSquad->isEmpty())
+        return;
+
+    std::vector<Player*> players = room.getLivingPlayers();
+    players.erase(std::remove(players.begin(), players.end(), nullptr), players.end());
+    std::sort(players.begin(), players.end(),
+        [](Player* a, Player* b) { return a->getId() < b->getId(); });
+
+    if (players.empty()) {
+        SquadOrder idle;
+        idle.type = SquadOrderType::Idle;
+        waveSquad->receiveOrder(idle);
+        return;
+    }
+
+    SquadOrder ord;
+    ord.type = SquadOrderType::DistributedEngage;
+    for (Player* player : players)
+        ord.targetIds.push_back(player->getId());
+    waveSquad->receiveOrder(ord);
+}
+
+bool GrandBaumMidBossTactic::isSnakeWaveAnnihilated(Room& room) const {
+    if (!snakeWaveSpawned_)
+        return false;
+
+    for (uint32_t npcId : snakeWaveNpcIds_) {
+        Actor* actor = room.findActorById(npcId);
+        if (actor && actor->isAlive())
+            return false;
+    }
+    return true;
+}
+
+void GrandBaumMidBossTactic::updateSnakeAmbush(
+    float dt, Room& room, PlatoonLeader& leader, TacticalSquad* originalSnakeSquad) {
+    if (snakeAmbushStage_ == SnakeAmbushStage::RetreatingOriginal) {
+        snakeRetreatTimer_ += dt;
+
+        if (!snakeWaveSpawned_ &&
+            ((!originalSnakeSquad || originalSnakeSquad->areMembersAtSlots(room)) ||
+             snakeRetreatTimer_ >= SNAKE_RETREAT_MAX_TIME)) {
+            spawnSnakeWave(room, leader, originalSnakeSquad);
+            snakeAmbushStage_ = SnakeAmbushStage::WaveActive;
+            Logger::get().log(leader.getName(), "GrandBaum original snake squad retreated");
+        }
+        return;
+    }
+
+    if (snakeAmbushStage_ == SnakeAmbushStage::WaveActive &&
+        isSnakeWaveAnnihilated(room)) {
+        finishShieldWall(room, leader, "GrandBaum ShieldWall finished - snake wave annihilated");
+    }
+}
+
+void GrandBaumMidBossTactic::finishShieldWall(
+    Room& room, PlatoonLeader& leader, const char* reason) {
+    applyShieldWallProtection(room, leader, false);
+    cleanupSnakeWave(room);
+    snakeAmbushStage_ = SnakeAmbushStage::ReturningOriginal;
+    issueEngage(room, leader);
+    tacticCooldown_ = TACTIC_COOLDOWN_DURATION;
+    enterPhase(Phase::Cooldown, reason, leader);
+}
+
+void GrandBaumMidBossTactic::cleanupSnakeWave(Room& room) {
+    if (snakeWaveSquadId_ >= 0)
+        room.removeTacticalSquad(snakeWaveSquadId_);
+
+    for (uint32_t npcId : snakeWaveNpcIds_)
+        room.removeTacticalNpc(npcId);
+
+    snakeWaveNpcIds_.clear();
+    snakeWaveSquadId_ = -1;
+    snakeWaveSpawned_ = false;
 }
 
 void GrandBaumMidBossTactic::applyShieldWallProtection(
@@ -1105,7 +1359,11 @@ void GrandBaumMidBossTactic::applyShieldWallProtection(
     float multiplier = enabled ? SHIELDWALL_DAMAGE_MULT : 1.f;
     leader.setDamageTakenMultiplier(multiplier);
 
+    if (!enabled)
+        room.clearShieldWallBlockers();
+
     const auto& squads = leader.getSquads();
+    std::vector<uint32_t> blockerIds;
     const size_t slimeIndices[] = { 0, 1, 2 };
     for (size_t idx : slimeIndices) {
         if (idx >= squads.size())
@@ -1116,119 +1374,16 @@ void GrandBaumMidBossTactic::applyShieldWallProtection(
 
         for (uint32_t memberId : squad->getMembers()) {
             Actor* actor = room.findActorById(memberId);
-            if (actor)
+            if (actor) {
                 actor->setDamageTakenMultiplier(multiplier);
-        }
-    }
-}
-
-uint32_t GrandBaumMidBossTactic::selectAmbushTarget(
-    Room& room, const PlatoonLeader& leader, TacticalSquad* ambushSquad) const {
-    Vec3 ambushOrigin = leader.getPosition();
-    if (ambushSquad && !ambushSquad->isEmpty())
-        ambushOrigin = ambushSquad->calcCentroid(room);
-
-    std::vector<PlayerCluster> clusters =
-        buildPlayerClusters(room, AMBUSH_CLUSTER_RADIUS);
-    if (clusters.empty())
-        return selectNearestPlayerId(room, ambushOrigin);
-
-    auto ratioScore = [](float value, float scale) {
-        if (value <= 0.f)
-            return 0.f;
-        return value / (value + scale);
-    };
-
-    int bestClusterIdx = 0;
-    float bestClusterScore = -1.f;
-    for (int i = 0; i < static_cast<int>(clusters.size()); ++i) {
-        const PlayerCluster& cluster = clusters[static_cast<size_t>(i)];
-
-        float leaderDist = Vec3::distance(leader.getPosition(), cluster.centroid);
-        float distanceFromLeaderScore = ratioScore(leaderDist, 40.f);
-
-        float isolationScore = 0.5f;
-        if (clusters.size() > 1) {
-            float nearestOtherDist = -1.f;
-            for (int j = 0; j < static_cast<int>(clusters.size()); ++j) {
-                if (i == j)
-                    continue;
-                float d = Vec3::distance(cluster.centroid,
-                    clusters[static_cast<size_t>(j)].centroid);
-                if (nearestOtherDist < 0.f || d < nearestOtherDist)
-                    nearestOtherDist = d;
+                if (enabled && actor->isAlive())
+                    blockerIds.push_back(memberId);
             }
-            isolationScore = ratioScore(nearestOtherDist, AMBUSH_CLUSTER_RADIUS);
-        }
-
-        float memberCount = static_cast<float>(
-            std::max<size_t>(cluster.playerIds.size(), 1u));
-        float smallClusterScore = 1.f / memberCount;
-
-        float clusterScore =
-            0.45f * distanceFromLeaderScore +
-            0.35f * isolationScore +
-            0.20f * smallClusterScore;
-
-        if (clusterScore > bestClusterScore) {
-            bestClusterScore = clusterScore;
-            bestClusterIdx = i;
         }
     }
 
-    const PlayerCluster& targetCluster = clusters[static_cast<size_t>(bestClusterIdx)];
-    Vec3 fallbackRear = targetCluster.centroid - leader.getPosition();
-    Vec3 rearDir = calcAveragePlayerFacing(room, Vec3{});
-    rearDir = (rearDir.lengthSq() > 0.01f) ? rearDir * -1.f : fallbackRear;
-    if (rearDir.lengthSq() > 0.01f)
-        rearDir = rearDir.normalized();
-    else
-        rearDir = Vec3{ 1.f, 0.f, 0.f };
-
-    uint32_t bestTargetId = 0;
-    float bestTargetScore = -1.f;
-    for (uint32_t id : targetCluster.playerIds) {
-        auto* player = dynamic_cast<Player*>(room.findActorById(id));
-        if (!player || !player->isAlive())
-            continue;
-
-        float distFromAmbush = Vec3::distance(ambushOrigin, player->getPosition());
-        float distanceFromAmbushScore = 1.f / (1.f + distFromAmbush * 0.05f);
-
-        float lowHpScore = 0.f;
-        if (player->getMaxHp() > 0.f)
-            lowHpScore = std::clamp(1.f - player->getHp() / player->getMaxHp(),
-                                    0.f, 1.f);
-
-        Vec3 toAmbush = ambushOrigin - player->getPosition();
-        float backFacingScore = 0.5f;
-        if (toAmbush.lengthSq() > 0.01f && player->getFacing().lengthSq() > 0.01f) {
-            Vec3 toAmbushDir = toAmbush.normalized();
-            Vec3 playerFacing = player->getFacing().normalized();
-            float facingDot = std::clamp(playerFacing.dot(toAmbushDir), -1.f, 1.f);
-            backFacingScore = (1.f - facingDot) * 0.5f;
-        }
-
-        float rearProjection = (player->getPosition() - targetCluster.centroid)
-            .dot(rearDir);
-        float rearPositionScore = ratioScore(std::max(rearProjection, 0.f), 10.f);
-
-        float targetScore =
-            0.35f * distanceFromAmbushScore +
-            0.30f * lowHpScore +
-            0.25f * backFacingScore +
-            0.10f * rearPositionScore;
-
-        if (targetScore > bestTargetScore) {
-            bestTargetScore = targetScore;
-            bestTargetId = player->getId();
-        }
-    }
-
-    if (bestTargetId != 0)
-        return bestTargetId;
-
-    return selectNearestPlayerId(room, ambushOrigin);
+    if (enabled)
+        room.setShieldWallBlockers(blockerIds);
 }
 
 } // namespace sim

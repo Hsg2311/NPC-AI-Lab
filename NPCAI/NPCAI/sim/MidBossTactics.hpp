@@ -8,6 +8,7 @@ namespace sim {
 
 class TacticalSquad;
 class Player;
+struct TacticalNpcConfig;
 
 class MidBossTacticBase : public IMidBossTactic {
 public:
@@ -135,43 +136,74 @@ private:
         Cooldown
     };
 
-    enum class AmbushStage {
-        WideFlank,
-        RearApproach,
-        Engaged
+    enum class SnakeAmbushStage {
+        Evasion,
+        RetreatingOriginal,
+        WaveActive,
+        ReturningOriginal
     };
 
     void enterPhase(Phase next, const char* reason, PlatoonLeader& leader);
     void issueEngage(Room& room, PlatoonLeader& leader);
     void issueShieldWall(Room& room, PlatoonLeader& leader);
-    void updateAmbush(float dt, Room& room, PlatoonLeader& leader,
-                      TacticalSquad* ambushSquad);
-    bool isAmbushSquadAnnihilated(TacticalSquad* ambushSquad) const;
+    void updateSnakeAmbush(float dt, Room& room, PlatoonLeader& leader,
+                           TacticalSquad* originalSnakeSquad);
+    void updateSnakeEvasion(float dt, Room& room, PlatoonLeader& leader,
+                            TacticalSquad* snakeSquad);
+    void pickNewSnakeWanderTarget();
+    void issueOriginalSnakeRetreat(Room& room, PlatoonLeader& leader,
+                                   TacticalSquad* originalSnakeSquad);
+    void spawnSnakeWave(Room& room, PlatoonLeader& leader,
+                        TacticalSquad* originalSnakeSquad);
+    void issueSnakeWaveEngage(Room& room, TacticalSquad* waveSquad);
+    void finishShieldWall(Room& room, PlatoonLeader& leader, const char* reason);
+    void cleanupSnakeWave(Room& room);
+    int countLiveMembers(Room& room, TacticalSquad* squad) const;
+    int calcSnakeWaveSpawnCount(int liveOriginalSnakeCount) const;
+    bool isSnakeWaveAnnihilated(Room& room) const;
+    TacticalNpcConfig findSnakeConfig(Room& room, TacticalSquad* originalSnakeSquad) const;
     void applyShieldWallProtection(Room& room, PlatoonLeader& leader, bool enabled);
-    uint32_t selectAmbushTarget(Room& room, const PlatoonLeader& leader,
-                                TacticalSquad* ambushSquad) const;
 
     float grandBaumA_;
     Phase phase_{ Phase::Engage };
     float engageRefreshTimer_{ 0.f };
     float orderRefreshTimer_{ 0.f };
-    float ambushPrepTimer_{ 0.f };
+    float snakeRetreatTimer_{ 0.f };
     float tacticCooldown_{ 0.f };
     bool engageOrderIssued_{ false };
-    bool ambushEngageIssued_{ false };
-    AmbushStage ambushStage_{ AmbushStage::WideFlank };
+    bool snakeWaveSpawned_{ false };
+    bool shieldWallRingIssued_{ false };
+    Vec3 shieldWallRingCenter_{};
+    float shieldWallRingStartAngle_{ 0.f };
+    int originalSnakeCountAtShieldWall_{ 0 };
+    int snakeWaveSquadId_{ -1 };
+    bool  snakeWanderCenterSet_{ false };
+    Vec3  snakeWanderCenter_{};
+    Vec3  snakeWanderTarget_{};
+    float snakeWanderTimer_{ 0.f };
+    bool  snakeIsEvading_{ false };
+    SnakeAmbushStage snakeAmbushStage_{ SnakeAmbushStage::Evasion };
+    std::vector<uint32_t> snakeWaveNpcIds_{};
 
     static constexpr float ENGAGE_REFRESH_INTERVAL = 1.0f;
     static constexpr float ORDER_REFRESH_INTERVAL = 0.5f;
     static constexpr float TACTIC_COOLDOWN_DURATION = 8.0f;
-    static constexpr float AMBUSH_REAR_DIST       = 18.f;
-    static constexpr float AMBUSH_MAX_PREP_TIME   = 4.f;
-    static constexpr float AMBUSH_CLUSTER_RADIUS  = 20.f;
     static constexpr float SHIELD_RING_RADIUS     = 12.f;
-    static constexpr float SHIELDWALL_DAMAGE_MULT = 0.3f;
-    static constexpr float AMBUSH_WIDE_REAR_DIST  = 12.f;
-    static constexpr float AMBUSH_WIDE_SIDE_DIST  = 28.f;
-    static constexpr float AMBUSH_WIDE_MAX_PREP_TIME = 3.f;
+    static constexpr float SHIELDWALL_DAMAGE_MULT = 0.1f;
+    static constexpr float SNAKE_OUTER_RADIUS = 64.f;
+    static constexpr float SNAKE_EVASION_RADIUS = 44.f;
+    static constexpr float SNAKE_EVASION_SPEED_MULT = 0.75f;
+    static constexpr float SNAKE_RETREAT_SPEED_MULT = 1.0f;
+    static constexpr float SNAKE_RETREAT_MAX_TIME = 1.5f;
+    static constexpr float SNAKE_DETECT_RANGE      = 22.f;
+    static constexpr float SNAKE_STOP_EVADE_RANGE  = 32.f;
+    static constexpr float SNAKE_WANDER_RADIUS     = 10.f;
+    static constexpr float SNAKE_WANDER_INTERVAL   = 3.5f;
+    static constexpr float SNAKE_WANDER_SPEED_MULT = 0.15f;
+    static constexpr float SNAKE_EVASION_REFRESH   = 0.5f;
+    static constexpr int   SNAKE_WAVE_MAX_COUNT = 60;
+    static constexpr int   SNAKE_WAVE_MULTIPLIER = 10;
+    static constexpr int   SNAKE_WAVE_SQUAD_ID = 9003;
 };
 
 } // namespace sim

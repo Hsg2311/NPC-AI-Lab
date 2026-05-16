@@ -21,6 +21,7 @@ public:
 
     void setMoveTarget(const Vec3& target) { moveTarget_ = target; }
     Vec3 getMoveTarget() const { return moveTarget_; }
+    void applyKnockback(const Vec3& direction, float speed, float duration);
 
     // 공격 요청 — 현재 공격 중이거나 사망이면 무시
     void requestAttack();
@@ -39,6 +40,10 @@ private:
     PlayerAttackConfig attackCfg_;
     AttackState        attackState_{ AttackState::None };
     float              attackTimer_{ 0.f };
+    Vec3               knockbackDir_{};
+    float              knockbackSpeed_{ 0.f };
+    float              knockbackTimer_{ 0.f };
+    float              postKnockbackMoveLockTimer_{ 0.f };
 
     void updateAttack(float dt, Room& room);
 };

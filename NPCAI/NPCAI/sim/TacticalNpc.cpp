@@ -58,6 +58,19 @@ float TacticalNpc::getRecoverProgress() const {
 
 // ─── receiveCommand ───────────────────────────────────────────────────────────
 
+TacticalNpcConfig TacticalNpc::getConfig() const {
+    TacticalNpcConfig cfg;
+    cfg.maxHp = maxHp_;
+    cfg.moveSpeed = moveSpeed_;
+    cfg.attackRange = attackRange_;
+    cfg.attackDamage = attackDamage_;
+    cfg.attackWindupTime = attackWindupTime_;
+    cfg.attackRecoverTime = attackRecoverTime_;
+    cfg.separationRadius = separationRadius_;
+    cfg.separationWeight = separationWeight_;
+    return cfg;
+}
+
 void TacticalNpc::receiveCommand(const TacticalCommand& cmd) {
     pendingCmd_ = cmd;
 }
@@ -82,6 +95,7 @@ void TacticalNpc::consumePendingCommand() {
         case TacticalCommandType::EngageTarget:
             guardNearestPlayer_ = false;
             useHoldFacing_ = false;
+            speedMult_ = 1.f;
             targetId_ = pendingCmd_.targetId;
             transitionTo(TacticalNpcState::Chase, "명령: EngageTarget");
             break;
@@ -115,6 +129,7 @@ void TacticalNpc::consumePendingCommand() {
             guardNearestPlayer_ = false;
             useHoldFacing_ = pendingCmd_.useHoldFacing;
             holdFacing_ = pendingCmd_.holdFacing;
+            speedMult_ = pendingCmd_.speedMult;
             chargeComplete_ = false;
             targetId_     = pendingCmd_.targetId;
             assignedSlot_ = pendingCmd_.slotOffset;
@@ -124,6 +139,7 @@ void TacticalNpc::consumePendingCommand() {
             guardNearestPlayer_ = true;
             useHoldFacing_ = pendingCmd_.useHoldFacing;
             holdFacing_ = pendingCmd_.holdFacing;
+            speedMult_ = pendingCmd_.speedMult;
             targetId_     = pendingCmd_.targetId;
             assignedSlot_ = pendingCmd_.slotOffset;
             transitionTo(TacticalNpcState::HoldSlot, "명령: GuardSlot");
@@ -132,6 +148,7 @@ void TacticalNpc::consumePendingCommand() {
             guardNearestPlayer_ = false;
             useHoldFacing_ = false;
             chargeComplete_ = false;
+            speedMult_ = 1.f;
             targetId_ = 0;
             transitionTo(TacticalNpcState::Idle, "명령: Idle");
             break;
@@ -139,6 +156,7 @@ void TacticalNpc::consumePendingCommand() {
             guardNearestPlayer_ = false;
             useHoldFacing_ = false;
             chargeComplete_ = false;
+            speedMult_ = 1.f;
             targetId_ = 0;
             transitionTo(TacticalNpcState::Idle, "명령: Confused");
             break;
@@ -381,7 +399,7 @@ void TacticalNpc::updateHoldSlot(float dt, Room& room) {
 
             Vec3 slotDir = (assignedSlot_ - position_).normalized();
             facing_ = slotDir;
-            position_ += slotDir * (moveSpeed_ * TACTICAL_SPEED_MULT * dt);
+            position_ += slotDir * (moveSpeed_ * TACTICAL_SPEED_MULT * speedMult_ * dt);
             return;
         }
 
@@ -406,7 +424,7 @@ void TacticalNpc::updateHoldSlot(float dt, Room& room) {
     // 대형 이동 중 분리력 없음 — 슬롯 직선 접근, 일시적 겹침 허용
     Vec3 slotDir = (assignedSlot_ - position_).normalized();
     facing_   = slotDir;
-    position_ += slotDir * (moveSpeed_ * TACTICAL_SPEED_MULT * dt);
+    position_ += slotDir * (moveSpeed_ * TACTICAL_SPEED_MULT * speedMult_ * dt);
 }
 
 // ─── Dead ─────────────────────────────────────────────────────────────────────

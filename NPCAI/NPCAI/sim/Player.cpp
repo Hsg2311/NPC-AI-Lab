@@ -1,9 +1,14 @@
 #include "Player.hpp"
 #include "Room.hpp"
 #include "Logger.hpp"
+#include <algorithm>
 #include <string>
 
 namespace sim {
+
+namespace {
+constexpr float POST_KNOCKBACK_MOVE_LOCK_TIME = 1.2f;
+}
 
 Player::Player(const std::string& name, const Vec3& pos,
                float maxHp, float moveSpeed, PlayerAttackConfig attackCfg)
@@ -21,6 +26,18 @@ void Player::requestAttack() {
     attackTimer_ = 0.f;
 }
 
+void Player::applyKnockback(const Vec3& direction, float speed, float duration) {
+    Vec3 dir = direction;
+    dir.y = 0.f;
+    if (dir.lengthSq() <= 1e-6f || speed <= 0.f || duration <= 0.f)
+        return;
+
+    knockbackDir_ = dir.normalized();
+    knockbackSpeed_ = speed;
+    knockbackTimer_ = duration;
+    postKnockbackMoveLockTimer_ = 0.f;
+}
+
 // ─── getAttackProgress ───────────────────────────────────────────────────────
 
 float Player::getAttackProgress() const {
@@ -35,6 +52,32 @@ float Player::getAttackProgress() const {
 
 void Player::update(float dt, Room& room) {
     if (!alive_) return;
+
+    if (knockbackTimer_ > 0.f) {
+        float knockDt = std::min(dt, knockbackTimer_);
+        Vec3 desiredMove = knockbackDir_ * (knockbackSpeed_ * knockDt);
+        Vec3 adjustedMove = room.adjustPlayerMoveForNpcSoftBlock(
+            position_, desiredMove, knockDt, false);
+        if (adjustedMove.lengthSq() > 1e-6f)
+            position_ += adjustedMove;
+
+        knockbackTimer_ -= knockDt;
+        if (knockbackTimer_ <= 0.f) {
+            knockbackTimer_ = 0.f;
+            knockbackSpeed_ = 0.f;
+            knockbackDir_ = {};
+            postKnockbackMoveLockTimer_ = POST_KNOCKBACK_MOVE_LOCK_TIME;
+        }
+
+        updateAttack(dt, room);
+        return;
+    }
+
+    if (postKnockbackMoveLockTimer_ > 0.f) {
+        postKnockbackMoveLockTimer_ = std::max(0.f, postKnockbackMoveLockTimer_ - dt);
+        updateAttack(dt, room);
+        return;
+    }
 
     Vec3  dir  = moveTarget_ - position_;
     float dist = dir.length();

@@ -126,7 +126,7 @@ public:
 |---|---|
 | `MidBossTacticBase` | 종족 무관 공용 helper |
 | `GoblinMidBossTactic` | 기존 고블린 중간보스 전술 전체 |
-| `GrandBaumMidBossTactic` | 그랜드밤 방패벽 및 (ㄹ) 고립 처단형 후방 기습 |
+| `GrandBaumMidBossTactic` | 그랜드밤 방패벽 및 (ㄹ) 외곽 웨이브 기습 |
 
 `MidBossTacticBase`는 전술 phase를 갖지 않는다. `PlayerCluster` 생성, 플레이어 centroid/facing 계산, 가장 가까운 플레이어 선택, Squad별 플레이어 타겟 분배, 전체 Squad `Engage`/`Idle` 발행, 리더 사망 시 `Confused` 발행만 담당한다.
 
@@ -215,7 +215,7 @@ Cooldown 종료:
 
 ## 5. GrandBaumMidBossTactic
 
-`GrandBaumMidBossTactic`은 그랜드밤 종족 전술만 담당한다. 현재 구현 범위는 `방패벽`과 `(ㄹ) 부대 고립 처단형 주의-기습`이다.
+`GrandBaumMidBossTactic`은 그랜드밤 종족 전술만 담당한다. 현재 구현 범위는 `방패벽`과 `(ㄹ) 부대 외곽 웨이브형 주의-기습`이다.
 
 ### 5-1. Phase
 
@@ -244,7 +244,7 @@ Cooldown 종료:
   Engage 복귀
 ```
 
-`ShieldWall` 안에서 `(ㄹ) 부대 주의-기습`이 함께 진행된다. `(ㄱ)/(ㄴ)/(ㄷ)` 슬라임 부대는 중간보스를 원 형태로 포위하고 바깥쪽을 바라보며 지킨다. `(ㄹ)` 뱀 부대는 넓게 우회한 뒤 플레이어 군집 후방으로 들어가 고립 처단 타겟을 공격한다. 방패벽은 `(ㄹ)` 뱀 부대가 전멸하면 종료된다.
+`ShieldWall` 안에서 `(ㄹ) 부대 주의-기습`이 함께 진행된다. `(ㄱ)/(ㄴ)/(ㄷ)` 슬라임 부대는 중간보스를 원 형태로 포위하고 바깥쪽을 바라보며 지킨다. `(ㄹ)` 원본 뱀 부대는 외곽으로 빠르게 후퇴하고, 생존 원본 뱀 수에 비례한 임시 외곽 웨이브가 플레이어를 압박한다. 방패벽은 임시 외곽 웨이브가 전멸하면 종료된다.
 
 일반 `Engage` 상태에서는 고블린과 같은 공용 타겟 분배 helper를 사용한다. 각 Squad 중심과 플레이어 위치를 비교해 가까운 플레이어에게 배정하되, 한 플레이어에게 모든 Squad가 몰리지 않도록 플레이어별 최대 배정 수를 제한한다.
 
@@ -271,6 +271,12 @@ slimeRingRadius = SHIELD_RING_RADIUS
 slimeFacing     = normalize(slimeSlot - grandBaumPos)
 ```
 
+슬라임 링 슬롯은 방패벽 발동 시점에 한 번만 계산한다. 이후 플레이어가 이동하더라도 `(ㄱ)/(ㄴ)/(ㄷ)` 슬라임의 슬롯은 재배정되지 않으며, 방패벽이 종료될 때까지 같은 링 위치를 유지한다.
+
+방패벽 발동 순간 GrandBaum의 원형 방패벽 안쪽에 있는 플레이어는 중심에서 바깥쪽으로 짧고 강한 넉백을 받는다. 이는 순간이동 보정이 아니라 `Player`의 넉백 상태로 처리되는 강제 밀림 연출이며, 넉백 중에는 일반 이동 목표보다 밀림 방향이 우선하지만 플레이어의 facing은 넉백 직전 방향을 유지한다. 넉백 종료 후에도 약 `0.25`초 동안 일반 이동을 잠깐 막아 밀려난 충격이 남도록 한다. 내부 플레이어가 슬라임 하드 블록에 다시 막히지 않도록 방패벽 발동 넉백 중에는 방패벽 하드 블록만 무시하고, 기본 넉백 속도는 `SHIELD_WALL_KNOCKBACK_SPEED = 120.f`다.
+
+방패벽 중 `(ㄱ)/(ㄴ)/(ㄷ)` 슬라임은 플레이어 이동에 대한 물리 차단체로 등록된다. 플레이어가 슬라임 충돌 반경 안으로 이동하려 하면 이동 결과가 링 바깥 경계로 보정되어 중간보스 안쪽으로 뚫고 들어갈 수 없다.
+
 방패벽 중 `GrandBaum` 중간보스와 `(ㄱ)/(ㄴ)/(ㄷ)` 슬라임 부대는 받는 피해가 `70%` 감소한다. 구현상 피해 배율은 `SHIELDWALL_DAMAGE_MULT = 0.3f`이며, `(ㄹ)` 뱀 부대에는 적용하지 않는다.
 
 부대 해석:
@@ -280,38 +286,32 @@ slimeFacing     = normalize(slimeSlot - grandBaumPos)
 | `squads[0]` | (ㄱ) 슬라임 원형 호위 | `RingGuard` |
 | `squads[1]` | (ㄴ) 슬라임 원형 호위 | `RingGuard` |
 | `squads[2]` | (ㄷ) 슬라임 원형 호위 | `RingGuard` |
-| `squads[3]` | (ㄹ) 뱀족 우회 후방 기습 | `FormationHold` 2단계 후 `Engage` |
+| `squads[3]` | (ㄹ) 뱀족 외곽 회피/웨이브 기습 | `FormationHold` 후퇴 후 임시 웨이브 `DistributedEngage` |
 
 ### 5-3. (ㄹ) 주의-기습
 
-- 플레이어 평균 facing의 반대 방향을 후방으로 본다.
-- 평균 facing이 유효하지 않으면 그랜드밤에서 플레이어 centroid로 향하는 방향을 fallback으로 사용한다.
-- 뱀 부대는 먼저 `AMBUSH_WIDE_SIDE_DIST`만큼 측면으로 크게 우회한 뒤, `AMBUSH_REAR_DIST`만큼 떨어진 후방 위치로 이동한다.
-- 후방 슬롯에 도착하거나 `AMBUSH_MAX_PREP_TIME`이 지나면 고립 처단 타겟을 골라 `Engage`로 전환한다.
-- 전술 종료 조건은 `(ㄹ)` 뱀 부대 전멸이다.
-- 전술 종료 시 피해 감소를 해제하고 `(ㄱ)/(ㄴ)/(ㄷ)` 방패벽 부대도 다시 `Engage`를 받는다.
-
-고립 처단 타겟 선정:
+- 평상시 `(ㄹ)` 뱀 부대는 플레이어와 정면 교전하지 않고 플레이어 centroid 외곽을 `FormationHold`로 계속 움직인다.
+- 회피 이동은 플레이어가 추격하면 잡을 수 있도록 `SNAKE_EVASION_SPEED_MULT = 0.75f`를 사용한다.
+- 방패벽 발동 직전 살아 있는 원본 뱀 수를 먼저 확인한다. 생존 수가 `0`이면 슬라임 링/넉백/피해 감소/하드 블록을 적용하지 않고 방패벽 전술을 즉시 실패 처리한 뒤 쿨다운에 들어간다.
+- 생존 원본 뱀이 있으면 방패벽을 정상 발동하고, 원본 뱀 부대는 `shieldWallRingCenter` 기준 외곽 반경 `SNAKE_OUTER_RADIUS = 64.f`로 빠르게 후퇴한다.
+- 원본 뱀이 외곽 슬롯에 도착하거나 `SNAKE_RETREAT_MAX_TIME = 1.5f`가 지나면 임시 외곽 뱀 웨이브가 등장한다.
+- 웨이브 수는 `min(생존 원본 뱀 수 * 10, 60)`을 4의 배수로 내림 정렬한다.
 
 ```text
-clusterScore =
-    0.45 * distanceFromLeaderScore
-  + 0.35 * isolationScore
-  + 0.20 * smallClusterScore
-
-targetScore =
-    0.35 * distanceFromAmbushSquadScore
-  + 0.30 * lowHpScore
-  + 0.25 * backFacingScore
-  + 0.10 * rearPositionScore
+0마리 생존 -> 0마리 소환, 방패벽 즉시 실패
+1마리 생존 -> 8마리 소환
+2마리 생존 -> 20마리 소환
+3마리 생존 -> 28마리 소환
+4마리 생존 -> 40마리 소환
+5마리 생존 -> 48마리 소환
+6마리 이상 -> 60마리 소환
 ```
 
-- 플레이어가 한 군집이면 그 군집 내부의 취약 대상을 고른다.
-- 플레이어가 여러 군집이면 리더에게서 멀고 다른 군집과 떨어진 작은 군집을 우선한다.
-- 플레이어가 모두 흩어져 있으면 가장 고립된 개인을 고르는 형태가 된다.
-- 후보가 없으면 뱀 부대 위치에서 가장 가까운 생존 플레이어로 fallback한다.
-
-현재 코드에는 실제 FOV/은신 판정이 없으므로, 1차 구현은 `Player::getFacing()`과 위치 관계로 “등지고 있음”을 근사한다.
+- 외곽 웨이브 뱀은 `shieldWallRingCenter` 기준 원 위에 균등 배치된다.
+- 웨이브 뱀은 `DistributedEngage` 명령으로 살아 있는 플레이어에게 id 정렬 후 round-robin 분배된다.
+- 방패벽 종료 조건은 임시 외곽 웨이브 전멸이다.
+- 웨이브 전멸 시 피해 감소와 하드 블록을 해제하고, `(ㄱ)/(ㄴ)/(ㄷ)` 슬라임과 살아남은 원본 `(ㄹ)` 뱀 부대는 다시 `Engage`로 복귀한다.
+- 방패벽 종료 후 임시 웨이브 NPC/squad는 `Room` cleanup API로 제거된다.
 
 ---
 
@@ -342,8 +342,9 @@ targetScore =
 | `FormationHold` | `HoldSlot` | 지정 중심/방향 밀집 대형 후 대기 |
 | `FormationGuard` | `GuardSlot` | 지정 중심/방향 밀집 대형 후 경계 |
 | `RingGuard` | `HoldSlot` | 지정 중심을 원형으로 둘러싸고 바깥쪽을 바라봄 |
+| `DistributedEngage` | `EngageTarget` | 멤버 순서대로 `targetIds`를 round-robin 분배해 공격 |
 
-`FormationHold`, `FormationGuard`, `RingGuard`는 종족을 모르는 공용 대형 명령이다. 그랜드밤 방패벽은 이 명령들을 사용하지만, `TacticalSquad`는 그 명령이 그랜드밤 전술인지 알지 않는다.
+`FormationHold`, `FormationGuard`, `RingGuard`, `DistributedEngage`는 종족을 모르는 공용 명령이다. 그랜드밤 방패벽은 이 명령들을 사용하지만, `TacticalSquad`는 그 명령이 그랜드밤 전술인지 알지 않는다.
 
 ### 6-3. 슬롯 계산
 
@@ -405,8 +406,8 @@ exitApex    = targetCenter  + forward * WEDGE_EXIT_DISTANCE
 |---|---|---|
 | `EngageTarget` | `Chase` | `targetId` |
 | `FlankTarget` | `Flank` | `targetId`, `slotOffset`, `slotRefTargetPos`, `abandonDist`, `speedMult` |
-| `HoldSlot` | `HoldSlot` | `targetId`, `slotOffset` |
-| `GuardSlot` | `HoldSlot` | `targetId`, `slotOffset`, `guardNearestPlayer_ = true` |
+| `HoldSlot` | `HoldSlot` | `targetId`, `slotOffset`, `speedMult` |
+| `GuardSlot` | `HoldSlot` | `targetId`, `slotOffset`, `speedMult`, `guardNearestPlayer_ = true` |
 | `ChargeThrough` | `ChargeThrough` | `targetId`, `slotOffset`, `chargeDir`, `chargeId`, 피해 설정 |
 | `Idle` | `Idle` | 타겟 초기화 |
 | `Confused` | `Idle` | 타겟 초기화 |
@@ -491,9 +492,9 @@ else if (race == GrandBaum) { ... }
 |---|---|
 | `MidBossTacticBase` | 공용 helper, 종족별 전술 상수 없음 |
 | `GoblinMidBossTactic` | `TACTIC_INTERVAL`, `CLUSTER_RADIUS`, `ENCIRCLE_RADIUS`, `TACTIC_HP_THRESHOLD`, `BOX_FRONT_OFFSET`, `REGROUP_DIST` |
-| `GrandBaumMidBossTactic` | `ENGAGE_REFRESH_INTERVAL`, `ORDER_REFRESH_INTERVAL`, `TACTIC_COOLDOWN_DURATION`, `SHIELD_RING_RADIUS`, `SHIELDWALL_DAMAGE_MULT`, `AMBUSH_REAR_DIST`, `AMBUSH_WIDE_SIDE_DIST`, `AMBUSH_MAX_PREP_TIME`, `AMBUSH_CLUSTER_RADIUS` |
+| `GrandBaumMidBossTactic` | `ENGAGE_REFRESH_INTERVAL`, `ORDER_REFRESH_INTERVAL`, `TACTIC_COOLDOWN_DURATION`, `SHIELD_RING_RADIUS`, `SHIELDWALL_DAMAGE_MULT`, `SNAKE_OUTER_RADIUS`, `SNAKE_EVASION_RADIUS`, `SNAKE_EVASION_SPEED_MULT`, `SNAKE_RETREAT_MAX_TIME`, `SNAKE_WAVE_MAX_COUNT` |
 | `TacticalSquad` | `WEDGE_EXIT_DISTANCE`, `WEDGE_PREP_APEX_DISTANCE`, `WEDGE_IMPACT_RADIUS`, `WEDGE_SPEED_MULT` |
 | `TacticalNpc` | `TACTICAL_SPEED_MULT` |
-| `Room` | `SOFT_BLOCK_RADIUS`, `SOFT_BLOCK_MIN_SPEED`, `SOFT_BLOCK_PUSH_SPEED` |
+| `Room` | `SOFT_BLOCK_RADIUS`, `SOFT_BLOCK_MIN_SPEED`, `SOFT_BLOCK_PUSH_SPEED`, `SHIELD_WALL_HARD_BLOCK_RADIUS`, `SHIELD_WALL_KNOCKBACK_SPEED` |
 
 고블린 전술 상수는 더 이상 `PlatoonLeader`에 있지 않다.

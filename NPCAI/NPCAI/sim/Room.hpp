@@ -51,7 +51,11 @@ public:
                                 std::vector<Vec3>& out) const;
     Vec3 adjustPlayerMoveForNpcSoftBlock(const Vec3& playerPos,
                                          const Vec3& desiredMove,
-                                         float dt) const;
+                                         float dt,
+                                         bool applyShieldWallHardBlock = true) const;
+    void setShieldWallBlockers(const std::vector<uint32_t>& blockerIds);
+    void clearShieldWallBlockers();
+    void knockPlayersOutOfShieldWall(const Vec3& center, float ringRadius);
     int  countNpcsTargeting(uint32_t playerId) const;
 
     // 플레이어 공격: 범위 내 생존 NPC + TacticalNpc에게 피해 적용
@@ -71,6 +75,8 @@ public:
     // ── 전술 NPC 시스템 ───────────────────────────────────────────────────────
     void addTacticalNpc (std::shared_ptr<TacticalNpc> npc);
     void addTacticalSquad(std::unique_ptr<TacticalSquad> squad);
+    void removeTacticalNpc(uint32_t npcId);
+    void removeTacticalSquad(int squadId);
     // PlatoonLeader는 addTacticalNpc로 추가 후 이 함수로 리더 등록
     void registerPlatoonLeader(PlatoonLeader* leader);
 
@@ -109,6 +115,8 @@ private:
     std::unordered_map<uint32_t, std::shared_ptr<TacticalNpc>> tacticalNpcs_{};
     std::vector<std::unique_ptr<TacticalSquad>>                 tacticalSquads_{};
     std::vector<PlatoonLeader*>                                  platoonLeaders_{};  // 비소유
+
+    std::vector<uint32_t> shieldWallBlockerIds_{};
 
     uint32_t nextWedgeChargeId_{ 1 };
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>> wedgeChargeHits_{};

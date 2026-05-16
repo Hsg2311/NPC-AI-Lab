@@ -86,6 +86,7 @@ public:
     float            getAttackRange()   const { return attackRange_; }
     float            getAttackDamage()  const { return attackDamage_; }
     float            getSeparationRadius() const { return separationRadius_; }
+    TacticalNpcConfig getConfig()       const;
     float            getWindupProgress()   const;
     float            getRecoverProgress()  const;
     bool             isAtSlot()           const;  // Flank/HoldSlot 슬롯 도착 여부

@@ -20,6 +20,7 @@ enum class SquadOrderType {
     FormationHold,
     FormationGuard,
     RingGuard,
+    DistributedEngage,
 };
 
 struct SquadOrder {
@@ -35,6 +36,7 @@ struct SquadOrder {
     Vec3           sectorPos          = {};  // BoxAdvance 부대 상대 오프셋
     Vec3           formationTargetPos = {};  // 대형이 바라볼 타겟/플레이어 centroid
     Vec3           tacticCenter       = {};  // 포위/경계 중심 또는 후퇴 목표 위치
+    float          speedMult          = 1.f;
     std::vector<uint32_t> targetIds    = {};  // WedgeCharge 대상 군집 플레이어들
 };
 
