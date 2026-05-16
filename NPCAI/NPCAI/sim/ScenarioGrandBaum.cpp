@@ -12,7 +12,7 @@
 namespace sim {
 
 void ScenarioGrandBaum::setup(Room& room) {
-    auto p1 = std::make_shared<Player>("P1", Vec3{ 0.f, 0.f, 0.f }, 10000.f, 45.f);
+    auto p1 = std::make_shared<Player>("P1", Vec3{ 0.f, 0.f, 0.f }, 10000.f, 30.f);
     room.addActor(p1);
     controlledPlayer_ = p1.get();
 
@@ -53,7 +53,7 @@ void ScenarioGrandBaum::setup(Room& room) {
 
     auto leaderPtr = std::make_shared<PlatoonLeader>(
         "GrandBaum", Vec3{ 45.f, 0.f, 0.f }, leaderCfg,
-        std::make_unique<GrandBaumMidBossTactic>(0.5f));
+        std::make_unique<GrandBaumMidBossTactic>());
     PlatoonLeader* leader = leaderPtr.get();
     room.addTacticalNpc(leaderPtr);
     room.registerPlatoonLeader(leader);
@@ -84,11 +84,12 @@ void ScenarioGrandBaum::setup(Room& room) {
     makeSquad(2, "C", 16, Vec3{ 34.f, 0.f,  -3.f }, slimeCfg); // (ㄷ)
     makeSquad(3, "D", 6,  Vec3{ 50.f, 0.f,  12.f }, snakeCfg); // (ㄹ)
 
-    // Demonstration setup: start below Param.GrandBaum_A so ShieldWall is visible.
-    //leader->takeDamage(430.f);
+    // Demonstration setup: drop below the first/second ShieldWall HP step for validation.
+    //leader->takeDamage(70.f);   // 65% HP: first ShieldWall step.
+    //leader->takeDamage(134.f);  // 33% HP: consumes both steps and triggers once.
 
     std::cout << "[Sim] ScenarioGrandBaum: ShieldWall + rear ambush demo\n";
-    std::cout << "GrandBaum starts below Param.GrandBaum_A=0.5 for immediate validation.\n";
+    std::cout << "GrandBaum ShieldWall triggers at 66% and 33% HP, max once per HP drop.\n";
 }
 
 } // namespace sim

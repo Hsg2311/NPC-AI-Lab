@@ -2,6 +2,7 @@
 #include "IMidBossTactic.hpp"
 #include "Vec3.hpp"
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 namespace sim {
@@ -123,7 +124,7 @@ private:
 
 class GrandBaumMidBossTactic : public MidBossTacticBase {
 public:
-    explicit GrandBaumMidBossTactic(float grandBaumA = 0.5f);
+    GrandBaumMidBossTactic();
 
     const char* name() const override { return "GrandBaumMidBossTactic"; }
     void update(float dt, Room& room, PlatoonLeader& leader) override;
@@ -150,7 +151,7 @@ private:
                            TacticalSquad* originalSnakeSquad);
     void updateSnakeEvasion(float dt, Room& room, PlatoonLeader& leader,
                             TacticalSquad* snakeSquad);
-    void pickNewSnakeWanderTarget();
+    Vec3 pickSnakePersonalWanderTarget(const Vec3& center) const;
     void issueOriginalSnakeRetreat(Room& room, PlatoonLeader& leader,
                                    TacticalSquad* originalSnakeSquad);
     void spawnSnakeWave(Room& room, PlatoonLeader& leader,
@@ -158,46 +159,57 @@ private:
     void issueSnakeWaveEngage(Room& room, TacticalSquad* waveSquad);
     void finishShieldWall(Room& room, PlatoonLeader& leader, const char* reason);
     void cleanupSnakeWave(Room& room);
+    void captureOriginalSnakeRoster(Room& room, TacticalSquad* originalSnakeSquad);
+    void reviveOriginalSnakeSquad(Room& room, PlatoonLeader& leader);
     int countLiveMembers(Room& room, TacticalSquad* squad) const;
     int calcSnakeWaveSpawnCount(int liveOriginalSnakeCount) const;
     bool isSnakeWaveAnnihilated(Room& room) const;
     TacticalNpcConfig findSnakeConfig(Room& room, TacticalSquad* originalSnakeSquad) const;
     void applyShieldWallProtection(Room& room, PlatoonLeader& leader, bool enabled);
 
-    float grandBaumA_;
     Phase phase_{ Phase::Engage };
     float engageRefreshTimer_{ 0.f };
     float orderRefreshTimer_{ 0.f };
     float snakeRetreatTimer_{ 0.f };
     float tacticCooldown_{ 0.f };
+    float previousHpRatio_{ 1.f };
+    int shieldWallTriggerStage_{ 0 };
     bool engageOrderIssued_{ false };
     bool snakeWaveSpawned_{ false };
+    bool pendingShieldWallTrigger_{ false };
     bool shieldWallRingIssued_{ false };
     Vec3 shieldWallRingCenter_{};
     float shieldWallRingStartAngle_{ 0.f };
     int originalSnakeCountAtShieldWall_{ 0 };
     int snakeWaveSquadId_{ -1 };
+    std::vector<uint32_t> originalSnakeRoster_{};
+    std::unordered_map<uint32_t, Vec3> originalSnakeSpawnPositions_{};
     bool  snakeWanderCenterSet_{ false };
     Vec3  snakeWanderCenter_{};
-    Vec3  snakeWanderTarget_{};
-    float snakeWanderTimer_{ 0.f };
-    bool  snakeIsEvading_{ false };
+    std::unordered_map<uint32_t, Vec3> snakePersonalTargets_{};
+    std::unordered_map<uint32_t, float> snakePersonalTimers_{};
+    std::unordered_map<uint32_t, bool> snakePersonalEvading_{};
     SnakeAmbushStage snakeAmbushStage_{ SnakeAmbushStage::Evasion };
     std::vector<uint32_t> snakeWaveNpcIds_{};
 
     static constexpr float ENGAGE_REFRESH_INTERVAL = 1.0f;
     static constexpr float ORDER_REFRESH_INTERVAL = 0.5f;
     static constexpr float TACTIC_COOLDOWN_DURATION = 8.0f;
+    static constexpr float FIRST_SHIELD_WALL_HP_RATIO = 0.66f;
+    static constexpr float SECOND_SHIELD_WALL_HP_RATIO = 0.33f;
     static constexpr float SHIELD_RING_RADIUS     = 12.f;
     static constexpr float SHIELDWALL_DAMAGE_MULT = 0.1f;
     static constexpr float SNAKE_OUTER_RADIUS = 64.f;
-    static constexpr float SNAKE_EVASION_RADIUS = 44.f;
-    static constexpr float SNAKE_EVASION_SPEED_MULT = 0.75f;
+    static constexpr float SNAKE_EVASION_RADIUS = 24.f;
+    static constexpr float SNAKE_EVASION_SPEED_MULT = 0.35f;
     static constexpr float SNAKE_RETREAT_SPEED_MULT = 1.0f;
     static constexpr float SNAKE_RETREAT_MAX_TIME = 1.5f;
-    static constexpr float SNAKE_DETECT_RANGE      = 22.f;
-    static constexpr float SNAKE_STOP_EVADE_RANGE  = 32.f;
-    static constexpr float SNAKE_WANDER_RADIUS     = 10.f;
+    static constexpr float SNAKE_DETECT_RANGE      = 18.f;
+    static constexpr float SNAKE_STOP_EVADE_RANGE  = 24.f;
+    static constexpr float SNAKE_DISPERSE_WANDER_RADIUS = 24.f;
+    static constexpr float SNAKE_PERSONAL_SCATTER_RADIUS = 5.f;
+    static constexpr float SNAKE_PERSONAL_MAX_LEASH_RADIUS = 42.f;
+    static constexpr float SNAKE_THREAT_WEIGHT_RANGE = SNAKE_STOP_EVADE_RANGE;
     static constexpr float SNAKE_WANDER_INTERVAL   = 3.5f;
     static constexpr float SNAKE_WANDER_SPEED_MULT = 0.15f;
     static constexpr float SNAKE_EVASION_REFRESH   = 0.5f;

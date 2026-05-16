@@ -93,6 +93,7 @@ public:
     bool             isChargeComplete()   const { return chargeComplete_; }
 
     void setSquadId(int id) { squadId_ = id; }
+    void reviveAt(const Vec3& pos);
 
 protected:
     void transitionTo(TacticalNpcState next, const char* reason);

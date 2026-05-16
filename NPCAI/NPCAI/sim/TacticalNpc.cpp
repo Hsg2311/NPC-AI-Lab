@@ -75,6 +75,29 @@ void TacticalNpc::receiveCommand(const TacticalCommand& cmd) {
     pendingCmd_ = cmd;
 }
 
+void TacticalNpc::reviveAt(const Vec3& pos) {
+    Actor::reviveAt(pos);
+    state_ = TacticalNpcState::Idle;
+    pendingCmd_ = {};
+    targetId_ = 0;
+    assignedSlot_ = {};
+    slotRefTargetPos_ = {};
+    abandonDist_ = 15.f;
+    chargeId_ = 0;
+    chargeDir_ = {};
+    chargeCenter_ = {};
+    impactRadius_ = 3.f;
+    impactDamage_ = 0.f;
+    passDistance_ = 6.f;
+    chargeComplete_ = false;
+    guardNearestPlayer_ = false;
+    useHoldFacing_ = false;
+    holdFacing_ = {};
+    speedMult_ = 1.f;
+    windupTimer_ = 0.f;
+    recoverTimer_ = 0.f;
+}
+
 // ─── transitionTo ─────────────────────────────────────────────────────────────
 
 void TacticalNpc::transitionTo(TacticalNpcState next, const char* reason) {

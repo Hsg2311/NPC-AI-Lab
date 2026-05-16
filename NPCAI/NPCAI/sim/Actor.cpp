@@ -24,6 +24,13 @@ void Actor::takeDamage(float dmg) {
     }
 }
 
+void Actor::reviveAt(const Vec3& pos) {
+    position_ = pos;
+    hp_ = maxHp_;
+    alive_ = true;
+    damageTakenMultiplier_ = 1.f;
+}
+
 // ─── calcSeparationForce ──────────────────────────────────────────────────────
 
 Vec3 Actor::calcSeparationForce(float separationRadius,

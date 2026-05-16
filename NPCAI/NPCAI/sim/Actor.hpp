@@ -20,6 +20,7 @@ public:
 
     // 피해 / 사망
     void takeDamage(float dmg);
+    void reviveAt(const Vec3& pos);
     void setDamageTakenMultiplier(float multiplier) { damageTakenMultiplier_ = multiplier; }
     float getDamageTakenMultiplier() const { return damageTakenMultiplier_; }
 

@@ -4,6 +4,7 @@
 #include "Room.hpp"
 #include "Player.hpp"
 #include "TacticalSquad.hpp"
+#include "TacticalNpc.hpp"
 #include "Logger.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -838,11 +839,13 @@ std::vector<Vec3> GoblinMidBossTactic::calcSquadBoxOffsets(int numSquads) const 
     return offsets;
 }
 
-GrandBaumMidBossTactic::GrandBaumMidBossTactic(float grandBaumA)
-    : grandBaumA_(grandBaumA)
-{}
+GrandBaumMidBossTactic::GrandBaumMidBossTactic() = default;
 
 void GrandBaumMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
+    TacticalSquad* originalSnakeSquadForRoster = leader.getSquads().size() >= 4
+        ? leader.getSquads()[3]
+        : nullptr;
+    captureOriginalSnakeRoster(room, originalSnakeSquadForRoster);
     leader.removeDeadMembersFromSquads(room);
 
     const auto& squads = leader.getSquads();
@@ -861,8 +864,28 @@ void GrandBaumMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader)
         ? leader.getHp() / leader.getMaxHp()
         : 1.f;
 
+    int crossedStage = shieldWallTriggerStage_;
+    if (previousHpRatio_ > FIRST_SHIELD_WALL_HP_RATIO &&
+        hpRatio <= FIRST_SHIELD_WALL_HP_RATIO) {
+        crossedStage = std::max(crossedStage, 1);
+    }
+    if (previousHpRatio_ > SECOND_SHIELD_WALL_HP_RATIO &&
+        hpRatio <= SECOND_SHIELD_WALL_HP_RATIO) {
+        crossedStage = std::max(crossedStage, 2);
+    }
+    previousHpRatio_ = hpRatio;
+
+    if (crossedStage > shieldWallTriggerStage_) {
+        shieldWallTriggerStage_ = crossedStage;
+        pendingShieldWallTrigger_ = true;
+    }
+
     if (phase_ == Phase::Cooldown) {
         tacticCooldown_ -= dt;
+
+        TacticalSquad* snakeSquad = leader.getSquads().size() >= 4
+            ? leader.getSquads()[3] : nullptr;
+        updateSnakeEvasion(dt, room, leader, snakeSquad);
 
         engageRefreshTimer_ -= dt;
         if (engageRefreshTimer_ <= 0.f) {
@@ -894,7 +917,8 @@ void GrandBaumMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader)
             issueEngage(room, leader);
         }
 
-        if (hpRatio <= grandBaumA_) {
+        if (pendingShieldWallTrigger_) {
+            pendingShieldWallTrigger_ = false;
             TacticalSquad* originalSnakeSquad = squads.size() >= 4 ? squads[3] : nullptr;
             int liveOriginalSnakes = countLiveMembers(room, originalSnakeSquad);
             if (liveOriginalSnakes <= 0) {
@@ -949,8 +973,9 @@ void GrandBaumMidBossTactic::enterPhase(Phase next, const char* reason,
         originalSnakeCountAtShieldWall_ = 0;
         snakeAmbushStage_ = SnakeAmbushStage::Evasion;
         snakeWanderCenterSet_ = false;
-        snakeIsEvading_       = false;
-        snakeWanderTimer_     = 0.f;
+        snakePersonalTargets_.clear();
+        snakePersonalTimers_.clear();
+        snakePersonalEvading_.clear();
         return;
     }
 
@@ -959,6 +984,9 @@ void GrandBaumMidBossTactic::enterPhase(Phase next, const char* reason,
         snakeRetreatTimer_ = 0.f;
         snakeWaveSpawned_ = false;
         shieldWallRingIssued_ = false;
+        snakePersonalTargets_.clear();
+        snakePersonalTimers_.clear();
+        snakePersonalEvading_.clear();
         snakeAmbushStage_ = SnakeAmbushStage::RetreatingOriginal;
         return;
     }
@@ -994,8 +1022,7 @@ void GrandBaumMidBossTactic::issueEngage(Room& room, PlatoonLeader& leader) {
         : nullptr;
 
     for (size_t i = 0; i < liveSquads.size(); ++i) {
-        if (liveSquads[i] == originalSnakeSquad &&
-            snakeAmbushStage_ == SnakeAmbushStage::Evasion) {
+        if (liveSquads[i] == originalSnakeSquad) {
             continue;  // updateSnakeEvasion이 매 틱 처리
         }
 
@@ -1110,12 +1137,12 @@ TacticalNpcConfig GrandBaumMidBossTactic::findSnakeConfig(
     return cfg;
 }
 
-void GrandBaumMidBossTactic::pickNewSnakeWanderTarget() {
+Vec3 GrandBaumMidBossTactic::pickSnakePersonalWanderTarget(const Vec3& center) const {
     float angle = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX)
                   * 2.f * 3.14159265f;
-    float dist  = SNAKE_WANDER_RADIUS * (0.3f + 0.7f *
+    float dist  = SNAKE_DISPERSE_WANDER_RADIUS * (0.3f + 0.7f *
                   static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX));
-    snakeWanderTarget_ = snakeWanderCenter_ + Vec3{
+    return center + Vec3{
         std::cos(angle) * dist, 0.f, std::sin(angle) * dist };
 }
 
@@ -1126,78 +1153,133 @@ void GrandBaumMidBossTactic::updateSnakeEvasion(
 
     if (!snakeWanderCenterSet_) {
         snakeWanderCenter_    = snakeSquad->calcCentroid(room);
-        snakeWanderTarget_    = snakeWanderCenter_;
         snakeWanderCenterSet_ = true;
     }
 
-    Vec3     snakeCentroid = snakeSquad->calcCentroid(room);
-    uint32_t targetId      = selectNearestPlayerId(room, snakeCentroid);
+    std::vector<uint32_t> liveSnakeIds;
+    liveSnakeIds.reserve(snakeSquad->getMembers().size());
+    for (uint32_t memberId : snakeSquad->getMembers()) {
+        Actor* actor = room.findActorById(memberId);
+        if (actor && actor->isAlive())
+            liveSnakeIds.push_back(memberId);
+    }
 
-    bool     shouldEvade   = false;
-    Vec3     nearestPos    = snakeCentroid;
-    Player*  nearestPlayer = nullptr;
-    if (targetId != 0) {
-        nearestPlayer = selectNearestPlayer(room, snakeCentroid);
+    auto isLiveSnake = [&](uint32_t id) {
+        return std::find(liveSnakeIds.begin(), liveSnakeIds.end(), id) != liveSnakeIds.end();
+    };
+
+    for (auto it = snakePersonalTargets_.begin(); it != snakePersonalTargets_.end(); ) {
+        if (!isLiveSnake(it->first)) it = snakePersonalTargets_.erase(it);
+        else ++it;
+    }
+    for (auto it = snakePersonalTimers_.begin(); it != snakePersonalTimers_.end(); ) {
+        if (!isLiveSnake(it->first)) it = snakePersonalTimers_.erase(it);
+        else ++it;
+    }
+    for (auto it = snakePersonalEvading_.begin(); it != snakePersonalEvading_.end(); ) {
+        if (!isLiveSnake(it->first)) it = snakePersonalEvading_.erase(it);
+        else ++it;
+    }
+
+    for (uint32_t memberId : liveSnakeIds) {
+        Actor* actor = room.findActorById(memberId);
+        auto* snake = dynamic_cast<TacticalNpc*>(actor);
+        if (!snake)
+            continue;
+
+        Vec3 snakePos = snake->getPosition();
+        uint32_t targetId = selectNearestPlayerId(room, snakePos);
+        Player* nearestPlayer = selectNearestPlayer(room, snakePos);
+        Vec3 nearestPos = nearestPlayer ? nearestPlayer->getPosition() : snakeWanderCenter_;
+
+        bool wasEvading = snakePersonalEvading_[memberId];
+        bool shouldEvade = false;
         if (nearestPlayer) {
-            nearestPos        = nearestPlayer->getPosition();
-            float snapDist    = Vec3::distance(snakeCentroid, nearestPos);
-            shouldEvade = snakeIsEvading_
-                ? (snapDist < SNAKE_STOP_EVADE_RANGE)
-                : (snapDist < SNAKE_DETECT_RANGE);
+            float nearestDist = Vec3::distance(snakePos, nearestPos);
+            shouldEvade = wasEvading
+                ? (nearestDist < SNAKE_STOP_EVADE_RANGE)
+                : (nearestDist < SNAKE_DETECT_RANGE);
         }
-    }
 
-    if (shouldEvade != snakeIsEvading_) {
-        snakeWanderTimer_ = 0.f;
-        if (!shouldEvade)
-            snakeWanderCenter_ = snakeCentroid;
-    }
+        Vec3 threatCenter{};
+        float threatWeightSum = 0.f;
+        for (Player* player : room.getLivingPlayers()) {
+            if (!player)
+                continue;
 
-    snakeWanderTimer_ -= dt;
-    snakeIsEvading_    = shouldEvade;
+            Vec3 playerPos = player->getPosition();
+            float dist = Vec3::distance(snakePos, playerPos);
+            float weight = std::max(0.f, SNAKE_THREAT_WEIGHT_RANGE - dist);
+            if (weight <= 0.f)
+                continue;
 
-    if (shouldEvade) {
-        if (snakeWanderTimer_ > 0.f)
-            return;
-        snakeWanderTimer_ = SNAKE_EVASION_REFRESH;
+            threatCenter += playerPos * weight;
+            threatWeightSum += weight;
+        }
+        if (threatWeightSum > 0.f)
+            threatCenter = threatCenter / threatWeightSum;
+        else
+            threatCenter = nearestPos;
 
-        Vec3 fleeDir = snakeCentroid - nearestPos;
-        if (fleeDir.lengthSq() < 0.01f) fleeDir = Vec3{ 1.f, 0.f, 0.f };
-        else                             fleeDir = fleeDir.normalized();
+        bool isTooFarFromCenter =
+            Vec3::distance(snakePos, snakeWanderCenter_) > SNAKE_PERSONAL_MAX_LEASH_RADIUS;
 
-        Vec3 fleeCenter = snakeCentroid + fleeDir * SNAKE_EVASION_RADIUS;
+        float& timer = snakePersonalTimers_[memberId];
+        timer -= dt;
+        if (shouldEvade != wasEvading) {
+            timer = 0.f;
+            snakePersonalEvading_[memberId] = shouldEvade;
+        }
 
-        SquadOrder ord;
-        ord.type               = SquadOrderType::FormationHold;
-        ord.targetId           = targetId;
-        ord.tacticCenter       = fleeCenter;
-        ord.formationTargetPos = fleeCenter + fleeDir * 5.f;
-        ord.slotSpacingScale   = 0.75f;
-        ord.slotColumnScale    = 2.0f;
-        ord.speedMult          = SNAKE_EVASION_SPEED_MULT;
-        snakeSquad->receiveOrder(ord);
-    } else {
-        if (snakeWanderTimer_ > 0.f)
-            return;
-        snakeWanderTimer_ = SNAKE_WANDER_INTERVAL;
-        pickNewSnakeWanderTarget();
+        if (timer <= 0.f || isTooFarFromCenter ||
+            snakePersonalTargets_.find(memberId) == snakePersonalTargets_.end()) {
+            float random01 = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX);
+
+            if (shouldEvade) {
+                Vec3 fleeDir = snakePos - threatCenter;
+                if (fleeDir.lengthSq() < 0.01f) fleeDir = Vec3{ 1.f, 0.f, 0.f };
+                else                             fleeDir = fleeDir.normalized();
+
+                Vec3 right{ -fleeDir.z, 0.f, fleeDir.x };
+                float scatter = (random01 * 2.f - 1.f) * SNAKE_PERSONAL_SCATTER_RADIUS;
+                snakePersonalTargets_[memberId] =
+                    snakePos + fleeDir * SNAKE_EVASION_RADIUS + right * scatter;
+                timer = SNAKE_EVASION_REFRESH * (0.75f + random01 * 0.5f);
+            } else {
+                snakePersonalTargets_[memberId] =
+                    pickSnakePersonalWanderTarget(snakeWanderCenter_);
+                timer = SNAKE_WANDER_INTERVAL * (0.75f + random01 * 0.5f);
+            }
+
+            if (isTooFarFromCenter && !shouldEvade) {
+                Vec3 fromCenter = snakePos - snakeWanderCenter_;
+                if (fromCenter.lengthSq() > 0.01f)
+                    snakePersonalTargets_[memberId] =
+                        snakeWanderCenter_ +
+                        fromCenter.normalized() * SNAKE_DISPERSE_WANDER_RADIUS;
+            }
+        }
+
+        Vec3 targetFromCenter = snakePersonalTargets_[memberId] - snakeWanderCenter_;
+        if (targetFromCenter.length() > SNAKE_PERSONAL_MAX_LEASH_RADIUS) {
+            snakePersonalTargets_[memberId] =
+                snakeWanderCenter_ +
+                targetFromCenter.normalized() * SNAKE_PERSONAL_MAX_LEASH_RADIUS;
+        }
 
         if (targetId == 0) {
-            SquadOrder ord;
-            ord.type = SquadOrderType::Idle;
-            snakeSquad->receiveOrder(ord);
-            return;
+            TacticalCommand idle;
+            idle.type = TacticalCommandType::Idle;
+            snake->receiveCommand(idle);
+            continue;
         }
 
-        SquadOrder ord;
-        ord.type               = SquadOrderType::FormationHold;
-        ord.targetId           = targetId;
-        ord.tacticCenter       = snakeWanderTarget_;
-        ord.formationTargetPos = nearestPos;
-        ord.slotSpacingScale   = 0.75f;
-        ord.slotColumnScale    = 2.0f;
-        ord.speedMult          = SNAKE_WANDER_SPEED_MULT;
-        snakeSquad->receiveOrder(ord);
+        TacticalCommand cmd;
+        cmd.type = TacticalCommandType::HoldSlot;
+        cmd.targetId = targetId;
+        cmd.slotOffset = snakePersonalTargets_[memberId];
+        cmd.speedMult = shouldEvade ? SNAKE_EVASION_SPEED_MULT : SNAKE_WANDER_SPEED_MULT;
+        snake->receiveCommand(cmd);
     }
 }
 
@@ -1336,6 +1418,7 @@ void GrandBaumMidBossTactic::finishShieldWall(
     Room& room, PlatoonLeader& leader, const char* reason) {
     applyShieldWallProtection(room, leader, false);
     cleanupSnakeWave(room);
+    reviveOriginalSnakeSquad(room, leader);
     snakeAmbushStage_ = SnakeAmbushStage::ReturningOriginal;
     issueEngage(room, leader);
     tacticCooldown_ = TACTIC_COOLDOWN_DURATION;
@@ -1352,6 +1435,78 @@ void GrandBaumMidBossTactic::cleanupSnakeWave(Room& room) {
     snakeWaveNpcIds_.clear();
     snakeWaveSquadId_ = -1;
     snakeWaveSpawned_ = false;
+}
+
+void GrandBaumMidBossTactic::captureOriginalSnakeRoster(
+    Room& room, TacticalSquad* originalSnakeSquad) {
+    if (!originalSnakeRoster_.empty() || !originalSnakeSquad)
+        return;
+
+    for (uint32_t memberId : originalSnakeSquad->getMembers()) {
+        Actor* actor = room.findActorById(memberId);
+        if (!actor)
+            continue;
+
+        originalSnakeRoster_.push_back(memberId);
+        originalSnakeSpawnPositions_[memberId] = actor->getPosition();
+    }
+}
+
+void GrandBaumMidBossTactic::reviveOriginalSnakeSquad(
+    Room& room, PlatoonLeader& leader) {
+    if (originalSnakeRoster_.empty() || leader.getSquads().size() < 4)
+        return;
+
+    TacticalSquad* originalSnakeSquad = leader.getSquads()[3];
+    if (!originalSnakeSquad)
+        return;
+
+    Vec3 reviveCenter = shieldWallRingIssued_ ? shieldWallRingCenter_ : leader.getPosition();
+    constexpr float TWO_PI = 2.f * 3.14159265f;
+    int revivedCount = 0;
+
+    for (size_t i = 0; i < originalSnakeRoster_.size(); ++i) {
+        uint32_t memberId = originalSnakeRoster_[i];
+        Actor* actor = room.findActorById(memberId);
+        auto* snake = dynamic_cast<TacticalNpc*>(actor);
+        if (!snake)
+            continue;
+
+        float angle = shieldWallRingStartAngle_ +
+            TWO_PI * static_cast<float>(i) /
+            static_cast<float>(std::max<size_t>(1, originalSnakeRoster_.size()));
+        Vec3 revivePos = reviveCenter + Vec3{
+            std::cos(angle) * SNAKE_OUTER_RADIUS,
+            0.f,
+            std::sin(angle) * SNAKE_OUTER_RADIUS
+        };
+        if (!shieldWallRingIssued_) {
+            auto spawnIt = originalSnakeSpawnPositions_.find(memberId);
+            if (spawnIt != originalSnakeSpawnPositions_.end())
+                revivePos = spawnIt->second;
+        }
+
+        if (!snake->isAlive()) {
+            snake->reviveAt(revivePos);
+            ++revivedCount;
+        }
+
+        snake->setSquadId(originalSnakeSquad->getSquadId());
+        const std::vector<uint32_t>& members = originalSnakeSquad->getMembers();
+        if (std::find(members.begin(), members.end(), memberId) == members.end())
+            originalSnakeSquad->addMember(memberId);
+    }
+
+    snakePersonalTargets_.clear();
+    snakePersonalTimers_.clear();
+    snakePersonalEvading_.clear();
+    snakeWanderCenterSet_ = false;
+
+    if (revivedCount > 0) {
+        Logger::get().log(leader.getName(),
+            "GrandBaum original snake squad revived count=" +
+            std::to_string(revivedCount));
+    }
 }
 
 void GrandBaumMidBossTactic::applyShieldWallProtection(
