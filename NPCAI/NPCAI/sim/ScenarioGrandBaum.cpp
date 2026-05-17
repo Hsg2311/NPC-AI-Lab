@@ -59,7 +59,8 @@ void ScenarioGrandBaum::setup(Room& room) {
     room.registerPlatoonLeader(leader);
 
     auto makeSquad = [&](int squadId, const char* prefix, int count,
-                         const Vec3& origin, const TacticalNpcConfig& cfg) {
+                         const Vec3& origin, const TacticalNpcConfig& cfg,
+                         int columns = 4) {
         auto squad = std::make_unique<TacticalSquad>(squadId, cfg.attackRange,
                                                      cfg.separationRadius);
         TacticalSquad* squadPtr = squad.get();
@@ -68,8 +69,8 @@ void ScenarioGrandBaum::setup(Room& room) {
         for (int i = 0; i < count; ++i) {
             char name[16];
             std::snprintf(name, sizeof(name), "%s%d", prefix, i + 1);
-            float x = origin.x + static_cast<float>(i % 4) * 2.f;
-            float z = origin.z + static_cast<float>(i / 4) * 2.f;
+            float x = origin.x + static_cast<float>(i % columns) * 2.f;
+            float z = origin.z + static_cast<float>(i / columns) * 2.f;
             auto npc = std::make_shared<TacticalNpc>(name, Vec3{ x, 0.f, z }, cfg);
             npc->setSquadId(squadId);
             squadPtr->addMember(npc->getId());
@@ -79,10 +80,10 @@ void ScenarioGrandBaum::setup(Room& room) {
         room.addTacticalSquad(std::move(squad));
     };
 
-    makeSquad(0, "A", 8,  Vec3{ 38.f, 0.f, -12.f }, slimeCfg); // (ㄱ)
-    makeSquad(1, "B", 8,  Vec3{ 38.f, 0.f,  10.f }, slimeCfg); // (ㄴ)
-    makeSquad(2, "C", 16, Vec3{ 34.f, 0.f,  -3.f }, slimeCfg); // (ㄷ)
-    makeSquad(3, "D", 6,  Vec3{ 50.f, 0.f,  12.f }, snakeCfg); // (ㄹ)
+    makeSquad(0, "A", 12, Vec3{ 36.f, 0.f, -24.f }, slimeCfg, 4); // (ㄱ)
+    makeSquad(1, "B", 12, Vec3{ 36.f, 0.f,  20.f }, slimeCfg, 4); // (ㄴ)
+    makeSquad(2, "C", 48, Vec3{ 28.f, 0.f, -10.f }, slimeCfg, 8); // (ㄷ)
+    makeSquad(3, "D", 10, Vec3{ 52.f, 0.f,  12.f }, snakeCfg, 5); // (ㄹ)
 
     // Demonstration setup: drop below the first/second ShieldWall HP step for validation.
     //leader->takeDamage(70.f);   // 65% HP: first ShieldWall step.
@@ -90,6 +91,7 @@ void ScenarioGrandBaum::setup(Room& room) {
 
     std::cout << "[Sim] ScenarioGrandBaum: ShieldWall + rear ambush demo\n";
     std::cout << "GrandBaum ShieldWall triggers at 66% and 33% HP, max once per HP drop.\n";
+    std::cout << "GrandBaum squads use max PDF composition: A12/B12/C48/D10.\n";
 }
 
 } // namespace sim

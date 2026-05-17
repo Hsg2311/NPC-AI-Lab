@@ -144,7 +144,43 @@ private:
         ReturningOriginal
     };
 
+    enum class BossMeleeState {
+        AcquireTarget,
+        ChaseTarget,
+        AttackWindup,
+        AttackRecover
+    };
+
+    enum class BossTargetPriority {
+        None = 0,
+        Nearest = 1,
+        SlimeThreat = 2,
+        SnakeThreat = 3
+    };
+
+    struct BossTargetChoice {
+        uint32_t targetId{ 0 };
+        BossTargetPriority priority{ BossTargetPriority::None };
+    };
+
     void enterPhase(Phase next, const char* reason, PlatoonLeader& leader);
+    void updateBossMelee(float dt, Room& room, PlatoonLeader& leader);
+    void resetBossMelee(PlatoonLeader& leader);
+    BossTargetChoice selectBossMeleeTarget(Room& room, const PlatoonLeader& leader) const;
+    BossTargetChoice selectOriginalSnakeThreatTarget(Room& room, const PlatoonLeader& leader) const;
+    BossTargetChoice selectSlimeThreatTarget(Room& room, const PlatoonLeader& leader) const;
+    std::vector<uint32_t> getOriginalSnakeCandidateIds(const PlatoonLeader& leader) const;
+    BossTargetChoice selectNearestPlayerTarget(const Room& room, const Vec3& center) const;
+    BossTargetChoice selectNearestPlayerNear(const Room& room, const Vec3& center,
+                                             float radius, BossTargetPriority priority) const;
+    bool isCurrentBossMeleeTargetValid(Room& room, const PlatoonLeader& leader) const;
+    bool isResourceThreatPriority(BossTargetPriority priority) const;
+    Vec3 calcLiveOriginalSnakeCentroid(Room& room, const PlatoonLeader& leader,
+                                       int& outLiveCount) const;
+    Vec3 calcLiveSlimeCentroid(Room& room, const PlatoonLeader& leader,
+                               int& outLiveCount) const;
+    void moveBossToward(PlatoonLeader& leader, const Vec3& targetPos,
+                        float speedMult, float dt) const;
     void issueEngage(Room& room, PlatoonLeader& leader);
     void issueShieldWall(Room& room, PlatoonLeader& leader);
     void updateSnakeAmbush(float dt, Room& room, PlatoonLeader& leader,
@@ -161,7 +197,11 @@ private:
     void cleanupSnakeWave(Room& room);
     void captureOriginalSnakeRoster(Room& room, TacticalSquad* originalSnakeSquad);
     void reviveOriginalSnakeSquad(Room& room, PlatoonLeader& leader);
+    bool shouldPreserveOriginalSnakes() const;
     int countLiveMembers(Room& room, TacticalSquad* squad) const;
+    int countLiveSlimeMembers(Room& room, const PlatoonLeader& leader) const;
+    bool canFormShieldWall(int liveSlimeCount) const;
+    float calcShieldWallRadius(int liveSlimeCount) const;
     int calcSnakeWaveSpawnCount(int liveOriginalSnakeCount) const;
     bool isSnakeWaveAnnihilated(Room& room) const;
     TacticalNpcConfig findSnakeConfig(Room& room, TacticalSquad* originalSnakeSquad) const;
@@ -179,9 +219,16 @@ private:
     bool pendingShieldWallTrigger_{ false };
     bool shieldWallRingIssued_{ false };
     Vec3 shieldWallRingCenter_{};
+    float shieldWallRingRadius_{ 12.f };
     float shieldWallRingStartAngle_{ 0.f };
     int originalSnakeCountAtShieldWall_{ 0 };
     int snakeWaveSquadId_{ -1 };
+    BossMeleeState bossMeleeState_{ BossMeleeState::AcquireTarget };
+    float bossMeleeTimer_{ 0.f };
+    float bossMeleeTargetLockTimer_{ 0.f };
+    float bossMeleeSamePriorityRetargetTimer_{ 0.f };
+    uint32_t bossMeleeTargetId_{ 0 };
+    BossTargetPriority bossMeleeTargetPriority_{ BossTargetPriority::None };
     std::vector<uint32_t> originalSnakeRoster_{};
     std::unordered_map<uint32_t, Vec3> originalSnakeSpawnPositions_{};
     bool  snakeWanderCenterSet_{ false };
@@ -197,11 +244,20 @@ private:
     static constexpr float TACTIC_COOLDOWN_DURATION = 8.0f;
     static constexpr float FIRST_SHIELD_WALL_HP_RATIO = 0.66f;
     static constexpr float SECOND_SHIELD_WALL_HP_RATIO = 0.33f;
-    static constexpr float SHIELD_RING_RADIUS     = 12.f;
+    static constexpr float MIN_SHIELD_RING_RADIUS = 7.f;
+    static constexpr float MAX_SHIELD_RING_RADIUS = 12.f;
+    static constexpr float SLIME_RING_SLOT_SPACING = 4.5f;
+    static constexpr float SHIELD_RING_MIN_ARC_SPACING = 3.0f;
+    static constexpr float SHIELD_RING_LANE_SPACING = 2.2f;
+    static constexpr int   MIN_SHIELD_WALL_SLIME_COUNT = 10;
     static constexpr float SHIELDWALL_DAMAGE_MULT = 0.1f;
+    static constexpr float BOSS_CHASE_SPEED_MULT = 8.0f;
+    static constexpr float BOSS_TARGET_LOCK_DURATION = 1.4f;
+    static constexpr float BOSS_SAME_PRIORITY_RETARGET_INTERVAL = 2.5f;
+    static constexpr float BOSS_SLIME_THREAT_RANGE = 12.f;
     static constexpr float SNAKE_OUTER_RADIUS = 64.f;
     static constexpr float SNAKE_EVASION_RADIUS = 24.f;
-    static constexpr float SNAKE_EVASION_SPEED_MULT = 0.35f;
+    static constexpr float SNAKE_EVASION_SPEED_MULT = 0.45f;
     static constexpr float SNAKE_RETREAT_SPEED_MULT = 1.0f;
     static constexpr float SNAKE_RETREAT_MAX_TIME = 1.5f;
     static constexpr float SNAKE_DETECT_RANGE      = 18.f;
@@ -211,7 +267,7 @@ private:
     static constexpr float SNAKE_PERSONAL_MAX_LEASH_RADIUS = 42.f;
     static constexpr float SNAKE_THREAT_WEIGHT_RANGE = SNAKE_STOP_EVADE_RANGE;
     static constexpr float SNAKE_WANDER_INTERVAL   = 3.5f;
-    static constexpr float SNAKE_WANDER_SPEED_MULT = 0.15f;
+    static constexpr float SNAKE_WANDER_SPEED_MULT = 0.2f;
     static constexpr float SNAKE_EVASION_REFRESH   = 0.5f;
     static constexpr int   SNAKE_WAVE_MAX_COUNT = 60;
     static constexpr int   SNAKE_WAVE_MULTIPLIER = 10;

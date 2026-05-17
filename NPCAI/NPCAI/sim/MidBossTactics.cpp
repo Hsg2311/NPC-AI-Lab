@@ -882,10 +882,13 @@ void GrandBaumMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader)
 
     if (phase_ == Phase::Cooldown) {
         tacticCooldown_ -= dt;
+        updateBossMelee(dt, room, leader);
 
-        TacticalSquad* snakeSquad = leader.getSquads().size() >= 4
-            ? leader.getSquads()[3] : nullptr;
-        updateSnakeEvasion(dt, room, leader, snakeSquad);
+        if (shouldPreserveOriginalSnakes()) {
+            TacticalSquad* snakeSquad = leader.getSquads().size() >= 4
+                ? leader.getSquads()[3] : nullptr;
+            updateSnakeEvasion(dt, room, leader, snakeSquad);
+        }
 
         engageRefreshTimer_ -= dt;
         if (engageRefreshTimer_ <= 0.f) {
@@ -897,12 +900,17 @@ void GrandBaumMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader)
             return;
 
         enterPhase(Phase::Engage, "GrandBaum tactic cooldown finished", leader);
+        return;
     }
 
     if (phase_ == Phase::Engage) {
-        TacticalSquad* snakeSquad = leader.getSquads().size() >= 4
-            ? leader.getSquads()[3] : nullptr;
-        updateSnakeEvasion(dt, room, leader, snakeSquad);
+        updateBossMelee(dt, room, leader);
+
+        if (shouldPreserveOriginalSnakes()) {
+            TacticalSquad* snakeSquad = leader.getSquads().size() >= 4
+                ? leader.getSquads()[3] : nullptr;
+            updateSnakeEvasion(dt, room, leader, snakeSquad);
+        }
 
         if (!engageOrderIssued_) {
             issueEngage(room, leader);
@@ -930,7 +938,18 @@ void GrandBaumMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader)
                 return;
             }
 
+            int liveSlimes = countLiveSlimeMembers(room, leader);
+            if (!canFormShieldWall(liveSlimes)) {
+                cleanupSnakeWave(room);
+                tacticCooldown_ = TACTIC_COOLDOWN_DURATION;
+                enterPhase(Phase::Cooldown,
+                    "GrandBaum ShieldWall skipped - not enough slimes",
+                    leader);
+                return;
+            }
+
             originalSnakeCountAtShieldWall_ = liveOriginalSnakes;
+            shieldWallRingRadius_ = calcShieldWallRadius(liveSlimes);
             cleanupSnakeWave(room);
             enterPhase(Phase::ShieldWall, "GrandBaum ShieldWall activated", leader);
             applyShieldWallProtection(room, leader, true);
@@ -968,6 +987,7 @@ void GrandBaumMidBossTactic::enterPhase(Phase next, const char* reason,
         engageOrderIssued_ = false;
         engageRefreshTimer_ = 0.f;
         shieldWallRingIssued_ = false;
+        shieldWallRingRadius_ = MAX_SHIELD_RING_RADIUS;
         snakeRetreatTimer_ = 0.f;
         snakeWaveSpawned_ = false;
         originalSnakeCountAtShieldWall_ = 0;
@@ -984,6 +1004,7 @@ void GrandBaumMidBossTactic::enterPhase(Phase next, const char* reason,
         snakeRetreatTimer_ = 0.f;
         snakeWaveSpawned_ = false;
         shieldWallRingIssued_ = false;
+        resetBossMelee(leader);
         snakePersonalTargets_.clear();
         snakePersonalTimers_.clear();
         snakePersonalEvading_.clear();
@@ -994,9 +1015,426 @@ void GrandBaumMidBossTactic::enterPhase(Phase next, const char* reason,
     if (next == Phase::Cooldown) {
         engageRefreshTimer_ = ENGAGE_REFRESH_INTERVAL;
         shieldWallRingIssued_ = false;
+        shieldWallRingRadius_ = MAX_SHIELD_RING_RADIUS;
         snakeRetreatTimer_ = 0.f;
         snakeWaveSpawned_ = false;
     }
+}
+
+void GrandBaumMidBossTactic::resetBossMelee(PlatoonLeader& leader) {
+    bossMeleeState_ = BossMeleeState::AcquireTarget;
+    bossMeleeTimer_ = 0.f;
+    bossMeleeTargetLockTimer_ = 0.f;
+    bossMeleeSamePriorityRetargetTimer_ = 0.f;
+    bossMeleeTargetId_ = 0;
+    bossMeleeTargetPriority_ = BossTargetPriority::None;
+    leader.setTacticalTarget(0);
+    leader.transitionTacticalState(TacticalNpcState::Idle, "GrandBaum boss melee reset");
+}
+
+void GrandBaumMidBossTactic::updateBossMelee(
+    float dt, Room& room, PlatoonLeader& leader) {
+    if (bossMeleeTargetLockTimer_ > 0.f)
+        bossMeleeTargetLockTimer_ = std::max(0.f, bossMeleeTargetLockTimer_ - dt);
+    if (bossMeleeSamePriorityRetargetTimer_ > 0.f) {
+        bossMeleeSamePriorityRetargetTimer_ =
+            std::max(0.f, bossMeleeSamePriorityRetargetTimer_ - dt);
+    }
+
+    auto acquireTarget = [&]() {
+        BossTargetChoice choice = selectBossMeleeTarget(room, leader);
+        bossMeleeTargetId_ = choice.targetId;
+        bossMeleeTargetPriority_ = choice.priority;
+        leader.setTacticalTarget(bossMeleeTargetId_);
+        if (bossMeleeTargetId_ == 0) {
+            bossMeleeTargetLockTimer_ = 0.f;
+            bossMeleeSamePriorityRetargetTimer_ = 0.f;
+            leader.transitionTacticalState(TacticalNpcState::Idle,
+                "GrandBaum no melee target");
+            return false;
+        }
+        bossMeleeTargetLockTimer_ = BOSS_TARGET_LOCK_DURATION;
+        bossMeleeSamePriorityRetargetTimer_ =
+            BOSS_SAME_PRIORITY_RETARGET_INTERVAL;
+        bossMeleeState_ = BossMeleeState::ChaseTarget;
+        leader.transitionTacticalState(TacticalNpcState::Chase,
+            isResourceThreatPriority(bossMeleeTargetPriority_)
+                ? "GrandBaum chase resource threat"
+                : "GrandBaum chase nearest player");
+        return true;
+    };
+
+    if (bossMeleeState_ == BossMeleeState::AcquireTarget) {
+        acquireTarget();
+        return;
+    }
+
+    Actor* target = bossMeleeTargetId_ != 0
+        ? room.findActorById(bossMeleeTargetId_)
+        : nullptr;
+    if (!target || !target->isAlive()) {
+        bool wasChasing = bossMeleeState_ == BossMeleeState::ChaseTarget;
+        bossMeleeState_ = BossMeleeState::AcquireTarget;
+        bossMeleeTargetId_ = 0;
+        bossMeleeTargetPriority_ = BossTargetPriority::None;
+        bossMeleeTargetLockTimer_ = 0.f;
+        bossMeleeSamePriorityRetargetTimer_ = 0.f;
+        if (!acquireTarget() || !wasChasing)
+            return;
+
+        target = bossMeleeTargetId_ != 0
+            ? room.findActorById(bossMeleeTargetId_)
+            : nullptr;
+        if (!target || !target->isAlive())
+            return;
+    }
+
+    TacticalNpcConfig cfg = leader.getConfig();
+    float attackRange = leader.getAttackRange();
+    float attackRangeSq = attackRange * attackRange;
+
+    if (bossMeleeState_ == BossMeleeState::ChaseTarget) {
+        if (!isCurrentBossMeleeTargetValid(room, leader)) {
+            bossMeleeState_ = BossMeleeState::AcquireTarget;
+            bossMeleeTargetId_ = 0;
+            bossMeleeTargetPriority_ = BossTargetPriority::None;
+            bossMeleeTargetLockTimer_ = 0.f;
+            bossMeleeSamePriorityRetargetTimer_ = 0.f;
+            if (!acquireTarget())
+                return;
+
+            target = bossMeleeTargetId_ != 0
+                ? room.findActorById(bossMeleeTargetId_)
+                : nullptr;
+            if (!target || !target->isAlive())
+                return;
+        }
+
+        if (bossMeleeTargetLockTimer_ <= 0.f) {
+            BossTargetChoice priorityTarget = selectBossMeleeTarget(room, leader);
+            bool shouldSwitchTarget = false;
+            if (priorityTarget.targetId != 0) {
+                int newPriority = static_cast<int>(priorityTarget.priority);
+                int currentPriority = static_cast<int>(bossMeleeTargetPriority_);
+                if (newPriority > currentPriority) {
+                    shouldSwitchTarget = true;
+                } else if (newPriority == currentPriority &&
+                           priorityTarget.targetId != bossMeleeTargetId_ &&
+                           bossMeleeSamePriorityRetargetTimer_ <= 0.f) {
+                    shouldSwitchTarget = true;
+                }
+            }
+
+            if (shouldSwitchTarget) {
+                bool targetChanged =
+                    priorityTarget.targetId != bossMeleeTargetId_;
+                bossMeleeTargetId_ = priorityTarget.targetId;
+                bossMeleeTargetPriority_ = priorityTarget.priority;
+                bossMeleeTargetLockTimer_ = BOSS_TARGET_LOCK_DURATION;
+                bossMeleeSamePriorityRetargetTimer_ =
+                    BOSS_SAME_PRIORITY_RETARGET_INTERVAL;
+                leader.setTacticalTarget(bossMeleeTargetId_);
+                if (targetChanged) {
+                    target = room.findActorById(bossMeleeTargetId_);
+                    if (!target || !target->isAlive()) {
+                        bossMeleeState_ = BossMeleeState::AcquireTarget;
+                        bossMeleeTargetId_ = 0;
+                        bossMeleeTargetPriority_ = BossTargetPriority::None;
+                        bossMeleeTargetLockTimer_ = 0.f;
+                        bossMeleeSamePriorityRetargetTimer_ = 0.f;
+                        return;
+                    }
+                }
+            }
+        }
+
+        Vec3 toTarget = target->getPosition() - leader.getPosition();
+        if (toTarget.lengthSq() <= attackRangeSq) {
+            bossMeleeState_ = BossMeleeState::AttackWindup;
+            bossMeleeTimer_ = 0.f;
+            leader.transitionTacticalState(TacticalNpcState::AttackWindup,
+                "GrandBaum melee windup");
+            return;
+        }
+
+        moveBossToward(leader, target->getPosition(), BOSS_CHASE_SPEED_MULT, dt);
+        return;
+    }
+
+    if (bossMeleeState_ == BossMeleeState::AttackWindup) {
+        Vec3 toTarget = target->getPosition() - leader.getPosition();
+        if (toTarget.lengthSq() > 0.01f)
+            leader.setFacing(toTarget.normalized());
+
+        bossMeleeTimer_ += dt;
+        if (bossMeleeTimer_ < cfg.attackWindupTime)
+            return;
+
+        if (Vec3::distanceSq(leader.getPosition(), target->getPosition()) <=
+            attackRangeSq) {
+            target->takeDamage(leader.getAttackDamage());
+            char buf[160];
+            std::snprintf(buf, sizeof(buf),
+                "GrandBaum melee hit %s for %.0f (hp=%.1f)",
+                target->getName().c_str(),
+                leader.getAttackDamage(),
+                target->getHp());
+            Logger::get().log(leader.getName(), buf);
+        } else {
+            Logger::get().log(leader.getName(), "GrandBaum melee missed");
+        }
+
+        bossMeleeState_ = BossMeleeState::AttackRecover;
+        bossMeleeTimer_ = 0.f;
+        leader.transitionTacticalState(TacticalNpcState::AttackRecover,
+            "GrandBaum melee recover");
+        return;
+    }
+
+    if (bossMeleeState_ == BossMeleeState::AttackRecover) {
+        Vec3 toTarget = target->getPosition() - leader.getPosition();
+        if (toTarget.lengthSq() > 0.01f)
+            leader.setFacing(toTarget.normalized());
+
+        bossMeleeTimer_ += dt;
+        if (bossMeleeTimer_ < cfg.attackRecoverTime)
+            return;
+
+        bossMeleeState_ = BossMeleeState::AcquireTarget;
+        bossMeleeTimer_ = 0.f;
+    }
+}
+
+GrandBaumMidBossTactic::BossTargetChoice
+GrandBaumMidBossTactic::selectBossMeleeTarget(
+    Room& room, const PlatoonLeader& leader) const {
+    if (shouldPreserveOriginalSnakes()) {
+        BossTargetChoice snakeThreat =
+            selectOriginalSnakeThreatTarget(room, leader);
+        if (snakeThreat.targetId != 0)
+            return snakeThreat;
+
+        BossTargetChoice slimeThreat =
+            selectSlimeThreatTarget(room, leader);
+        if (slimeThreat.targetId != 0)
+            return slimeThreat;
+    }
+
+    return selectNearestPlayerTarget(room, leader.getPosition());
+}
+
+GrandBaumMidBossTactic::BossTargetChoice
+GrandBaumMidBossTactic::selectOriginalSnakeThreatTarget(
+    Room& room, const PlatoonLeader& leader) const {
+    uint32_t bestPlayerId = 0;
+    float bestDistSq = -1.f;
+    float rangeSq = SNAKE_STOP_EVADE_RANGE * SNAKE_STOP_EVADE_RANGE;
+
+    for (uint32_t snakeId : getOriginalSnakeCandidateIds(leader)) {
+        Actor* snake = room.findActorById(snakeId);
+        if (!snake || !snake->isAlive())
+            continue;
+
+        for (Player* player : room.getLivingPlayers()) {
+            if (!player || !player->isAlive())
+                continue;
+
+            float distSq =
+                Vec3::distanceSq(snake->getPosition(), player->getPosition());
+            if (distSq > rangeSq)
+                continue;
+
+            if (bestDistSq < 0.f || distSq < bestDistSq) {
+                bestDistSq = distSq;
+                bestPlayerId = player->getId();
+            }
+        }
+    }
+
+    return { bestPlayerId, bestPlayerId != 0
+        ? BossTargetPriority::SnakeThreat
+        : BossTargetPriority::None };
+}
+
+GrandBaumMidBossTactic::BossTargetChoice
+GrandBaumMidBossTactic::selectSlimeThreatTarget(
+    Room& room, const PlatoonLeader& leader) const {
+    int liveCount = 0;
+    Vec3 center = calcLiveSlimeCentroid(room, leader, liveCount);
+    if (liveCount <= 0)
+        return {};
+
+    return selectNearestPlayerNear(
+        room, center, BOSS_SLIME_THREAT_RANGE, BossTargetPriority::SlimeThreat);
+}
+
+std::vector<uint32_t> GrandBaumMidBossTactic::getOriginalSnakeCandidateIds(
+    const PlatoonLeader& leader) const {
+    if (!originalSnakeRoster_.empty())
+        return originalSnakeRoster_;
+
+    if (leader.getSquads().size() >= 4 && leader.getSquads()[3])
+        return leader.getSquads()[3]->getMembers();
+
+    return {};
+}
+
+GrandBaumMidBossTactic::BossTargetChoice
+GrandBaumMidBossTactic::selectNearestPlayerTarget(
+    const Room& room, const Vec3& center) const {
+    uint32_t bestId = 0;
+    float bestDistSq = -1.f;
+
+    for (Player* player : room.getLivingPlayers()) {
+        if (!player || !player->isAlive())
+            continue;
+
+        float distSq = Vec3::distanceSq(center, player->getPosition());
+        if (bestDistSq < 0.f || distSq < bestDistSq) {
+            bestDistSq = distSq;
+            bestId = player->getId();
+        }
+    }
+
+    return { bestId, bestId != 0
+        ? BossTargetPriority::Nearest
+        : BossTargetPriority::None };
+}
+
+GrandBaumMidBossTactic::BossTargetChoice
+GrandBaumMidBossTactic::selectNearestPlayerNear(
+    const Room& room, const Vec3& center, float radius,
+    BossTargetPriority priority) const {
+    uint32_t bestId = 0;
+    float bestDistSq = -1.f;
+    float radiusSq = radius * radius;
+
+    for (Player* player : room.getLivingPlayers()) {
+        if (!player || !player->isAlive())
+            continue;
+
+        float distSq = Vec3::distanceSq(center, player->getPosition());
+        if (distSq > radiusSq)
+            continue;
+        if (bestDistSq < 0.f || distSq < bestDistSq) {
+            bestDistSq = distSq;
+            bestId = player->getId();
+        }
+    }
+
+    return { bestId, bestId != 0 ? priority : BossTargetPriority::None };
+}
+
+bool GrandBaumMidBossTactic::isCurrentBossMeleeTargetValid(
+    Room& room, const PlatoonLeader& leader) const {
+    if (bossMeleeTargetId_ == 0)
+        return false;
+
+    Actor* target = room.findActorById(bossMeleeTargetId_);
+    if (!target || !target->isAlive())
+        return false;
+
+    if (bossMeleeTargetPriority_ == BossTargetPriority::Nearest)
+        return true;
+
+    if (!shouldPreserveOriginalSnakes())
+        return false;
+
+    if (bossMeleeTargetPriority_ == BossTargetPriority::SnakeThreat) {
+        float rangeSq = SNAKE_STOP_EVADE_RANGE * SNAKE_STOP_EVADE_RANGE;
+        for (uint32_t snakeId : getOriginalSnakeCandidateIds(leader)) {
+            Actor* snake = room.findActorById(snakeId);
+            if (!snake || !snake->isAlive())
+                continue;
+
+            if (Vec3::distanceSq(snake->getPosition(), target->getPosition()) <=
+                rangeSq) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if (bossMeleeTargetPriority_ == BossTargetPriority::SlimeThreat) {
+        int liveCount = 0;
+        Vec3 center = calcLiveSlimeCentroid(room, leader, liveCount);
+        return liveCount > 0 &&
+            Vec3::distanceSq(center, target->getPosition()) <=
+                BOSS_SLIME_THREAT_RANGE * BOSS_SLIME_THREAT_RANGE;
+    }
+
+    return false;
+}
+
+bool GrandBaumMidBossTactic::isResourceThreatPriority(
+    BossTargetPriority priority) const {
+    return priority == BossTargetPriority::SnakeThreat ||
+           priority == BossTargetPriority::SlimeThreat;
+}
+
+Vec3 GrandBaumMidBossTactic::calcLiveOriginalSnakeCentroid(
+    Room& room, const PlatoonLeader& leader, int& outLiveCount) const {
+    Vec3 sum{};
+    outLiveCount = 0;
+
+    if (!originalSnakeRoster_.empty()) {
+        for (uint32_t memberId : originalSnakeRoster_) {
+            Actor* actor = room.findActorById(memberId);
+            if (actor && actor->isAlive()) {
+                sum += actor->getPosition();
+                ++outLiveCount;
+            }
+        }
+    } else if (leader.getSquads().size() >= 4 && leader.getSquads()[3]) {
+        for (uint32_t memberId : leader.getSquads()[3]->getMembers()) {
+            Actor* actor = room.findActorById(memberId);
+            if (actor && actor->isAlive()) {
+                sum += actor->getPosition();
+                ++outLiveCount;
+            }
+        }
+    }
+
+    if (outLiveCount > 0)
+        return sum / static_cast<float>(outLiveCount);
+    return leader.getPosition();
+}
+
+Vec3 GrandBaumMidBossTactic::calcLiveSlimeCentroid(
+    Room& room, const PlatoonLeader& leader, int& outLiveCount) const {
+    Vec3 sum{};
+    outLiveCount = 0;
+
+    const auto& squads = leader.getSquads();
+    const size_t slimeIndices[] = { 0, 1, 2 };
+    for (size_t idx : slimeIndices) {
+        if (idx >= squads.size() || !squads[idx])
+            continue;
+
+        for (uint32_t memberId : squads[idx]->getMembers()) {
+            Actor* actor = room.findActorById(memberId);
+            if (actor && actor->isAlive()) {
+                sum += actor->getPosition();
+                ++outLiveCount;
+            }
+        }
+    }
+
+    if (outLiveCount > 0)
+        return sum / static_cast<float>(outLiveCount);
+    return leader.getPosition();
+}
+
+void GrandBaumMidBossTactic::moveBossToward(
+    PlatoonLeader& leader, const Vec3& targetPos, float speedMult, float dt) const {
+    Vec3 toTarget = targetPos - leader.getPosition();
+    if (toTarget.lengthSq() <= 0.01f)
+        return;
+
+    Vec3 dir = toTarget.normalized();
+    leader.setPosition(leader.getPosition() +
+        dir * leader.getLeaderMoveSpeed() * speedMult * dt);
+    leader.setFacing(dir);
 }
 
 void GrandBaumMidBossTactic::issueEngage(Room& room, PlatoonLeader& leader) {
@@ -1004,20 +1442,15 @@ void GrandBaumMidBossTactic::issueEngage(Room& room, PlatoonLeader& leader) {
 
     if (targetId == 0) {
         issueIdleAll(leader);
-        leader.setTacticalTarget(0);
-        leader.transitionTacticalState(TacticalNpcState::Idle, "GrandBaum no player target");
         return;
     }
-
-    leader.setTacticalTarget(targetId);
-    if (leader.getState() == TacticalNpcState::Idle)
-        leader.transitionTacticalState(TacticalNpcState::Chase, "GrandBaum Engage");
 
     std::vector<TacticalSquad*> liveSquads = collectLiveSquads(leader);
     std::vector<uint32_t> targets(liveSquads.size(), targetId);
     assignSquadsToPlayers(room, leader, liveSquads, targets);
 
-    TacticalSquad* originalSnakeSquad = leader.getSquads().size() >= 4
+    TacticalSquad* originalSnakeSquad = shouldPreserveOriginalSnakes() &&
+        leader.getSquads().size() >= 4
         ? leader.getSquads()[3]
         : nullptr;
 
@@ -1049,7 +1482,7 @@ void GrandBaumMidBossTactic::issueShieldWall(Room& room, PlatoonLeader& leader) 
         shieldWallRingCenter_ = leaderPos;
         shieldWallRingStartAngle_ = std::atan2f(forward.z, forward.x) - 3.14159265f;
         shieldWallRingIssued_ = true;
-        room.knockPlayersOutOfShieldWall(shieldWallRingCenter_, SHIELD_RING_RADIUS);
+        room.knockPlayersOutOfShieldWall(shieldWallRingCenter_, shieldWallRingRadius_);
 
         std::vector<TacticalSquad*> slimeSquads;
         int totalSlimeMembers = 0;
@@ -1060,15 +1493,19 @@ void GrandBaumMidBossTactic::issueShieldWall(Room& room, PlatoonLeader& leader) 
             TacticalSquad* squad = squads[idx];
             if (!squad || squad->isEmpty())
                 continue;
+            int liveMembers = countLiveMembers(room, squad);
+            if (liveMembers <= 0)
+                continue;
             slimeSquads.push_back(squad);
-            totalSlimeMembers += static_cast<int>(squad->getMembers().size());
+            totalSlimeMembers += liveMembers;
         }
 
         constexpr float TWO_PI = 2.f * 3.14159265f;
         float angleAccum = shieldWallRingStartAngle_;
         if (totalSlimeMembers > 0) {
             for (TacticalSquad* squad : slimeSquads) {
-                float fraction = static_cast<float>(squad->getMembers().size()) /
+                int liveMembers = countLiveMembers(room, squad);
+                float fraction = static_cast<float>(liveMembers) /
                                  static_cast<float>(totalSlimeMembers);
                 float sectorSpan = TWO_PI * fraction;
 
@@ -1078,7 +1515,9 @@ void GrandBaumMidBossTactic::issueShieldWall(Room& room, PlatoonLeader& leader) 
                 ord.tacticCenter = shieldWallRingCenter_;
                 ord.sectorAngle = angleAccum + sectorSpan * 0.5f;
                 ord.sectorSpan = sectorSpan;
-                ord.approachRadius = SHIELD_RING_RADIUS;
+                ord.approachRadius = shieldWallRingRadius_;
+                ord.slotSpacingScale = SHIELD_RING_MIN_ARC_SPACING;
+                ord.slotColumnScale = SHIELD_RING_LANE_SPACING;
                 squad->receiveOrder(ord);
 
                 angleAccum += sectorSpan;
@@ -1103,6 +1542,30 @@ int GrandBaumMidBossTactic::countLiveMembers(Room& room, TacticalSquad* squad) c
             ++count;
     }
     return count;
+}
+
+int GrandBaumMidBossTactic::countLiveSlimeMembers(
+    Room& room, const PlatoonLeader& leader) const {
+    int count = 0;
+    const auto& squads = leader.getSquads();
+    const size_t slimeIndices[] = { 0, 1, 2 };
+    for (size_t idx : slimeIndices) {
+        if (idx >= squads.size())
+            continue;
+        count += countLiveMembers(room, squads[idx]);
+    }
+    return count;
+}
+
+bool GrandBaumMidBossTactic::canFormShieldWall(int liveSlimeCount) const {
+    return liveSlimeCount >= MIN_SHIELD_WALL_SLIME_COUNT;
+}
+
+float GrandBaumMidBossTactic::calcShieldWallRadius(int liveSlimeCount) const {
+    constexpr float TWO_PI = 2.f * 3.14159265f;
+    float radius = static_cast<float>(liveSlimeCount) *
+        SLIME_RING_SLOT_SPACING / TWO_PI;
+    return std::clamp(radius, MIN_SHIELD_RING_RADIUS, MAX_SHIELD_RING_RADIUS);
 }
 
 int GrandBaumMidBossTactic::calcSnakeWaveSpawnCount(
@@ -1507,6 +1970,10 @@ void GrandBaumMidBossTactic::reviveOriginalSnakeSquad(
             "GrandBaum original snake squad revived count=" +
             std::to_string(revivedCount));
     }
+}
+
+bool GrandBaumMidBossTactic::shouldPreserveOriginalSnakes() const {
+    return shieldWallTriggerStage_ < 2;
 }
 
 void GrandBaumMidBossTactic::applyShieldWallProtection(

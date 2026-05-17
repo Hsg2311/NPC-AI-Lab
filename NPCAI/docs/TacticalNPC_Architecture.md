@@ -1,6 +1,6 @@
 # Tactical NPC Architecture
 
-> 갱신: 2026-05-15  
+> 갱신: 2026-05-17  
 > 대상: `sim/IMidBossTactic`, `sim/MidBossTactics`, `sim/PlatoonLeader`, `sim/TacticalSquad`, `sim/TacticalNpc`, `sim/Room`
 
 Tactical NPC 시스템은 **전술 전략 - 지휘관 - 부대 - 개별 NPC**의 4계층 구조다.
@@ -215,7 +215,7 @@ Cooldown 종료:
 
 ## 5. GrandBaumMidBossTactic
 
-`GrandBaumMidBossTactic`은 그랜드밤 종족 전술만 담당한다. 현재 구현 범위는 `방패벽`과 `(ㄹ) 부대 외곽 웨이브형 주의-기습`이다.
+`GrandBaumMidBossTactic`은 그랜드밤 종족 전술을 담당한다. 현재 구현 범위는 `방패벽`, 원본 `(ㄹ)` 뱀 부대 보존/부활, 임시 외곽 뱀 웨이브, 그리고 본체의 위협자 우선 근접 추격이다.
 
 ### 5-1. Phase
 
@@ -229,76 +229,75 @@ Cooldown
 
 ```text
 시작:
-  모든 Squad -> Engage
-  여러 플레이어가 있으면 Squad별로 타겟 분산
+  모든 일반 Squad -> Engage
+  원본 뱀 보존 단계라면 (ㄹ) 뱀 부대는 개별 분산 회피/배회
 
-전술 조건 충족:
+HP 단계 통과:
   Engage -> ShieldWall
 
 ShieldWall 완료:
-  (ㄹ) 뱀 부대 전멸
-  모든 Squad -> Engage
+  임시 외곽 뱀 웨이브 cleanup
+  죽은 원본 뱀 부활 및 원본 squad 재등록
   Cooldown
 
 Cooldown 종료:
   Engage 복귀
 ```
 
-`ShieldWall` 안에서 `(ㄹ) 부대 주의-기습`이 함께 진행된다. `(ㄱ)/(ㄴ)/(ㄷ)` 슬라임 부대는 중간보스를 원 형태로 포위하고 바깥쪽을 바라보며 지킨다. `(ㄹ)` 원본 뱀 부대는 외곽으로 빠르게 후퇴하고, 생존 원본 뱀 수에 비례한 임시 외곽 웨이브가 플레이어를 압박한다. 방패벽은 임시 외곽 웨이브가 전멸하면 종료된다.
+`Cooldown`과 `Engage` 중에는 본체가 플레이어를 직접 추격/공격한다. 타겟 우선순위는 `SnakeThreat > SlimeThreat > Nearest`이며, 방패벽 `ShieldWall` 중에는 본체 추격/공격 패턴을 중단한다.
 
-일반 `Engage` 상태에서는 고블린과 같은 공용 타겟 분배 helper를 사용한다. 각 Squad 중심과 플레이어 위치를 비교해 가까운 플레이어에게 배정하되, 한 플레이어에게 모든 Squad가 몰리지 않도록 플레이어별 최대 배정 수를 제한한다.
+일반 부대 `Engage`는 공용 타겟 분배 helper를 사용한다. 다만 원본 `(ㄹ)` 뱀 부대는 두 번째 방패벽 단계가 소비되기 전까지 보존 대상이므로 일반 `Engage`에서 제외되고, 전술 전/전술 사이에는 개별 `HoldSlot` 기반 분산 회피/배회를 수행한다. 두 번째 방패벽 이후에는 원본 뱀 보존이 끝나고 일반 전투에 참여할 수 있다.
 
 ### 5-2. 방패벽 발동
 
-발동 조건:
+방패벽은 HP 단계 기반으로 최대 2회 발동한다.
 
 ```text
-leader.hp / leader.maxHp <= grandBaumA
+1차: leader.hp / leader.maxHp <= 0.66
+2차: leader.hp / leader.maxHp <= 0.33
 ```
 
-기본 `grandBaumA` 값은 `0.5f`다.
+이전 tick HP 비율과 현재 HP 비율을 비교해 새로 통과한 단계를 소비한다. HP가 한 번에 `33%` 이하로 떨어져 `66%`와 `33%` 단계를 동시에 통과하면 방패벽은 1회만 발동하고 두 단계를 모두 소비한다. 방패벽 자원이 부족해 실패해도 해당 HP 단계는 재시도하지 않는다.
 
-전술 재발동은 `TACTIC_COOLDOWN_DURATION` 동안 막힌다. 쿨타임 중에도 부대는 일반 `Engage` 상태를 유지한다.
+방패벽 발동 직전 `(ㄱ)/(ㄴ)/(ㄷ)` 슬라임 부대의 생존 수를 합산한다. 생존 슬라임 총합이 `MIN_SHIELD_WALL_SLIME_COUNT = 10` 미만이면 슬라임 링, 넉백, 하드 블록, 피해 감소, 뱀 웨이브를 적용하지 않고 실패 처리한 뒤 `Cooldown`으로 들어간다.
 
-방패벽 배치:
+방패벽 반지름은 발동 순간 생존 슬라임 수로 한 번만 계산하고, 방패벽 지속 중에는 재계산하지 않는다.
 
 ```text
-playerCentroid = 살아있는 플레이어 위치 평균
-forward        = normalize(playerCentroid - grandBaumPos)
-
-slimeRingCenter = grandBaumPos
-slimeRingRadius = SHIELD_RING_RADIUS
-slimeFacing     = normalize(slimeSlot - grandBaumPos)
+shieldWallRingCenter = grandBaumPos
+shieldWallRingRadius = clamp(liveSlimeCount * 4.5 / 2π, 7, 12)
+slimeFacing          = normalize(slimeSlot - grandBaumPos)
 ```
 
-슬라임 링 슬롯은 방패벽 발동 시점에 한 번만 계산한다. 이후 플레이어가 이동하더라도 `(ㄱ)/(ㄴ)/(ㄷ)` 슬라임의 슬롯은 재배정되지 않으며, 방패벽이 종료될 때까지 같은 링 위치를 유지한다.
+슬라임 링 슬롯은 방패벽 발동 시점에 계산된다. `(ㄱ)/(ㄴ)/(ㄷ)` 슬라임은 `RingGuard` 명령을 받고, 슬롯 간격과 lane 간격을 사용해 너무 촘촘하게 겹치지 않도록 배치된다.
 
-방패벽 발동 순간 GrandBaum의 원형 방패벽 안쪽에 있는 플레이어는 중심에서 바깥쪽으로 짧고 강한 넉백을 받는다. 이는 순간이동 보정이 아니라 `Player`의 넉백 상태로 처리되는 강제 밀림 연출이며, 넉백 중에는 일반 이동 목표보다 밀림 방향이 우선하지만 플레이어의 facing은 넉백 직전 방향을 유지한다. 넉백 종료 후에도 약 `0.25`초 동안 일반 이동을 잠깐 막아 밀려난 충격이 남도록 한다. 내부 플레이어가 슬라임 하드 블록에 다시 막히지 않도록 방패벽 발동 넉백 중에는 방패벽 하드 블록만 무시하고, 기본 넉백 속도는 `SHIELD_WALL_KNOCKBACK_SPEED = 120.f`다.
+방패벽 발동 순간 원형 방패벽 안쪽에 있는 플레이어는 중심에서 바깥쪽으로 짧고 강한 넉백을 받는다. 이는 순간이동 보정이 아니라 `Player`의 넉백 상태로 처리되는 강제 밀림 연출이며, 기본 넉백 속도는 `SHIELD_WALL_KNOCKBACK_SPEED = 120.f`다.
 
 방패벽 중 `(ㄱ)/(ㄴ)/(ㄷ)` 슬라임은 플레이어 이동에 대한 물리 차단체로 등록된다. 플레이어가 슬라임 충돌 반경 안으로 이동하려 하면 이동 결과가 링 바깥 경계로 보정되어 중간보스 안쪽으로 뚫고 들어갈 수 없다.
 
-방패벽 중 `GrandBaum` 중간보스와 `(ㄱ)/(ㄴ)/(ㄷ)` 슬라임 부대는 받는 피해가 `70%` 감소한다. 구현상 피해 배율은 `SHIELDWALL_DAMAGE_MULT = 0.3f`이며, `(ㄹ)` 뱀 부대에는 적용하지 않는다.
+방패벽 중 `GrandBaum` 중간보스와 살아 있는 `(ㄱ)/(ㄴ)/(ㄷ)` 슬라임은 받는 피해가 `90%` 감소한다. 구현상 피해 배율은 `SHIELDWALL_DAMAGE_MULT = 0.1f`이며, 원본 뱀과 임시 웨이브 뱀에는 적용하지 않는다.
 
 부대 해석:
 
-| 부대 순서 | 의미 | 명령 |
+| 부대 순서 | 의미 | 평상시/방패벽 명령 |
 |---|---|---|
-| `squads[0]` | (ㄱ) 슬라임 원형 호위 | `RingGuard` |
-| `squads[1]` | (ㄴ) 슬라임 원형 호위 | `RingGuard` |
-| `squads[2]` | (ㄷ) 슬라임 원형 호위 | `RingGuard` |
-| `squads[3]` | (ㄹ) 뱀족 외곽 회피/웨이브 기습 | `FormationHold` 후퇴 후 임시 웨이브 `DistributedEngage` |
+| `squads[0]` | (ㄱ) 슬라임 | `Engage`, 방패벽 중 `RingGuard` |
+| `squads[1]` | (ㄴ) 슬라임 | `Engage`, 방패벽 중 `RingGuard` |
+| `squads[2]` | (ㄷ) 슬라임 | `Engage`, 방패벽 중 `RingGuard` |
+| `squads[3]` | (ㄹ) 원본 뱀 | 보존 중 개별 `HoldSlot`, 방패벽 중 외곽 후퇴/웨이브 자원, 2차 이후 `Engage` 가능 |
 
-### 5-3. (ㄹ) 주의-기습
+### 5-3. 원본 뱀 보존과 외곽 웨이브
 
-- 평상시 `(ㄹ)` 뱀 부대는 플레이어와 정면 교전하지 않고 플레이어 centroid 외곽을 `FormationHold`로 계속 움직인다.
-- 회피 이동은 플레이어가 추격하면 잡을 수 있도록 `SNAKE_EVASION_SPEED_MULT = 0.75f`를 사용한다.
-- 방패벽 발동 직전 살아 있는 원본 뱀 수를 먼저 확인한다. 생존 수가 `0`이면 슬라임 링/넉백/피해 감소/하드 블록을 적용하지 않고 방패벽 전술을 즉시 실패 처리한 뒤 쿨다운에 들어간다.
-- 생존 원본 뱀이 있으면 방패벽을 정상 발동하고, 원본 뱀 부대는 `shieldWallRingCenter` 기준 외곽 반경 `SNAKE_OUTER_RADIUS = 64.f`로 빠르게 후퇴한다.
+- 원본 `(ㄹ)` 뱀 부대 roster는 처음 확인될 때 별도로 저장한다. 죽어서 squad 멤버 목록에서 빠져도 원본 뱀 ID를 잃지 않기 위해서다.
+- 전술 전/전술 사이 원본 뱀은 squad 단위 대형 명령이 아니라 멤버별 `HoldSlot` 명령으로 분산 회피/배회한다.
+- 개인 회피는 각 뱀 위치 기준으로 플레이어 위협을 계산한다. 가까운 플레이어가 있으면 반대 방향으로 도망가고, 멀면 대기 중심 주변에서 중간 폭으로 배회한다.
+- 방패벽 발동 순간 살아 있는 원본 뱀 수가 `0`이면 방패벽은 실패한다.
+- 생존 원본 뱀이 있으면 원본 뱀은 `shieldWallRingCenter` 기준 외곽 반경 `SNAKE_OUTER_RADIUS = 64.f`로 후퇴한다.
 - 원본 뱀이 외곽 슬롯에 도착하거나 `SNAKE_RETREAT_MAX_TIME = 1.5f`가 지나면 임시 외곽 뱀 웨이브가 등장한다.
 - 웨이브 수는 `min(생존 원본 뱀 수 * 10, 60)`을 4의 배수로 내림 정렬한다.
 
 ```text
-0마리 생존 -> 0마리 소환, 방패벽 즉시 실패
+0마리 생존 -> 0마리 소환, 방패벽 실패
 1마리 생존 -> 8마리 소환
 2마리 생존 -> 20마리 소환
 3마리 생존 -> 28마리 소환
@@ -307,11 +306,28 @@ slimeFacing     = normalize(slimeSlot - grandBaumPos)
 6마리 이상 -> 60마리 소환
 ```
 
-- 외곽 웨이브 뱀은 `shieldWallRingCenter` 기준 원 위에 균등 배치된다.
+- 임시 웨이브 뱀은 `shieldWallRingCenter` 기준 원 위에 균등 배치된다.
 - 웨이브 뱀은 `DistributedEngage` 명령으로 살아 있는 플레이어에게 id 정렬 후 round-robin 분배된다.
 - 방패벽 종료 조건은 임시 외곽 웨이브 전멸이다.
-- 웨이브 전멸 시 피해 감소와 하드 블록을 해제하고, `(ㄱ)/(ㄴ)/(ㄷ)` 슬라임과 살아남은 원본 `(ㄹ)` 뱀 부대는 다시 `Engage`로 복귀한다.
 - 방패벽 종료 후 임시 웨이브 NPC/squad는 `Room` cleanup API로 제거된다.
+- 방패벽 종료 후 죽은 원본 뱀은 max HP로 부활하고 원본 squad에 다시 등록된다. 임시 웨이브 뱀은 부활 대상이 아니다.
+
+### 5-4. 본체 타겟팅
+
+본체는 `Cooldown`과 `Engage` 중 기본 근접 전투를 수행한다. 새 돌진, 넉백, 범위 공격은 추가하지 않고 기존 공격 수치와 FSM의 `Chase`, `AttackWindup`, `AttackRecover`를 사용한다.
+
+타겟 우선순위:
+
+```text
+SnakeThreat > SlimeThreat > Nearest
+```
+
+- `SnakeThreat`는 살아 있는 원본 뱀 개별 위치 기준 `SNAKE_STOP_EVADE_RANGE = 24.f` 안에 있는 플레이어다. 여러 후보가 있으면 가장 가까운 플레이어-뱀 쌍의 플레이어를 선택한다.
+- `SlimeThreat`는 전체 생존 슬라임 centroid 기준 `BOSS_SLIME_THREAT_RANGE = 12.f` 안에 있는 플레이어다.
+- 자원 위협자가 없으면 본체에서 가장 가까운 살아 있는 플레이어를 선택한다.
+- 타겟 획득 또는 우선순위 상승 교체 후 `BOSS_TARGET_LOCK_DURATION = 1.4f` 동안 타겟을 유지한다.
+- 같은 우선순위 타겟은 `BOSS_SAME_PRIORITY_RETARGET_INTERVAL = 2.5f`마다 현재 선택 기준의 최우선 후보가 다를 때 교체할 수 있다.
+- Chase 속도는 우선순위와 무관하게 `BOSS_CHASE_SPEED_MULT = 8.0f`를 사용한다.
 
 ---
 
@@ -344,7 +360,7 @@ slimeFacing     = normalize(slimeSlot - grandBaumPos)
 | `RingGuard` | `HoldSlot` | 지정 중심을 원형으로 둘러싸고 바깥쪽을 바라봄 |
 | `DistributedEngage` | `EngageTarget` | 멤버 순서대로 `targetIds`를 round-robin 분배해 공격 |
 
-`FormationHold`, `FormationGuard`, `RingGuard`, `DistributedEngage`는 종족을 모르는 공용 명령이다. 그랜드밤 방패벽은 이 명령들을 사용하지만, `TacticalSquad`는 그 명령이 그랜드밤 전술인지 알지 않는다.
+`FormationHold`, `FormationGuard`, `RingGuard`, `DistributedEngage`는 종족을 모르는 공용 명령이다. 그랜드밤 방패벽은 이 중 `RingGuard`와 `DistributedEngage`를 사용하지만, `TacticalSquad`는 그 명령이 그랜드밤 전술인지 알지 않는다.
 
 ### 6-3. 슬롯 계산
 
@@ -492,7 +508,7 @@ else if (race == GrandBaum) { ... }
 |---|---|
 | `MidBossTacticBase` | 공용 helper, 종족별 전술 상수 없음 |
 | `GoblinMidBossTactic` | `TACTIC_INTERVAL`, `CLUSTER_RADIUS`, `ENCIRCLE_RADIUS`, `TACTIC_HP_THRESHOLD`, `BOX_FRONT_OFFSET`, `REGROUP_DIST` |
-| `GrandBaumMidBossTactic` | `ENGAGE_REFRESH_INTERVAL`, `ORDER_REFRESH_INTERVAL`, `TACTIC_COOLDOWN_DURATION`, `SHIELD_RING_RADIUS`, `SHIELDWALL_DAMAGE_MULT`, `SNAKE_OUTER_RADIUS`, `SNAKE_EVASION_RADIUS`, `SNAKE_EVASION_SPEED_MULT`, `SNAKE_RETREAT_MAX_TIME`, `SNAKE_WAVE_MAX_COUNT` |
+| `GrandBaumMidBossTactic` | `FIRST_SHIELD_WALL_HP_RATIO`, `SECOND_SHIELD_WALL_HP_RATIO`, `MIN_SHIELD_RING_RADIUS`, `MAX_SHIELD_RING_RADIUS`, `SLIME_RING_SLOT_SPACING`, `MIN_SHIELD_WALL_SLIME_COUNT`, `SHIELDWALL_DAMAGE_MULT`, `BOSS_CHASE_SPEED_MULT`, `BOSS_TARGET_LOCK_DURATION`, `BOSS_SAME_PRIORITY_RETARGET_INTERVAL`, `BOSS_SLIME_THREAT_RANGE`, `SNAKE_OUTER_RADIUS`, `SNAKE_EVASION_RADIUS`, `SNAKE_EVASION_SPEED_MULT`, `SNAKE_STOP_EVADE_RANGE`, `SNAKE_WAVE_MAX_COUNT`, `SNAKE_WAVE_MULTIPLIER` |
 | `TacticalSquad` | `WEDGE_EXIT_DISTANCE`, `WEDGE_PREP_APEX_DISTANCE`, `WEDGE_IMPACT_RADIUS`, `WEDGE_SPEED_MULT` |
 | `TacticalNpc` | `TACTICAL_SPEED_MULT` |
 | `Room` | `SOFT_BLOCK_RADIUS`, `SOFT_BLOCK_MIN_SPEED`, `SOFT_BLOCK_PUSH_SPEED`, `SHIELD_WALL_HARD_BLOCK_RADIUS`, `SHIELD_WALL_KNOCKBACK_SPEED` |

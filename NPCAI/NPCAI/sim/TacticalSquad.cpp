@@ -482,19 +482,69 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
         }
 
         case SquadOrderType::RingGuard: {
-            std::vector<Vec3> slots = calcEncircleSlots(
-                ord.tacticCenter, ord.sectorAngle, ord.sectorSpan,
-                ord.approachRadius, count);
+            std::vector<uint32_t> liveMemberIds;
+            liveMemberIds.reserve(memberIds_.size());
+            for (uint32_t id : memberIds_) {
+                Actor* a = room.findActorById(id);
+                auto* tnpc = dynamic_cast<TacticalNpc*>(a);
+                if (tnpc && tnpc->isAlive())
+                    liveMemberIds.push_back(id);
+            }
 
-            std::vector<bool> slotUsed(static_cast<size_t>(count), false);
-            for (int i = 0; i < count; ++i) {
-                Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
+            int liveCount = static_cast<int>(liveMemberIds.size());
+            if (liveCount <= 0)
+                return;
+
+            std::vector<Vec3> slots;
+            slots.reserve(liveMemberIds.size());
+            if (ord.slotSpacingScale > 1.f && ord.approachRadius > 0.01f &&
+                ord.sectorSpan > 0.01f) {
+                float minArcSpacing = ord.slotSpacingScale;
+                int maxPerLane = static_cast<int>(std::floorf(
+                    (ord.sectorSpan * ord.approachRadius) / minArcSpacing));
+                maxPerLane = std::clamp(maxPerLane, 1, liveCount);
+
+                int laneCount = (liveCount + maxPerLane - 1) / maxPerLane;
+                float laneSpacing = std::max(ord.slotColumnScale, 0.1f);
+                if (laneCount > 1) {
+                    float innerFloor = std::max(memberSeparationRadius_ * 2.f,
+                                                ord.approachRadius * 0.5f);
+                    float usableDepth = std::max(ord.approachRadius - innerFloor, 0.f);
+                    laneSpacing = std::min(laneSpacing,
+                                           usableDepth / static_cast<float>(laneCount - 1));
+                }
+
+                for (int lane = 0; lane < laneCount; ++lane) {
+                    int laneStart = lane * maxPerLane;
+                    int laneMembers = std::min(maxPerLane, liveCount - laneStart);
+                    if (laneMembers <= 0)
+                        continue;
+
+                    float radius = ord.approachRadius -
+                        laneSpacing * static_cast<float>(lane);
+                    float arc = ord.sectorSpan / static_cast<float>(laneMembers);
+                    float start = ord.sectorAngle - ord.sectorSpan * 0.5f + arc * 0.5f;
+                    for (int i = 0; i < laneMembers; ++i) {
+                        float a = start + arc * static_cast<float>(i);
+                        slots.push_back(ord.tacticCenter +
+                            Vec3{ std::cosf(a), 0.f, std::sinf(a) } * radius);
+                    }
+                }
+            } else {
+                slots = calcEncircleSlots(
+                    ord.tacticCenter, ord.sectorAngle, ord.sectorSpan,
+                    ord.approachRadius, liveCount);
+            }
+
+            std::vector<bool> slotUsed(slots.size(), false);
+            for (int i = 0; i < liveCount; ++i) {
+                Actor* a = room.findActorById(liveMemberIds[static_cast<size_t>(i)]);
                 auto* tnpc = dynamic_cast<TacticalNpc*>(a);
                 if (!tnpc || !tnpc->isAlive()) continue;
 
                 int bestSlot = -1;
                 float bestDist = -1.f;
-                for (int j = 0; j < count; ++j) {
+                for (int j = 0; j < static_cast<int>(slots.size()); ++j) {
                     if (slotUsed[static_cast<size_t>(j)]) continue;
                     float d = Vec3::distance(tnpc->getPosition(), slots[static_cast<size_t>(j)]);
                     if (bestDist < 0.f || d < bestDist) {
