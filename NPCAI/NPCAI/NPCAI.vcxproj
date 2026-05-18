@@ -154,6 +154,7 @@
     <ClInclude Include="sim\TacticalSquad.hpp" />
     <ClInclude Include="sim\PlatoonLeader.hpp" />
     <ClInclude Include="sim\ScenarioGrandBaum.hpp" />
+    <ClInclude Include="sim\ScenarioIsis.hpp" />
     <ClInclude Include="sim\ScenarioTactical.hpp" />
     <ClInclude Include="viz\Renderer.hpp" />
     <ClInclude Include="viz\Application.hpp" />
@@ -174,6 +175,7 @@
     <ClCompile Include="sim\TacticalSquad.cpp" />
     <ClCompile Include="sim\PlatoonLeader.cpp" />
     <ClCompile Include="sim\ScenarioGrandBaum.cpp" />
+    <ClCompile Include="sim\ScenarioIsis.cpp" />
     <ClCompile Include="sim\ScenarioTactical.cpp" />
     <ClCompile Include="viz\Renderer.cpp" />
     <ClCompile Include="viz\Application.cpp" />

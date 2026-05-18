@@ -84,6 +84,9 @@
     <ClInclude Include="sim\ScenarioGrandBaum.hpp">
       <Filter>sim\scenario</Filter>
     </ClInclude>
+    <ClInclude Include="sim\ScenarioIsis.hpp">
+      <Filter>sim\scenario</Filter>
+    </ClInclude>
     <ClInclude Include="sim\PlatoonLeader.hpp">
       <Filter>sim\Actor\tactical npc</Filter>
     </ClInclude>
@@ -141,6 +144,9 @@
       <Filter>sim\scenario</Filter>
     </ClCompile>
     <ClCompile Include="sim\ScenarioGrandBaum.cpp">
+      <Filter>sim\scenario</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\ScenarioIsis.cpp">
       <Filter>sim\scenario</Filter>
     </ClCompile>
     <ClCompile Include="sim\PlatoonLeader.cpp">

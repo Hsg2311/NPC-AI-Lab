@@ -37,6 +37,7 @@ struct SquadOrder {
     Vec3           formationTargetPos = {};  // 대형이 바라볼 타겟/플레이어 centroid
     Vec3           tacticCenter       = {};  // 포위/경계 중심 또는 후퇴 목표 위치
     float          speedMult          = 1.f;
+    float          chargeSpeedMult    = 0.f; // WedgeCharge only: 0 = shared default
     std::vector<uint32_t> targetIds    = {};  // WedgeCharge 대상 군집 플레이어들
 };
 

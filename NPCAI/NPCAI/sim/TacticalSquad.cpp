@@ -382,7 +382,9 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
                 cmd.impactRadius = std::max(WEDGE_IMPACT_RADIUS, memberAttackRange_);
                 cmd.impactDamage = WEDGE_CHARGE_DAMAGE;
                 cmd.passDistance = WEDGE_PASS_DISTANCE;
-                cmd.speedMult    = WEDGE_SPEED_MULT;
+                cmd.speedMult    = (ord.chargeSpeedMult > 0.f)
+                    ? ord.chargeSpeedMult
+                    : WEDGE_SPEED_MULT;
                 tnpc->receiveCommand(cmd);
             }
             break;

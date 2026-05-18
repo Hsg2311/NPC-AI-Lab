@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cmath>
 #include <memory>
+#include <random>
 #include <string>
 
 namespace sim {
@@ -837,6 +838,543 @@ std::vector<Vec3> GoblinMidBossTactic::calcSquadBoxOffsets(int numSquads) const 
         offsets.push_back(Vec3{ colOff, 0.f, arcZ });
     }
     return offsets;
+}
+
+IsisMidBossTactic::IsisMidBossTactic()
+    : rng_(std::random_device{}())
+{}
+
+void IsisMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
+    captureInitialSquadSizes(leader);
+    leader.removeDeadMembersFromSquads(room);
+
+    if (!tacticsUnlocked_ && checkUnlockCondition(leader)) {
+        tacticsUnlocked_ = true;
+        cooldownTimer_ = 0.f;
+        enterPhase(Phase::Cooldown, "Isis tactic unlocked by squad losses", leader);
+    }
+
+    if (phase_ == Phase::Engage) {
+        if (!engageIssued_) {
+            issueEngage(room, leader);
+            engageIssued_ = true;
+        }
+        if (tacticsUnlocked_) {
+            cooldownTimer_ -= dt;
+            if (cooldownTimer_ <= 0.f && hasLiveBomberSquad(leader)) {
+                enterPhase(Phase::RetreatForPincer,
+                           "Isis retreating before PincerStrike", leader);
+                return;
+            }
+        }
+    } else if (phase_ == Phase::Cooldown) {
+        cooldownTimer_ -= dt;
+        if (cooldownTimer_ <= 0.f)
+            enterPhase(Phase::Engage, "Isis cooldown finished", leader);
+    } else if (phase_ == Phase::RetreatForPincer) {
+        phaseTimer_ += dt;
+        if (!pincerIssued_) {
+            issueRetreatForPincer(room, leader);
+            pincerIssued_ = true;
+        }
+
+        bool leaderAtRetreat =
+            Vec3::distance(leader.getPosition(), retreatTargetPos_) <= 1.5f;
+        if (leaderAtRetreat && allLiveSquadsAtSlots(room, leader)) {
+            enterPhase(Phase::RegroupForPincer,
+                       "Isis retreat complete - regrouping for PincerStrike", leader);
+        } else if (phaseTimer_ >= RETREAT_TIMEOUT) {
+            enterPhase(Phase::RegroupForPincer,
+                       "Isis retreat timeout - regrouping for PincerStrike", leader);
+        }
+    } else if (phase_ == Phase::RegroupForPincer) {
+        phaseTimer_ += dt;
+        buddyRefreshTimer_ -= dt;
+        if (!pincerIssued_) {
+            issueRegroupForPincer(room, leader);
+            pincerIssued_ = true;
+            buddyRefreshTimer_ = BUDDY_REFRESH_INTERVAL;
+        } else if (phaseTimer_ < BUDDY_REFRESH_DURATION &&
+                   buddyRefreshTimer_ <= 0.f) {
+            issueRegroupForPincer(room, leader);
+            buddyRefreshTimer_ = BUDDY_REFRESH_INTERVAL;
+        }
+
+        if (activeBombersAtSlots(room)) {
+            enterPhase(Phase::PincerStrike,
+                       "Isis bomber line formed - WedgeCharge started", leader);
+        } else if (phaseTimer_ >= REGROUP_TIMEOUT) {
+            enterPhase(Phase::PincerStrike,
+                       "Isis regroup timeout - WedgeCharge started", leader);
+        }
+    } else if (phase_ == Phase::PincerStrike) {
+        phaseTimer_ += dt;
+        buddyRefreshTimer_ -= dt;
+        if (!pincerIssued_) {
+            issuePincerStrike(room, leader, true);
+            pincerIssued_ = true;
+            buddyRefreshTimer_ = BUDDY_REFRESH_INTERVAL;
+        } else if (phaseTimer_ < BUDDY_REFRESH_DURATION &&
+                   buddyRefreshTimer_ <= 0.f) {
+            issuePincerStrike(room, leader, false);
+            buddyRefreshTimer_ = BUDDY_REFRESH_INTERVAL;
+        }
+
+        if (activeBombersComplete(room)) {
+            enterCooldown(leader, "Isis PincerStrike completed");
+            issueEngage(room, leader);
+        } else if (phaseTimer_ >= PINCER_TIMEOUT) {
+            enterCooldown(leader, "Isis PincerStrike timeout");
+            issueEngage(room, leader);
+        }
+    }
+
+    Player* primary = selectPrimaryTarget(room, leader);
+    if (!primary)
+        return;
+
+    if (phase_ == Phase::RetreatForPincer) {
+        Vec3 toRetreat = retreatTargetPos_ - leader.getPosition();
+        float retreatDist = toRetreat.length();
+        if (retreatDist > 1.f) {
+            Vec3 retreatDir = toRetreat / retreatDist;
+            leader.setPosition(leader.getPosition() +
+                retreatDir * leader.getLeaderMoveSpeed() *
+                RETREAT_LEADER_SPEED_MULT * dt);
+            leader.setFacing(retreatDir);
+        } else {
+            Vec3 toPrimary = primary->getPosition() - leader.getPosition();
+            if (toPrimary.lengthSq() > 0.01f)
+                leader.setFacing(toPrimary.normalized());
+        }
+        return;
+    }
+
+    Vec3 toPlayer = primary->getPosition() - leader.getPosition();
+    float dist = toPlayer.length();
+    if (dist <= 0.01f)
+        return;
+
+    Vec3 dir = toPlayer / dist;
+    if (phase_ == Phase::Engage || phase_ == Phase::Cooldown) {
+        if (dist > LEADER_KEEP_DIST + LEADER_KEEP_TOL)
+            leader.setPosition(leader.getPosition() +
+                dir * leader.getLeaderMoveSpeed() * dt);
+        else if (dist < LEADER_KEEP_DIST - LEADER_KEEP_TOL)
+            leader.setPosition(leader.getPosition() -
+                dir * leader.getLeaderMoveSpeed() * dt);
+    }
+    leader.setFacing(dir);
+}
+
+void IsisMidBossTactic::captureInitialSquadSizes(const PlatoonLeader& leader) {
+    if (initialSizesSet_)
+        return;
+
+    initialSizesSet_ = true;
+    initialSquadSizes_.clear();
+    for (auto* squad : leader.getSquads())
+        initialSquadSizes_.push_back(
+            squad ? static_cast<int>(squad->getMembers().size()) : 0);
+}
+
+bool IsisMidBossTactic::checkUnlockCondition(const PlatoonLeader& leader) const {
+    const auto& squads = leader.getSquads();
+    for (size_t i = 0; i < squads.size(); ++i) {
+        int initial = (i < initialSquadSizes_.size())
+            ? initialSquadSizes_[i] : 0;
+        int current = squads[i]
+            ? static_cast<int>(squads[i]->getMembers().size()) : 0;
+        if (initial > 0 &&
+            static_cast<float>(current) / static_cast<float>(initial) <
+                UNLOCK_SQUAD_RATIO) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void IsisMidBossTactic::enterPhase(Phase next, const char* reason,
+                                   PlatoonLeader& leader) {
+    Logger::get().log(leader.getName(), reason);
+    phase_ = next;
+    phaseTimer_ = 0.f;
+    buddyRefreshTimer_ = 0.f;
+    engageIssued_ = false;
+    pincerIssued_ = false;
+    activeBomberSquads_.clear();
+}
+
+void IsisMidBossTactic::enterCooldown(PlatoonLeader& leader, const char* reason) {
+    cooldownTimer_ = rollCooldown();
+    char msg[128];
+    std::snprintf(msg, sizeof(msg), "%s - cooldown %.1fs", reason, cooldownTimer_);
+    enterPhase(Phase::Cooldown, msg, leader);
+}
+
+void IsisMidBossTactic::issueEngage(Room& room, PlatoonLeader& leader) {
+    Player* primary = selectPrimaryTarget(room, leader);
+    if (!primary)
+        return;
+
+    std::vector<TacticalSquad*> liveSquads = collectLiveSquads(leader);
+    if (liveSquads.empty())
+        return;
+
+    std::vector<uint32_t> targets(liveSquads.size(), primary->getId());
+    assignSquadsToPlayers(room, leader, liveSquads, targets);
+
+    for (size_t i = 0; i < liveSquads.size(); ++i) {
+        SquadOrder ord;
+        ord.type = SquadOrderType::Engage;
+        ord.targetId = targets[i];
+        liveSquads[i]->receiveOrder(ord);
+    }
+}
+
+void IsisMidBossTactic::issueRetreatForPincer(Room& room,
+                                              PlatoonLeader& leader) {
+    Player* primary = selectPrimaryTarget(room, leader);
+    if (!primary) {
+        issueEngage(room, leader);
+        return;
+    }
+
+    Vec3 playerCentroid = calcPlayerCentroid(room, leader.getPosition());
+    Vec3 awayDir = leader.getPosition() - playerCentroid;
+    float awayLen = awayDir.length();
+    if (awayLen > 0.01f)
+        awayDir = awayDir / awayLen;
+    else
+        awayDir = Vec3{ -1.f, 0.f, 0.f };
+
+    float currentBossDist = Vec3::distance(leader.getPosition(), playerCentroid);
+    float retreatDist = std::max(currentBossDist + ISIS_RETREAT_EXTRA_DIST,
+                                 ISIS_RETREAT_MIN_DIST);
+    retreatTargetPos_ = playerCentroid + awayDir * retreatDist;
+
+    Vec3 forward = playerCentroid - retreatTargetPos_;
+    float forwardLen = forward.length();
+    if (forwardLen > 0.01f)
+        forward = forward / forwardLen;
+    else
+        forward = Vec3{ 1.f, 0.f, 0.f };
+    Vec3 right{ -forward.z, 0.f, forward.x };
+    if (right.lengthSq() > 0.01f)
+        right = right.normalized();
+    else
+        right = Vec3{ 0.f, 0.f, 1.f };
+
+    const auto& squads = leader.getSquads();
+    auto issueRetreatHold = [&](size_t squadIndex, const Vec3& center,
+                                float spacingScale, float columnScale,
+                                int columnCount) {
+        if (squadIndex >= squads.size())
+            return;
+        TacticalSquad* squad = squads[squadIndex];
+        if (!squad || squad->isEmpty())
+            return;
+
+        SquadOrder ord;
+        ord.type = SquadOrderType::FormationHold;
+        ord.targetId = primary->getId();
+        ord.tacticCenter = center;
+        ord.formationTargetPos = playerCentroid;
+        ord.slotSpacingScale = spacingScale;
+        ord.slotColumnScale = columnScale;
+        ord.slotColumnCount = columnCount;
+        ord.speedMult = RETREAT_SPEED_MULT;
+        squad->receiveOrder(ord);
+    };
+
+    issueRetreatHold(0,
+        retreatTargetPos_ - forward * RETREAT_BUDDY_BACK_OFFSET -
+            right * RETREAT_BUDDY_SIDE_OFFSET,
+        BUDDY_COLUMN_SPACING_SCALE, BUDDY_COLUMN_SCALE, BUDDY_COLUMN_COUNT);
+    issueRetreatHold(1,
+        retreatTargetPos_ - forward * RETREAT_BUDDY_BACK_OFFSET +
+            right * RETREAT_BUDDY_SIDE_OFFSET,
+        BUDDY_COLUMN_SPACING_SCALE, BUDDY_COLUMN_SCALE, BUDDY_COLUMN_COUNT);
+    issueRetreatHold(2,
+        retreatTargetPos_ + forward * RETREAT_BOMBER_FRONT_OFFSET -
+            right * RETREAT_BOMBER_SIDE_OFFSET,
+        BOMBER_REGROUP_SPACING_SCALE, BOMBER_REGROUP_COLUMN_SCALE,
+        BOMBER_REGROUP_COLUMN_COUNT);
+    issueRetreatHold(3,
+        retreatTargetPos_ + forward * RETREAT_BOMBER_FRONT_OFFSET +
+            right * RETREAT_BOMBER_SIDE_OFFSET,
+        BOMBER_REGROUP_SPACING_SCALE, BOMBER_REGROUP_COLUMN_SCALE,
+        BOMBER_REGROUP_COLUMN_COUNT);
+}
+
+void IsisMidBossTactic::issueRegroupForPincer(Room& room,
+                                              PlatoonLeader& leader) {
+    std::vector<StrikeCluster> clusters = selectStrikeClusters(room, leader);
+    if (clusters.empty()) {
+        issueEngage(room, leader);
+        return;
+    }
+
+    const auto& squads = leader.getSquads();
+    TacticalSquad* buddySquads[2] = {
+        squads.size() > 0 ? squads[0] : nullptr,
+        squads.size() > 1 ? squads[1] : nullptr
+    };
+    TacticalSquad* bomberSquads[2] = {
+        squads.size() > 2 ? squads[2] : nullptr,
+        squads.size() > 3 ? squads[3] : nullptr
+    };
+
+    for (int i = 0; i < 2; ++i) {
+        if (!buddySquads[i] || buddySquads[i]->isEmpty())
+            continue;
+        int clusterIdx = (clusters.size() == 1) ? 0 : i;
+        issueBuddyColumn(room, buddySquads[i], clusters[clusterIdx],
+                         i == 0 ? -1.f : 1.f);
+    }
+
+    activeBomberSquads_.clear();
+    int assignedBomber = 0;
+    for (int i = 0; i < 2; ++i) {
+        TacticalSquad* bomber = bomberSquads[i];
+        if (!bomber || bomber->isEmpty())
+            continue;
+
+        int clusterIdx = (clusters.size() == 1)
+            ? 0
+            : std::min(assignedBomber, 1);
+        issueBomberRegroup(room, bomber, clusters[clusterIdx],
+                           assignedBomber == 0 ? -1.f : 1.f);
+        activeBomberSquads_.push_back(bomber);
+        ++assignedBomber;
+    }
+}
+
+void IsisMidBossTactic::issuePincerStrike(Room& room, PlatoonLeader& leader,
+                                          bool issueBombers) {
+    std::vector<StrikeCluster> clusters = selectStrikeClusters(room, leader);
+    if (clusters.empty()) {
+        issueEngage(room, leader);
+        return;
+    }
+
+    const auto& squads = leader.getSquads();
+    TacticalSquad* buddySquads[2] = {
+        squads.size() > 0 ? squads[0] : nullptr,
+        squads.size() > 1 ? squads[1] : nullptr
+    };
+    TacticalSquad* bomberSquads[2] = {
+        squads.size() > 2 ? squads[2] : nullptr,
+        squads.size() > 3 ? squads[3] : nullptr
+    };
+
+    for (int i = 0; i < 2; ++i) {
+        if (!buddySquads[i] || buddySquads[i]->isEmpty())
+            continue;
+        int clusterIdx = (clusters.size() == 1) ? 0 : i;
+        issueBuddyColumn(room, buddySquads[i], clusters[clusterIdx],
+                         i == 0 ? -1.f : 1.f);
+    }
+
+    if (!issueBombers)
+        return;
+
+    activeBomberSquads_.clear();
+    int assignedBomber = 0;
+    for (int i = 0; i < 2; ++i) {
+        TacticalSquad* bomber = bomberSquads[i];
+        if (!bomber || bomber->isEmpty())
+            continue;
+
+        int clusterIdx = 0;
+        if (clusters.size() > 1)
+            clusterIdx = std::min(assignedBomber, 1);
+
+        const StrikeCluster& strikeCluster = clusters[clusterIdx];
+        SquadOrder ord;
+        // Isis bombers intentionally reuse the same shared WedgeCharge execution
+        // path as Goblin: TacticalSquad prepares the wedge and TacticalNpc runs
+        // ChargeThrough with the common impact/damage rules.
+        ord.type = SquadOrderType::WedgeCharge;
+        ord.targetId = strikeCluster.cluster.representativeId;
+        ord.targetIds = strikeCluster.cluster.playerIds;
+        ord.tacticCenter = strikeCluster.cluster.centroid;
+        ord.chargeSpeedMult = ISIS_WEDGE_SPEED_MULT;
+        bomber->receiveOrder(ord);
+        activeBomberSquads_.push_back(bomber);
+        ++assignedBomber;
+    }
+}
+
+void IsisMidBossTactic::issueBomberRegroup(Room& room, TacticalSquad* squad,
+                                           const StrikeCluster& strikeCluster,
+                                           float sideSign) {
+    if (!squad || squad->isEmpty())
+        return;
+
+    Vec3 fallbackDir = strikeCluster.cluster.centroid - squad->calcCentroid(room);
+    if (fallbackDir.lengthSq() <= 0.01f)
+        fallbackDir = Vec3{ 1.f, 0.f, 0.f };
+
+    Vec3 playerFacing = calcAveragePlayerFacing(room, fallbackDir);
+    if (playerFacing.lengthSq() <= 0.01f)
+        playerFacing = fallbackDir.normalized();
+
+    Vec3 forward = playerFacing.normalized();
+    Vec3 right{ -forward.z, 0.f, forward.x };
+    if (right.lengthSq() <= 0.01f)
+        right = Vec3{ 0.f, 0.f, 1.f };
+    else
+        right = right.normalized();
+
+    Vec3 center = strikeCluster.cluster.centroid
+        - forward * BOMBER_REGROUP_BACK_OFFSET
+        + right * (BOMBER_REGROUP_SIDE_OFFSET * sideSign);
+
+    SquadOrder ord;
+    ord.type = SquadOrderType::FormationHold;
+    ord.targetId = strikeCluster.cluster.representativeId;
+    ord.tacticCenter = center;
+    ord.formationTargetPos = strikeCluster.cluster.centroid;
+    ord.slotSpacingScale = BOMBER_REGROUP_SPACING_SCALE;
+    ord.slotColumnScale = BOMBER_REGROUP_COLUMN_SCALE;
+    ord.slotColumnCount = BOMBER_REGROUP_COLUMN_COUNT;
+    ord.speedMult = BOMBER_REGROUP_SPEED_MULT;
+    squad->receiveOrder(ord);
+}
+
+void IsisMidBossTactic::issueBuddyColumn(Room& room, TacticalSquad* squad,
+                                         const StrikeCluster& strikeCluster,
+                                         float sideSign) {
+    if (!squad || squad->isEmpty())
+        return;
+
+    Vec3 fallbackDir = strikeCluster.cluster.centroid - squad->calcCentroid(room);
+    if (fallbackDir.lengthSq() <= 0.01f)
+        fallbackDir = Vec3{ 1.f, 0.f, 0.f };
+
+    Vec3 playerFacing = calcAveragePlayerFacing(room, fallbackDir);
+    if (playerFacing.lengthSq() <= 0.01f)
+        playerFacing = fallbackDir.normalized();
+
+    Vec3 right{ -playerFacing.z, 0.f, playerFacing.x };
+    if (right.lengthSq() <= 0.01f)
+        right = Vec3{ 0.f, 0.f, 1.f };
+    else
+        right = right.normalized();
+
+    Vec3 center = strikeCluster.cluster.centroid
+        - playerFacing.normalized() * BUDDY_BACK_OFFSET
+        + right * (BUDDY_SIDE_OFFSET * sideSign);
+
+    SquadOrder ord;
+    ord.type = SquadOrderType::FormationHold;
+    ord.targetId = strikeCluster.cluster.representativeId;
+    ord.tacticCenter = center;
+    ord.formationTargetPos = strikeCluster.cluster.centroid;
+    ord.slotSpacingScale = BUDDY_COLUMN_SPACING_SCALE;
+    ord.slotColumnScale = BUDDY_COLUMN_SCALE;
+    ord.slotColumnCount = BUDDY_COLUMN_COUNT;
+    ord.speedMult = BUDDY_SPEED_MULT;
+    squad->receiveOrder(ord);
+}
+
+std::vector<IsisMidBossTactic::StrikeCluster>
+IsisMidBossTactic::selectStrikeClusters(const Room& room,
+                                        const PlatoonLeader& leader) const {
+    std::vector<PlayerCluster> baseClusters =
+        buildPlayerClusters(room, CLUSTER_RADIUS);
+    std::vector<StrikeCluster> result;
+    result.reserve(baseClusters.size());
+
+    Vec3 leaderPos = leader.getPosition();
+    for (PlayerCluster& cluster : baseClusters) {
+        if (cluster.playerIds.empty())
+            continue;
+
+        if (cluster.representativeId == 0)
+            cluster.representativeId = cluster.playerIds.front();
+
+        float distance = Vec3::distance(cluster.centroid, leaderPos);
+        float score = static_cast<float>(cluster.playerIds.size()) * 1000.f -
+                      distance;
+        cluster.score = score;
+        result.push_back({ cluster, score });
+    }
+
+    std::sort(result.begin(), result.end(),
+        [](const StrikeCluster& a, const StrikeCluster& b) {
+            if (a.cluster.playerIds.size() != b.cluster.playerIds.size())
+                return a.cluster.playerIds.size() > b.cluster.playerIds.size();
+            float aDistRank = -a.score;
+            float bDistRank = -b.score;
+            if (std::fabs(aDistRank - bDistRank) > 0.001f)
+                return a.score > b.score;
+            return a.cluster.representativeId < b.cluster.representativeId;
+        });
+
+    if (result.size() > 2)
+        result.resize(2);
+    return result;
+}
+
+Player* IsisMidBossTactic::selectPrimaryTarget(
+    Room& room, const PlatoonLeader& leader) const {
+    std::vector<StrikeCluster> clusters = selectStrikeClusters(room, leader);
+    if (!clusters.empty()) {
+        auto* p = dynamic_cast<Player*>(
+            room.findActorById(clusters.front().cluster.representativeId));
+        if (p && p->isAlive())
+            return p;
+    }
+    return selectNearestPlayer(room, leader.getPosition());
+}
+
+float IsisMidBossTactic::rollCooldown() {
+    std::uniform_real_distribution<float> dist(MIN_COOLDOWN, MAX_COOLDOWN);
+    return dist(rng_);
+}
+
+bool IsisMidBossTactic::hasLiveBomberSquad(const PlatoonLeader& leader) const {
+    const auto& squads = leader.getSquads();
+    for (size_t i = 2; i < squads.size() && i < 4; ++i) {
+        if (squads[i] && !squads[i]->isEmpty())
+            return true;
+    }
+    return false;
+}
+
+bool IsisMidBossTactic::allLiveSquadsAtSlots(
+    Room& room, const PlatoonLeader& leader) const {
+    bool anyLiveSquad = false;
+    for (TacticalSquad* squad : leader.getSquads()) {
+        if (!squad || squad->isEmpty())
+            continue;
+        anyLiveSquad = true;
+        if (!squad->areMembersAtSlots(room))
+            return false;
+    }
+    return anyLiveSquad;
+}
+
+bool IsisMidBossTactic::activeBombersAtSlots(Room& room) const {
+    if (activeBomberSquads_.empty())
+        return true;
+    for (TacticalSquad* squad : activeBomberSquads_) {
+        if (squad && !squad->isEmpty() && !squad->areMembersAtSlots(room))
+            return false;
+    }
+    return true;
+}
+
+bool IsisMidBossTactic::activeBombersComplete(Room& room) const {
+    if (activeBomberSquads_.empty())
+        return true;
+    for (TacticalSquad* squad : activeBomberSquads_) {
+        if (squad && !squad->isEmpty() && !squad->areChargeMembersComplete(room))
+            return false;
+    }
+    return true;
 }
 
 GrandBaumMidBossTactic::GrandBaumMidBossTactic() = default;

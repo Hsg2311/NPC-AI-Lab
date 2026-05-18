@@ -514,3 +514,51 @@ else if (race == GrandBaum) { ... }
 | `Room` | `SOFT_BLOCK_RADIUS`, `SOFT_BLOCK_MIN_SPEED`, `SOFT_BLOCK_PUSH_SPEED`, `SHIELD_WALL_HARD_BLOCK_RADIUS`, `SHIELD_WALL_KNOCKBACK_SPEED` |
 
 고블린 전술 상수는 더 이상 `PlatoonLeader`에 있지 않다.
+
+---
+
+## 11. IsisMidBossTactic
+
+`IsisMidBossTactic`은 `docs/이시스.pdf`의 부대 손실 기반 반복 편대 전술을 구현한다. Squad 순서는 전술 계약으로 고정한다.
+
+```text
+squads[0] = Buddy left column
+squads[1] = Buddy right column
+squads[2] = Bomber left wedge
+squads[3] = Bomber right wedge
+```
+
+기본 흐름:
+
+```text
+Engage
+  -> 어느 부대든 aliveMembers / initialMembers < 0.80 이면 전술 해금
+  -> 쿨타임 종료 및 살아있는 Bomber 부대가 있으면 RetreatForPincer
+
+RetreatForPincer
+  -> 플레이어 군집 중심 기준 반대 방향 max(현재 보스 거리 + 35m, 90m)에 후퇴 목표 고정
+  -> 모든 부대는 보스 후퇴 목표 주변의 역할별 FormationHold로 집결
+  -> Bomber 부대는 보스 전방 좌우, Buddy 부대는 보스 후방/측면 좌우에 정렬
+  -> 이시스 본체도 같은 후퇴 목표로 이동
+  -> 이시스와 부대가 도착하거나 5초가 지나면 RegroupForPincer
+
+RegroupForPincer
+  -> Bomber 부대: 선택 군집 좌우 대각선 랠리 지점에 FormationHold
+  -> Buddy 부대: 같은 군집의 좌우 측후방 2열 종대로 FormationHold
+  -> Buddy/Bomber 전열 이동은 Isis 전술 전용 speedMult 0.75 사용
+  -> Bomber가 랠리 슬롯에 도착하거나 3.5초가 지나면 PincerStrike
+
+PincerStrike
+  -> Bomber 부대: 상위 최대 2개 플레이어 군집에 WedgeCharge
+  -> WedgeCharge가 공용 쐐기 준비 슬롯을 만든 뒤 ChargeThrough 돌진
+  -> Bomber 돌진 완료 또는 7초 타임아웃 시 Cooldown
+
+Cooldown
+  -> 매번 uniform(7.0, 13.0) 초로 랜덤 계산
+  -> 종료 후 Engage 복귀
+```
+
+플레이어 군집이 3개 이상이면 모든 군집을 동시에 처리하지 않는다. 군집 내 플레이어 수가 많은 순서, 이시스에게 가까운 순서, 대표 플레이어 ID가 낮은 순서로 상위 2개만 선택한다. 선택되지 않은 군집은 다음 `PincerStrike` 평가 때 다시 후보가 된다.
+
+Bomber 돌진은 이시스 전용 공격 로직을 만들지 않고 고블린이 사용하던 공용 `WedgeCharge -> ChargeThrough` 실행 경로를 그대로 사용한다. 따라서 피해량, 돌진 속도, 충돌 반경, 플레이어별 1회 히트 판정은 `TacticalSquad`와 `TacticalNpc`의 기존 `WedgeCharge` 상수를 따른다.
+단, `SquadOrder::chargeSpeedMult`가 지정되면 해당 `WedgeCharge`의 돌진 속도 배율만 덮어쓴다. 이시스 봄버 돌진은 `ISIS_WEDGE_SPEED_MULT = 1.50`을 지정하고, 고블린은 값을 지정하지 않아 공용 기본 `WEDGE_SPEED_MULT`를 그대로 사용한다.

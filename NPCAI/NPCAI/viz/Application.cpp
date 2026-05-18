@@ -3,8 +3,11 @@
 #include "../sim/ScenarioSharedSight.hpp"
 #include "../sim/ScenarioTactical.hpp"
 #include "../sim/ScenarioGrandBaum.hpp"
+#include "../sim/ScenarioIsis.hpp"
 #include <cstdio>
-#define USE_GRANDBAUM_SCENARIO
+
+#define USE_ISIS_SCENARIO
+
 namespace viz {
 
 Application::Application()
@@ -50,7 +53,9 @@ bool Application::init(HINSTANCE hInst, int nCmdShow) {
         return false;
     }
 
-#ifdef USE_GRANDBAUM_SCENARIO
+#ifdef USE_ISIS_SCENARIO
+    scenario_ = std::make_unique<sim::ScenarioIsis>();
+#elif defined(USE_GRANDBAUM_SCENARIO)
     scenario_ = std::make_unique<sim::ScenarioGrandBaum>();
 #else
     scenario_ = std::make_unique<sim::ScenarioTactical>();
