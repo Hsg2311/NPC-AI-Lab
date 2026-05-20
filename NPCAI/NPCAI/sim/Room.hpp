@@ -60,6 +60,9 @@ public:
 
     // 플레이어 공격: 범위 내 생존 NPC + TacticalNpc에게 피해 적용
     int  applyDamageToActorsInRange (const Vec3& center, float radius, float damage);
+    int  applyDamageToPlayersInRange(const Vec3& center, float radius, float damage);
+
+    void addDebugTelegraph(const DebugTelegraphEntry& telegraph);
 
     // 쐐기 돌진: 같은 돌진에서는 플레이어당 1회만 피해 적용
     uint32_t beginWedgeCharge();
@@ -120,6 +123,7 @@ private:
 
     uint32_t nextWedgeChargeId_{ 1 };
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>> wedgeChargeHits_{};
+    std::vector<DebugTelegraphEntry> debugTelegraphs_{};
 };
 
 } // namespace sim

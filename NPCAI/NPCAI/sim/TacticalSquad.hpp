@@ -38,6 +38,7 @@ struct SquadOrder {
     Vec3           tacticCenter       = {};  // 포위/경계 중심 또는 후퇴 목표 위치
     float          speedMult          = 1.f;
     float          chargeSpeedMult    = 0.f; // WedgeCharge only: 0 = shared default
+    float          wedgeSpacingMult   = 0.f; // WedgeCharge only: 0 = shared default
     std::vector<uint32_t> targetIds    = {};  // WedgeCharge 대상 군집 플레이어들
 };
 
@@ -69,6 +70,7 @@ public:
     Vec3 calcCentroid(Room& room) const;
     bool areMembersAtSlots(Room& room) const;
     bool areChargeMembersComplete(Room& room) const;
+    void endActiveWedgeCharge(Room& room);
 
 private:
     void pushCommandsToMembers(Room& room);
@@ -80,7 +82,8 @@ private:
                                      int count, float spacingScale = 1.f,
                                      float columnScale = 1.f,
                                      int fixedColumnCount = 0) const;
-    std::vector<Vec3> calcWedgeSlots(const Vec3& apex, const Vec3& forward, int count) const;
+    std::vector<Vec3> calcWedgeSlots(const Vec3& apex, const Vec3& forward,
+                                     int count, float spacingMult) const;
 
     int                   squadId_;
     float                 memberAttackRange_;

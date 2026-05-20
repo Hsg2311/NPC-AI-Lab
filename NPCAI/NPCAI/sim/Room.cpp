@@ -81,6 +81,7 @@ void Room::registerPlatoonLeader(PlatoonLeader* leader) {
 
 void Room::tick(float dt) {
     Logger::get().setTick(tickCount_);
+    debugTelegraphs_.clear();
 
     dummyCtrl_.update(dt, *this);
 
@@ -347,6 +348,25 @@ int Room::applyDamageToActorsInRange(const Vec3& center, float radius, float dam
     return hits;
 }
 
+int Room::applyDamageToPlayersInRange(const Vec3& center, float radius, float damage) {
+    int   hits     = 0;
+    float radiusSq = radius * radius;
+
+    for (auto& [id, player] : players_) {
+        if (!player || !player->isAlive())
+            continue;
+        if (Vec3::distanceSq(center, player->getPosition()) <= radiusSq) {
+            player->takeDamage(damage);
+            ++hits;
+        }
+    }
+    return hits;
+}
+
+void Room::addDebugTelegraph(const DebugTelegraphEntry& telegraph) {
+    debugTelegraphs_.push_back(telegraph);
+}
+
 // ─── countNpcsTargeting ──────────────────────────────────────────────────────
 // B: aggroCount_ 캐시 조회 O(1) (rebuildAggroCount()에서 틱당 1회 재구성)
 
@@ -478,6 +498,7 @@ void Room::dumpSnapshot() const {
 DebugSnapshot Room::buildSnapshot() const {
     DebugSnapshot snap;
     snap.tick = tickCount_;
+    snap.telegraphs = debugTelegraphs_;
 
     for (const auto& [id, p] : players_) {
         Vec3 pos    = p->getPosition();

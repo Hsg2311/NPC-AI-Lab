@@ -539,26 +539,82 @@ RetreatForPincer
   -> 플레이어 군집 중심 기준 반대 방향 max(현재 보스 거리 + 35m, 90m)에 후퇴 목표 고정
   -> 모든 부대는 보스 후퇴 목표 주변의 역할별 FormationHold로 집결
   -> Bomber 부대는 보스 전방 좌우, Buddy 부대는 보스 후방/측면 좌우에 정렬
-  -> 이시스 본체도 같은 후퇴 목표로 이동
-  -> 이시스와 부대가 도착하거나 5초가 지나면 RegroupForPincer
+  -> 부대 후퇴 speedMult 1.15, 이시스 본체 후퇴 speedMult 6.5 적용
+  -> 이시스 본체도 Chase 상태로 표시되며 같은 후퇴 목표로 빠르게 이동
+  -> 이시스와 부대가 도착하거나 5초가 지나면 RegroupBombers
 
-RegroupForPincer
+RegroupBombers
   -> Bomber 부대: 선택 군집 좌우 대각선 랠리 지점에 FormationHold
-  -> Buddy 부대: 같은 군집의 좌우 측후방 2열 종대로 FormationHold
-  -> Buddy/Bomber 전열 이동은 Isis 전술 전용 speedMult 0.75 사용
-  -> Bomber가 랠리 슬롯에 도착하거나 3.5초가 지나면 PincerStrike
+  -> Bomber 전열 이동은 Isis 전술 전용 speedMult 0.75 사용
+  -> Bomber가 랠리 슬롯에 도착하거나 3.5초가 지나면 FirstBomberWedge
 
-PincerStrike
+FirstBomberWedge
   -> Bomber 부대: 상위 최대 2개 플레이어 군집에 WedgeCharge
   -> WedgeCharge가 공용 쐐기 준비 슬롯을 만든 뒤 ChargeThrough 돌진
-  -> Bomber 돌진 완료 또는 7초 타임아웃 시 Cooldown
+  -> 1차 대상 군집의 플레이어 ID를 저장
+  -> 각 Bomber 부대는 자기 돌진이 끝나는 즉시 해당 군집 우선 Engage로 복귀
+  -> 모든 Bomber 부대가 Engage 복귀하거나 7초 타임아웃 시 RegroupBuddies
+
+RegroupBuddies
+  -> 플레이어 군집을 다시 평가하되 1차 대상 군집에는 약한 반복 페널티 적용
+  -> Buddy 부대: 선택 군집 좌우 대각선 랠리 지점에 FormationHold
+  -> Buddy 전열 이동은 Isis 전술 전용 speedMult 0.75 사용
+  -> Buddy가 랠리 슬롯에 도착하거나 3.5초가 지나면 SecondBuddyWedge
+
+SecondBuddyWedge
+  -> Buddy 부대: 군집을 한 번 더 재평가한 뒤 상위 최대 2개 플레이어 군집에 WedgeCharge
+  -> 점수는 playerCount * 1000 - distanceToIsis - repeatPenalty
+  -> 1차 대상과 플레이어 ID가 겹치는 군집에는 SECOND_STRIKE_REPEAT_PENALTY = 350 적용
+  -> Buddy WedgeCharge에는 ISIS_BUDDY_WEDGE_SPACING_MULT = 1.90을 적용해 쐐기 간격을 넓힘
+  -> 각 Buddy 부대는 자기 돌진이 끝나는 즉시 해당 군집 우선 Engage로 복귀
+  -> 모든 Buddy 부대가 Engage 복귀하거나 7초 타임아웃 시 Cooldown
 
 Cooldown
   -> 매번 uniform(7.0, 13.0) 초로 랜덤 계산
   -> 종료 후 Engage 복귀
 ```
 
-플레이어 군집이 3개 이상이면 모든 군집을 동시에 처리하지 않는다. 군집 내 플레이어 수가 많은 순서, 이시스에게 가까운 순서, 대표 플레이어 ID가 낮은 순서로 상위 2개만 선택한다. 선택되지 않은 군집은 다음 `PincerStrike` 평가 때 다시 후보가 된다.
+플레이어 군집이 3개 이상이면 모든 군집을 동시에 처리하지 않는다. 군집 내 플레이어 수가 많은 순서, 이시스에게 가까운 순서, 대표 플레이어 ID가 낮은 순서로 상위 2개만 선택한다. 2차 Buddy 돌진은 군집을 다시 평가하며, 1차 Bomber 대상과 겹치는 군집에만 약한 반복 페널티를 적용한다. 이 페널티는 같은 인원수 군집 사이의 대상 변화를 유도하지만, 2명 이상이 뭉친 큰 군집 우선 원칙을 깨지는 않는다.
 
-Bomber 돌진은 이시스 전용 공격 로직을 만들지 않고 고블린이 사용하던 공용 `WedgeCharge -> ChargeThrough` 실행 경로를 그대로 사용한다. 따라서 피해량, 돌진 속도, 충돌 반경, 플레이어별 1회 히트 판정은 `TacticalSquad`와 `TacticalNpc`의 기존 `WedgeCharge` 상수를 따른다.
-단, `SquadOrder::chargeSpeedMult`가 지정되면 해당 `WedgeCharge`의 돌진 속도 배율만 덮어쓴다. 이시스 봄버 돌진은 `ISIS_WEDGE_SPEED_MULT = 1.50`을 지정하고, 고블린은 값을 지정하지 않아 공용 기본 `WEDGE_SPEED_MULT`를 그대로 사용한다.
+돌진 완료 후 Engage 복귀는 부대 단위로 처리한다. 같은 웨이브 안에서 먼저 돌진을 끝낸 부대는 다른 부대를 기다리지 않고 즉시 `Engage`를 받는다. Engage 대상은 해당 부대가 돌진했던 군집의 살아있는 플레이어 중 부대 중심에 가장 가까운 대상을 우선하고, 없으면 기존 이시스 주 타겟 선택으로 대체한다.
+
+Bomber/Buddy 돌진은 이시스 전용 공격 로직을 만들지 않고 고블린이 사용하던 공용 `WedgeCharge -> ChargeThrough` 실행 경로를 그대로 사용한다. 따라서 피해량, 충돌 반경, 플레이어별 1회 히트 판정은 `TacticalSquad`와 `TacticalNpc`의 기존 `WedgeCharge` 규칙을 따른다.
+단, `SquadOrder::chargeSpeedMult`가 지정되면 해당 `WedgeCharge`의 돌진 속도 배율만 덮어쓴다. 이시스 1차 Bomber와 2차 Buddy 돌진은 `ISIS_WEDGE_SPEED_MULT = 1.50`을 지정하고, 고블린은 값을 지정하지 않아 공용 기본 `WEDGE_SPEED_MULT`를 그대로 사용한다.
+또한 `SquadOrder::wedgeSpacingMult`가 지정되면 해당 `WedgeCharge`의 쐐기 준비 슬롯 간격만 덮어쓴다. 이시스 2차 Buddy 돌진은 `1.90`을 지정하고, 1차 Bomber와 고블린은 기본 간격을 사용한다.
+
+### 11.1 Isis boss personal combat
+
+이시스 본체는 그랜드밤처럼 전술 클래스 내부의 별도 보스 개인 FSM을 사용한다. 이 개인 전투는 `Engage`와 `Cooldown` phase에서만 실행되며, `RetreatForPincer`, `RegroupBombers`, `FirstBomberWedge`, `RegroupBuddies`, `SecondBuddyWedge` 중에는 일시 중단된다. 다만 표시 상태는 전술 상황을 보여주도록 유지한다. `RetreatForPincer`는 `Chase`, 전열 정비와 쐐기 진행 구간은 `HoldSlot`으로 표시한다.
+
+개인 전투 흐름:
+
+```text
+EvaluateTarget
+  -> 가장 위협적인 플레이어를 선택
+  -> 큰 군집 소속 우선, 이시스에게 가까운 플레이어 우선, 낮은 ID 우선
+
+ChaseTarget
+  -> TacticalNpcState::Chase로 표시
+  -> 선택한 플레이어가 일반 공격 사거리 안에 들어올 때까지 접근
+  -> 추격 중 0.5초마다 타겟을 재평가하되, 현재 타겟보다 점수가 120 이상 높은 후보가 있을 때만 교체
+
+AttackWindup
+  -> TacticalNpcState::AttackWindup으로 표시
+  -> leader.getConfig().attackWindupTime 동안 준비
+  -> 공격 시점에 target이 leader.getAttackRange() 안이면 leader.getAttackDamage() 적용
+
+AttackRecover
+  -> TacticalNpcState::AttackRecover로 표시
+  -> leader.getConfig().attackRecoverTime 동안 회복
+  -> 완료 후 EvaluateTarget으로 돌아가 루프 반복
+
+Backstep / Retreat
+  -> 마지막 백스탭 이후 누적 피해가 60 이상이고 3초 내부 쿨타임이 끝났으면 발동
+  -> 플레이어 반대 방향으로 18m 크게 백스탭
+  -> 이후 타겟과 28m 이상 거리를 벌릴 때까지 후퇴
+  -> 완료 후 EvaluateTarget으로 복귀
+```
+
+이 개인 전투의 일반 공격은 기본 `TacticalNpc::updateChase()`를 직접 호출하지 않고, 그랜드밤 보스 근접 전투처럼 전술 클래스 안에서 동일한 windup/recover/damage 규칙을 재현한다. 기존 원형 경고 폭격은 이시스 기본 개인 전투 루프에서 제외한다.
+타겟 점수는 `clusterSize * 1000 - distanceToIsis`를 사용하며, `AttackWindup`, `AttackRecover`, `Backstep`, `Retreat` 중에는 공격 연출이 흔들리지 않도록 재평가하지 않는다.
+`ChaseTarget`은 기본 이동속도의 5.35배, `Retreat`은 5.35배, `Backstep`은 20.0배를 사용한다.

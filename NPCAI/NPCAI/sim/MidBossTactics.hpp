@@ -2,7 +2,6 @@
 #include "IMidBossTactic.hpp"
 #include "Vec3.hpp"
 #include <cstdint>
-#include <random>
 #include <unordered_map>
 #include <vector>
 
@@ -10,6 +9,7 @@ namespace sim {
 
 class TacticalSquad;
 class Player;
+class Actor;
 struct TacticalNpcConfig;
 
 class MidBossTacticBase : public IMidBossTactic {
@@ -134,14 +134,36 @@ private:
     enum class Phase {
         Engage,
         RetreatForPincer,
-        RegroupForPincer,
-        PincerStrike,
+        RegroupBombers,
+        FirstBomberWedge,
+        RegroupBuddies,
+        SecondBuddyWedge,
         Cooldown
+    };
+
+    enum class BossPersonalState {
+        EvaluateTarget,
+        ChaseTarget,
+        AttackWindup,
+        AttackRecover,
+        Backstep,
+        Retreat
     };
 
     struct StrikeCluster {
         PlayerCluster cluster{};
         float score{ 0.f };
+    };
+
+    struct StrikeTask {
+        TacticalSquad*        squad{ nullptr };
+        std::vector<uint32_t> targetIds{};
+        bool                  engageIssued{ false };
+    };
+
+    struct BossTargetScore {
+        uint32_t targetId{ 0 };
+        float    score{ 0.f };
     };
 
     void captureInitialSquadSizes(const PlatoonLeader& leader);
@@ -150,20 +172,41 @@ private:
     void enterCooldown(PlatoonLeader& leader, const char* reason);
     void issueEngage(Room& room, PlatoonLeader& leader);
     void issueRetreatForPincer(Room& room, PlatoonLeader& leader);
-    void issueRegroupForPincer(Room& room, PlatoonLeader& leader);
-    void issuePincerStrike(Room& room, PlatoonLeader& leader, bool issueBombers);
+    void issueRegroupBombers(Room& room, PlatoonLeader& leader);
+    void issueRegroupBuddies(Room& room, PlatoonLeader& leader);
+    void issueWedgeStrike(Room& room, PlatoonLeader& leader,
+                          bool useBuddySquads, bool applyRepeatPenalty,
+                          bool rememberTargets, const char* strikeLabel);
     void issueBomberRegroup(Room& room, TacticalSquad* squad,
                             const StrikeCluster& strikeCluster, float sideSign);
     void issueBuddyColumn(Room& room, TacticalSquad* squad,
                           const StrikeCluster& strikeCluster, float sideSign);
     std::vector<StrikeCluster> selectStrikeClusters(const Room& room,
-                                                    const PlatoonLeader& leader) const;
+                                                    const PlatoonLeader& leader,
+                                                    bool applyRepeatPenalty = false) const;
     Player* selectPrimaryTarget(Room& room, const PlatoonLeader& leader) const;
+    uint32_t selectStrikeEngageTarget(Room& room, const PlatoonLeader& leader,
+                                      const StrikeTask& task) const;
+    void updateActiveStrikeEngage(Room& room, PlatoonLeader& leader,
+                                  bool forceAll);
+    void updateBossDamageReaction(float dt, const PlatoonLeader& leader);
+    bool updateBossPersonalCombat(float dt, Room& room, PlatoonLeader& leader);
+    void resetBossPersonalCombat(PlatoonLeader& leader, const char* reason);
+    uint32_t selectBossPersonalTarget(Room& room, const PlatoonLeader& leader) const;
+    BossTargetScore selectBossPersonalTargetScore(Room& room,
+                                                  const PlatoonLeader& leader) const;
+    bool calcBossPersonalTargetScore(Room& room, const PlatoonLeader& leader,
+                                     uint32_t targetId, float& outScore) const;
+    Actor* resolveBossPersonalTarget(Room& room, uint32_t targetId) const;
+    void beginBossBackstep(Room& room, PlatoonLeader& leader);
+    void moveBossToward(PlatoonLeader& leader, const Vec3& targetPos,
+                        float speedMult, float dt) const;
     float rollCooldown();
     bool hasLiveBomberSquad(const PlatoonLeader& leader) const;
+    bool hasLiveBuddySquad(const PlatoonLeader& leader) const;
     bool allLiveSquadsAtSlots(Room& room, const PlatoonLeader& leader) const;
-    bool activeBombersAtSlots(Room& room) const;
-    bool activeBombersComplete(Room& room) const;
+    bool activeStrikeSquadsAtSlots(Room& room) const;
+    bool activeStrikeTasksEngaged() const;
 
     Phase phase_{ Phase::Engage };
     bool initialSizesSet_{ false };
@@ -175,8 +218,18 @@ private:
     float buddyRefreshTimer_{ 0.f };
     Vec3 retreatTargetPos_{};
     std::vector<int> initialSquadSizes_{};
-    std::vector<TacticalSquad*> activeBomberSquads_{};
-    std::mt19937 rng_;
+    std::vector<TacticalSquad*> activeStrikeSquads_{};
+    std::vector<StrikeTask> activeStrikeTasks_{};
+    std::vector<uint32_t> firstStrikeTargetIds_{};
+    BossPersonalState bossPersonalState_{ BossPersonalState::EvaluateTarget };
+    float bossPersonalTimer_{ 0.f };
+    float bossTargetEvalTimer_{ 0.f };
+    uint32_t bossPersonalTargetId_{ 0 };
+    Vec3 bossBackstepTargetPos_{};
+    bool bossHpTracked_{ false };
+    float previousBossHp_{ 0.f };
+    float bossDamageSinceBackstep_{ 0.f };
+    float bossBackstepCooldownTimer_{ 0.f };
 
     static constexpr float CLUSTER_RADIUS = 20.f;
     static constexpr float UNLOCK_SQUAD_RATIO = 0.80f;
@@ -186,8 +239,8 @@ private:
     static constexpr float ISIS_RETREAT_EXTRA_DIST = 35.0f;
     static constexpr float ISIS_RETREAT_MIN_DIST = 90.0f;
     static constexpr float RETREAT_TIMEOUT = 5.0f;
-    static constexpr float RETREAT_SPEED_MULT = 0.75f;
-    static constexpr float RETREAT_LEADER_SPEED_MULT = 3.0f;
+    static constexpr float RETREAT_SPEED_MULT = 1.15f;
+    static constexpr float RETREAT_LEADER_SPEED_MULT = 15.5f;
     static constexpr float RETREAT_BOMBER_FRONT_OFFSET = 18.0f;
     static constexpr float RETREAT_BOMBER_SIDE_OFFSET = 20.0f;
     static constexpr float RETREAT_BUDDY_BACK_OFFSET = 12.0f;
@@ -203,6 +256,8 @@ private:
     static constexpr int   BUDDY_COLUMN_COUNT = 2;
     static constexpr float BUDDY_SPEED_MULT = 0.75f;
     static constexpr float ISIS_WEDGE_SPEED_MULT = 1.50f;
+    static constexpr float ISIS_BUDDY_WEDGE_SPACING_MULT = 1.90f;
+    static constexpr float SECOND_STRIKE_REPEAT_PENALTY = 350.0f;
     static constexpr float BOMBER_REGROUP_SPEED_MULT = 0.75f;
     static constexpr float BOMBER_REGROUP_BACK_OFFSET = 28.0f;
     static constexpr float BOMBER_REGROUP_SIDE_OFFSET = 22.0f;
@@ -211,6 +266,15 @@ private:
     static constexpr int   BOMBER_REGROUP_COLUMN_COUNT = 0;
     static constexpr float LEADER_KEEP_DIST = 20.0f;
     static constexpr float LEADER_KEEP_TOL = 3.0f;
+    static constexpr float BOSS_TARGET_EVAL_INTERVAL = 0.5f;
+    static constexpr float BOSS_TARGET_SWITCH_MARGIN = 120.0f;
+    static constexpr float BOSS_CHASE_SPEED_MULT = 5.35f;
+    static constexpr float BOSS_DAMAGE_REACTION_THRESHOLD = 60.0f;
+    static constexpr float BOSS_BACKSTEP_COOLDOWN = 3.0f;
+    static constexpr float BOSS_BACKSTEP_DIST = 18.0f;
+    static constexpr float BOSS_BACKSTEP_SPEED_MULT = 20.0f;
+    static constexpr float BOSS_RETREAT_DIST = 28.0f;
+    static constexpr float BOSS_RETREAT_SPEED_MULT = 5.35f;
 };
 
 class GrandBaumMidBossTactic : public MidBossTacticBase {

@@ -98,14 +98,14 @@ void ScenarioIsis::setup(Room& room) {
 
     // Squad order is part of IsisMidBossTactic's contract:
     // 0-1 = Buddy columns, 2-3 = Bomber wedge squads.
-    makeSquad(0, "BuddyL", 12, Vec3{ 62.f, 0.f, -34.f }, buddyCfg, 2);
-    makeSquad(1, "BuddyR", 12, Vec3{ 62.f, 0.f,  24.f }, buddyCfg, 2);
-    makeSquad(2, "BomberL", 40, Vec3{ 34.f, 0.f, -46.f }, bomberCfg, 8);
-    makeSquad(3, "BomberR", 40, Vec3{ 34.f, 0.f,  26.f }, bomberCfg, 8);
+	makeSquad(0, "BuddyL", 12, Vec3{ 62.f, 0.f, -34.f }, buddyCfg, 2);
+	makeSquad(1, "BuddyR", 12, Vec3{ 62.f, 0.f,  24.f }, buddyCfg, 2);
+	makeSquad(2, "BomberL", 40, Vec3{ 34.f, 0.f, -46.f }, bomberCfg, 8);
+	makeSquad(3, "BomberR", 40, Vec3{ 34.f, 0.f,  26.f }, bomberCfg, 8);
 
-    std::cout << "[Sim] ScenarioIsis: squad-loss unlock + random cooldown PincerStrike\n";
+    std::cout << "[Sim] ScenarioIsis: squad-loss unlock + two-stage WedgeStrike\n";
     std::cout << "Squads: Buddy x12/x12, Bomber x40/x40. Tactic unlocks when any squad drops below 80%.\n";
-    std::cout << "PincerStrike targets up to top 2 player clusters; cooldown rolls 7-13 seconds.\n";
+    std::cout << "Bombers strike first; Buddies re-evaluate clusters and strike second. Cooldown rolls 7-13 seconds.\n";
 }
 
 } // namespace sim

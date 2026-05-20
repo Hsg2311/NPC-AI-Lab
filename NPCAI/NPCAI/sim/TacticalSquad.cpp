@@ -132,6 +132,13 @@ bool TacticalSquad::areChargeMembersComplete(Room& room) const {
 
 // ─── calcEncircleSlots ───────────────────────────────────────────────────────
 
+void TacticalSquad::endActiveWedgeCharge(Room& room) {
+    if (activeWedgeChargeId_ == 0)
+        return;
+    room.endWedgeCharge(activeWedgeChargeId_);
+    activeWedgeChargeId_ = 0;
+}
+
 std::vector<Vec3> TacticalSquad::calcEncircleSlots(const Vec3& targetPos,
                                                      float sectorAngle,
                                                      float sectorSpan,
@@ -191,15 +198,20 @@ std::vector<Vec3> TacticalSquad::calcDenseSlots(const Vec3& center,
 
 std::vector<Vec3> TacticalSquad::calcWedgeSlots(const Vec3& apex,
                                                 const Vec3& forward,
-                                                int count) const {
+                                                int count,
+                                                float spacingMult) const {
     std::vector<Vec3> slots;
     slots.reserve(static_cast<size_t>(count));
     if (count <= 0) return slots;
 
     Vec3 fwd = (forward.lengthSq() > 0.01f) ? forward.normalized() : Vec3{ 1.f, 0.f, 0.f };
     Vec3 right{ -fwd.z, 0.f, fwd.x };
-    float spacing = std::max(memberSeparationRadius_ * 0.75f, 1.5f);
-    float rowSpacing = std::max(memberSeparationRadius_ * 0.55f, 1.25f);
+    if (spacingMult <= 0.f)
+        spacingMult = 1.f;
+    float spacing = std::max(memberSeparationRadius_ * 0.75f, 1.5f) *
+                    spacingMult;
+    float rowSpacing = std::max(memberSeparationRadius_ * 0.55f, 1.25f) *
+                       spacingMult;
 
     int placed = 0;
     int row = 0;
@@ -314,7 +326,9 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
 
             if (!wedgePrepared_) {
                 Vec3 prepareApex = centroid + forward * WEDGE_PREP_APEX_DISTANCE;
-                std::vector<Vec3> slots = calcWedgeSlots(prepareApex, forward, count);
+                std::vector<Vec3> slots =
+                    calcWedgeSlots(prepareApex, forward, count,
+                                   ord.wedgeSpacingMult);
                 Vec3 exitApex = targetCenter + forward * WEDGE_EXIT_DISTANCE;
 
                 wedgeMemberIds_.clear();

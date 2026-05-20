@@ -15,6 +15,15 @@
 
 namespace sim {
 
+namespace {
+
+std::mt19937& isisCooldownRng() {
+    static std::mt19937 rng{ std::random_device{}() };
+    return rng;
+}
+
+} // namespace
+
 void MidBossTacticBase::onLeaderDead(Room& room, PlatoonLeader& leader) {
     leader.pushConfusedToSquads(room);
     Logger::get().log(leader.getName(), "dead - issued Confused to all squads");
@@ -841,12 +850,12 @@ std::vector<Vec3> GoblinMidBossTactic::calcSquadBoxOffsets(int numSquads) const 
 }
 
 IsisMidBossTactic::IsisMidBossTactic()
-    : rng_(std::random_device{}())
-{}
+    = default;
 
 void IsisMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
     captureInitialSquadSizes(leader);
     leader.removeDeadMembersFromSquads(room);
+    updateBossDamageReaction(dt, leader);
 
     if (!tacticsUnlocked_ && checkUnlockCondition(leader)) {
         tacticsUnlocked_ = true;
@@ -863,7 +872,7 @@ void IsisMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
             cooldownTimer_ -= dt;
             if (cooldownTimer_ <= 0.f && hasLiveBomberSquad(leader)) {
                 enterPhase(Phase::RetreatForPincer,
-                           "Isis retreating before PincerStrike", leader);
+                           "Isis retreating before two-stage wedge strike", leader);
                 return;
             }
         }
@@ -881,52 +890,98 @@ void IsisMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
         bool leaderAtRetreat =
             Vec3::distance(leader.getPosition(), retreatTargetPos_) <= 1.5f;
         if (leaderAtRetreat && allLiveSquadsAtSlots(room, leader)) {
-            enterPhase(Phase::RegroupForPincer,
-                       "Isis retreat complete - regrouping for PincerStrike", leader);
+            enterPhase(Phase::RegroupBombers,
+                       "Isis retreat complete - regrouping Bombers", leader);
         } else if (phaseTimer_ >= RETREAT_TIMEOUT) {
-            enterPhase(Phase::RegroupForPincer,
-                       "Isis retreat timeout - regrouping for PincerStrike", leader);
+            enterPhase(Phase::RegroupBombers,
+                       "Isis retreat timeout - regrouping Bombers", leader);
         }
-    } else if (phase_ == Phase::RegroupForPincer) {
+    } else if (phase_ == Phase::RegroupBombers) {
         phaseTimer_ += dt;
-        buddyRefreshTimer_ -= dt;
         if (!pincerIssued_) {
-            issueRegroupForPincer(room, leader);
+            issueRegroupBombers(room, leader);
             pincerIssued_ = true;
-            buddyRefreshTimer_ = BUDDY_REFRESH_INTERVAL;
-        } else if (phaseTimer_ < BUDDY_REFRESH_DURATION &&
-                   buddyRefreshTimer_ <= 0.f) {
-            issueRegroupForPincer(room, leader);
-            buddyRefreshTimer_ = BUDDY_REFRESH_INTERVAL;
         }
 
-        if (activeBombersAtSlots(room)) {
-            enterPhase(Phase::PincerStrike,
-                       "Isis bomber line formed - WedgeCharge started", leader);
+        if (activeStrikeSquadsAtSlots(room)) {
+            enterPhase(Phase::FirstBomberWedge,
+                       "Isis Bomber line formed - first WedgeCharge started", leader);
         } else if (phaseTimer_ >= REGROUP_TIMEOUT) {
-            enterPhase(Phase::PincerStrike,
-                       "Isis regroup timeout - WedgeCharge started", leader);
+            enterPhase(Phase::FirstBomberWedge,
+                       "Isis Bomber regroup timeout - first WedgeCharge started", leader);
         }
-    } else if (phase_ == Phase::PincerStrike) {
+    } else if (phase_ == Phase::FirstBomberWedge) {
+        phaseTimer_ += dt;
+        if (!pincerIssued_) {
+            issueWedgeStrike(room, leader,
+                             false, false, true, "first Bomber wedge");
+            pincerIssued_ = true;
+        }
+        updateActiveStrikeEngage(room, leader, false);
+
+        if (activeStrikeTasksEngaged()) {
+            if (hasLiveBuddySquad(leader)) {
+                enterPhase(Phase::RegroupBuddies,
+                           "Isis first wedge completed - regrouping Buddies", leader);
+            } else {
+                enterCooldown(leader, "Isis first wedge completed - no live Buddies");
+                issueEngage(room, leader);
+            }
+        } else if (phaseTimer_ >= PINCER_TIMEOUT) {
+            updateActiveStrikeEngage(room, leader, true);
+            if (hasLiveBuddySquad(leader)) {
+                enterPhase(Phase::RegroupBuddies,
+                           "Isis first wedge timeout - regrouping Buddies", leader);
+            } else {
+                enterCooldown(leader, "Isis first wedge timeout - no live Buddies");
+                issueEngage(room, leader);
+            }
+        }
+    } else if (phase_ == Phase::RegroupBuddies) {
         phaseTimer_ += dt;
         buddyRefreshTimer_ -= dt;
         if (!pincerIssued_) {
-            issuePincerStrike(room, leader, true);
+            issueRegroupBuddies(room, leader);
             pincerIssued_ = true;
             buddyRefreshTimer_ = BUDDY_REFRESH_INTERVAL;
         } else if (phaseTimer_ < BUDDY_REFRESH_DURATION &&
                    buddyRefreshTimer_ <= 0.f) {
-            issuePincerStrike(room, leader, false);
+            issueRegroupBuddies(room, leader);
             buddyRefreshTimer_ = BUDDY_REFRESH_INTERVAL;
         }
 
-        if (activeBombersComplete(room)) {
-            enterCooldown(leader, "Isis PincerStrike completed");
+        if (activeStrikeSquadsAtSlots(room)) {
+            enterPhase(Phase::SecondBuddyWedge,
+                       "Isis Buddy line formed - second WedgeCharge started", leader);
+        } else if (phaseTimer_ >= REGROUP_TIMEOUT) {
+            enterPhase(Phase::SecondBuddyWedge,
+                       "Isis Buddy regroup timeout - second WedgeCharge started", leader);
+        }
+    } else if (phase_ == Phase::SecondBuddyWedge) {
+        phaseTimer_ += dt;
+        if (!pincerIssued_) {
+            issueWedgeStrike(room, leader,
+                             true, true, false, "second Buddy wedge");
+            pincerIssued_ = true;
+        }
+        updateActiveStrikeEngage(room, leader, false);
+
+        if (activeStrikeTasksEngaged()) {
+            enterCooldown(leader, "Isis two-stage WedgeStrike completed");
             issueEngage(room, leader);
         } else if (phaseTimer_ >= PINCER_TIMEOUT) {
-            enterCooldown(leader, "Isis PincerStrike timeout");
+            updateActiveStrikeEngage(room, leader, true);
+            enterCooldown(leader, "Isis second WedgeStrike timeout");
             issueEngage(room, leader);
         }
+    }
+
+    if (phase_ == Phase::RegroupBombers ||
+        phase_ == Phase::FirstBomberWedge ||
+        phase_ == Phase::RegroupBuddies ||
+        phase_ == Phase::SecondBuddyWedge) {
+        leader.transitionTacticalState(TacticalNpcState::HoldSlot,
+                                       "Isis tactical command");
     }
 
     Player* primary = selectPrimaryTarget(room, leader);
@@ -934,6 +989,8 @@ void IsisMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
         return;
 
     if (phase_ == Phase::RetreatForPincer) {
+        leader.transitionTacticalState(TacticalNpcState::Chase,
+                                       "Isis tactical retreat");
         Vec3 toRetreat = retreatTargetPos_ - leader.getPosition();
         float retreatDist = toRetreat.length();
         if (retreatDist > 1.f) {
@@ -949,6 +1006,9 @@ void IsisMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
         }
         return;
     }
+
+    if (updateBossPersonalCombat(dt, room, leader))
+        return;
 
     Vec3 toPlayer = primary->getPosition() - leader.getPosition();
     float dist = toPlayer.length();
@@ -1002,7 +1062,24 @@ void IsisMidBossTactic::enterPhase(Phase next, const char* reason,
     buddyRefreshTimer_ = 0.f;
     engageIssued_ = false;
     pincerIssued_ = false;
-    activeBomberSquads_.clear();
+    activeStrikeSquads_.clear();
+    activeStrikeTasks_.clear();
+    if (next == Phase::RetreatForPincer || next == Phase::Engage)
+        firstStrikeTargetIds_.clear();
+    resetBossPersonalCombat(leader,
+        (next == Phase::Engage || next == Phase::Cooldown)
+            ? "Isis boss personal loop reset"
+            : "Isis boss personal paused for squad tactic");
+    if (next == Phase::RetreatForPincer) {
+        leader.transitionTacticalState(TacticalNpcState::Chase,
+                                       "Isis tactical retreat");
+    } else if (next == Phase::RegroupBombers ||
+               next == Phase::FirstBomberWedge ||
+               next == Phase::RegroupBuddies ||
+               next == Phase::SecondBuddyWedge) {
+        leader.transitionTacticalState(TacticalNpcState::HoldSlot,
+                                       "Isis tactical command");
+    }
 }
 
 void IsisMidBossTactic::enterCooldown(PlatoonLeader& leader, const char* reason) {
@@ -1107,8 +1184,8 @@ void IsisMidBossTactic::issueRetreatForPincer(Room& room,
         BOMBER_REGROUP_COLUMN_COUNT);
 }
 
-void IsisMidBossTactic::issueRegroupForPincer(Room& room,
-                                              PlatoonLeader& leader) {
+void IsisMidBossTactic::issueRegroupBombers(Room& room,
+                                            PlatoonLeader& leader) {
     std::vector<StrikeCluster> clusters = selectStrikeClusters(room, leader);
     if (clusters.empty()) {
         issueEngage(room, leader);
@@ -1116,24 +1193,12 @@ void IsisMidBossTactic::issueRegroupForPincer(Room& room,
     }
 
     const auto& squads = leader.getSquads();
-    TacticalSquad* buddySquads[2] = {
-        squads.size() > 0 ? squads[0] : nullptr,
-        squads.size() > 1 ? squads[1] : nullptr
-    };
     TacticalSquad* bomberSquads[2] = {
         squads.size() > 2 ? squads[2] : nullptr,
         squads.size() > 3 ? squads[3] : nullptr
     };
 
-    for (int i = 0; i < 2; ++i) {
-        if (!buddySquads[i] || buddySquads[i]->isEmpty())
-            continue;
-        int clusterIdx = (clusters.size() == 1) ? 0 : i;
-        issueBuddyColumn(room, buddySquads[i], clusters[clusterIdx],
-                         i == 0 ? -1.f : 1.f);
-    }
-
-    activeBomberSquads_.clear();
+    activeStrikeSquads_.clear();
     int assignedBomber = 0;
     for (int i = 0; i < 2; ++i) {
         TacticalSquad* bomber = bomberSquads[i];
@@ -1145,14 +1210,15 @@ void IsisMidBossTactic::issueRegroupForPincer(Room& room,
             : std::min(assignedBomber, 1);
         issueBomberRegroup(room, bomber, clusters[clusterIdx],
                            assignedBomber == 0 ? -1.f : 1.f);
-        activeBomberSquads_.push_back(bomber);
+        activeStrikeSquads_.push_back(bomber);
         ++assignedBomber;
     }
 }
 
-void IsisMidBossTactic::issuePincerStrike(Room& room, PlatoonLeader& leader,
-                                          bool issueBombers) {
-    std::vector<StrikeCluster> clusters = selectStrikeClusters(room, leader);
+void IsisMidBossTactic::issueRegroupBuddies(Room& room,
+                                            PlatoonLeader& leader) {
+    std::vector<StrikeCluster> clusters =
+        selectStrikeClusters(room, leader, true);
     if (clusters.empty()) {
         issueEngage(room, leader);
         return;
@@ -1163,36 +1229,58 @@ void IsisMidBossTactic::issuePincerStrike(Room& room, PlatoonLeader& leader,
         squads.size() > 0 ? squads[0] : nullptr,
         squads.size() > 1 ? squads[1] : nullptr
     };
-    TacticalSquad* bomberSquads[2] = {
-        squads.size() > 2 ? squads[2] : nullptr,
-        squads.size() > 3 ? squads[3] : nullptr
-    };
 
+    activeStrikeSquads_.clear();
     for (int i = 0; i < 2; ++i) {
         if (!buddySquads[i] || buddySquads[i]->isEmpty())
             continue;
         int clusterIdx = (clusters.size() == 1) ? 0 : i;
         issueBuddyColumn(room, buddySquads[i], clusters[clusterIdx],
                          i == 0 ? -1.f : 1.f);
+        activeStrikeSquads_.push_back(buddySquads[i]);
+    }
+}
+
+void IsisMidBossTactic::issueWedgeStrike(Room& room, PlatoonLeader& leader,
+                                         bool useBuddySquads,
+                                         bool applyRepeatPenalty,
+                                         bool rememberTargets,
+                                         const char* strikeLabel) {
+    std::vector<StrikeCluster> clusters =
+        selectStrikeClusters(room, leader, applyRepeatPenalty);
+    if (clusters.empty()) {
+        issueEngage(room, leader);
+        return;
     }
 
-    if (!issueBombers)
-        return;
+    const auto& squads = leader.getSquads();
+    TacticalSquad* strikeSquads[2] = {
+        useBuddySquads
+            ? (squads.size() > 0 ? squads[0] : nullptr)
+            : (squads.size() > 2 ? squads[2] : nullptr),
+        useBuddySquads
+            ? (squads.size() > 1 ? squads[1] : nullptr)
+            : (squads.size() > 3 ? squads[3] : nullptr)
+    };
 
-    activeBomberSquads_.clear();
-    int assignedBomber = 0;
+    activeStrikeSquads_.clear();
+    activeStrikeTasks_.clear();
+    if (rememberTargets)
+        firstStrikeTargetIds_.clear();
+
+    int assignedSquad = 0;
     for (int i = 0; i < 2; ++i) {
-        TacticalSquad* bomber = bomberSquads[i];
-        if (!bomber || bomber->isEmpty())
+        TacticalSquad* squad = strikeSquads[i];
+        if (!squad || squad->isEmpty())
             continue;
 
         int clusterIdx = 0;
         if (clusters.size() > 1)
-            clusterIdx = std::min(assignedBomber, 1);
+            clusterIdx = std::min(assignedSquad, 1);
 
         const StrikeCluster& strikeCluster = clusters[clusterIdx];
         SquadOrder ord;
-        // Isis bombers intentionally reuse the same shared WedgeCharge execution
+        // Isis squads intentionally reuse the same shared WedgeCharge execution
         // path as Goblin: TacticalSquad prepares the wedge and TacticalNpc runs
         // ChargeThrough with the common impact/damage rules.
         ord.type = SquadOrderType::WedgeCharge;
@@ -1200,9 +1288,36 @@ void IsisMidBossTactic::issuePincerStrike(Room& room, PlatoonLeader& leader,
         ord.targetIds = strikeCluster.cluster.playerIds;
         ord.tacticCenter = strikeCluster.cluster.centroid;
         ord.chargeSpeedMult = ISIS_WEDGE_SPEED_MULT;
-        bomber->receiveOrder(ord);
-        activeBomberSquads_.push_back(bomber);
-        ++assignedBomber;
+        if (useBuddySquads)
+            ord.wedgeSpacingMult = ISIS_BUDDY_WEDGE_SPACING_MULT;
+        squad->receiveOrder(ord);
+        activeStrikeSquads_.push_back(squad);
+        activeStrikeTasks_.push_back(
+            StrikeTask{ squad, strikeCluster.cluster.playerIds, false });
+
+        if (rememberTargets) {
+            for (uint32_t playerId : strikeCluster.cluster.playerIds) {
+                if (std::find(firstStrikeTargetIds_.begin(),
+                              firstStrikeTargetIds_.end(),
+                              playerId) == firstStrikeTargetIds_.end()) {
+                    firstStrikeTargetIds_.push_back(playerId);
+                }
+            }
+        }
+
+        std::string msg = std::string("Isis ") + strikeLabel +
+            " target rep=" +
+            std::to_string(strikeCluster.cluster.representativeId) +
+            " players=";
+        for (size_t idIdx = 0; idIdx < strikeCluster.cluster.playerIds.size();
+             ++idIdx) {
+            if (idIdx > 0)
+                msg += ",";
+            msg += std::to_string(strikeCluster.cluster.playerIds[idIdx]);
+        }
+        Logger::get().log(leader.getName(), msg);
+
+        ++assignedSquad;
     }
 }
 
@@ -1281,7 +1396,8 @@ void IsisMidBossTactic::issueBuddyColumn(Room& room, TacticalSquad* squad,
 
 std::vector<IsisMidBossTactic::StrikeCluster>
 IsisMidBossTactic::selectStrikeClusters(const Room& room,
-                                        const PlatoonLeader& leader) const {
+                                        const PlatoonLeader& leader,
+                                        bool applyRepeatPenalty) const {
     std::vector<PlayerCluster> baseClusters =
         buildPlayerClusters(room, CLUSTER_RADIUS);
     std::vector<StrikeCluster> result;
@@ -1296,8 +1412,22 @@ IsisMidBossTactic::selectStrikeClusters(const Room& room,
             cluster.representativeId = cluster.playerIds.front();
 
         float distance = Vec3::distance(cluster.centroid, leaderPos);
+        bool overlapsFirstStrike = false;
+        if (applyRepeatPenalty) {
+            for (uint32_t playerId : cluster.playerIds) {
+                if (std::find(firstStrikeTargetIds_.begin(),
+                              firstStrikeTargetIds_.end(),
+                              playerId) != firstStrikeTargetIds_.end()) {
+                    overlapsFirstStrike = true;
+                    break;
+                }
+            }
+        }
+
         float score = static_cast<float>(cluster.playerIds.size()) * 1000.f -
                       distance;
+        if (overlapsFirstStrike)
+            score -= SECOND_STRIKE_REPEAT_PENALTY;
         cluster.score = score;
         result.push_back({ cluster, score });
     }
@@ -1330,14 +1460,398 @@ Player* IsisMidBossTactic::selectPrimaryTarget(
     return selectNearestPlayer(room, leader.getPosition());
 }
 
+uint32_t IsisMidBossTactic::selectStrikeEngageTarget(
+    Room& room, const PlatoonLeader& leader, const StrikeTask& task) const {
+    Vec3 from = task.squad ? task.squad->calcCentroid(room)
+                           : leader.getPosition();
+
+    uint32_t bestTargetId = 0;
+    float bestDistSq = -1.f;
+    for (uint32_t targetId : task.targetIds) {
+        auto* player = dynamic_cast<Player*>(room.findActorById(targetId));
+        if (!player || !player->isAlive())
+            continue;
+
+        float distSq = Vec3::distanceSq(from, player->getPosition());
+        if (bestDistSq < 0.f || distSq < bestDistSq) {
+            bestDistSq = distSq;
+            bestTargetId = targetId;
+        }
+    }
+
+    if (bestTargetId != 0)
+        return bestTargetId;
+
+    Player* fallback = selectPrimaryTarget(room, leader);
+    return fallback ? fallback->getId() : 0;
+}
+
+void IsisMidBossTactic::updateActiveStrikeEngage(
+    Room& room, PlatoonLeader& leader, bool forceAll) {
+    for (StrikeTask& task : activeStrikeTasks_) {
+        if (task.engageIssued)
+            continue;
+
+        if (!task.squad || task.squad->isEmpty()) {
+            task.engageIssued = true;
+            continue;
+        }
+
+        if (!forceAll && !task.squad->areChargeMembersComplete(room))
+            continue;
+
+        task.squad->endActiveWedgeCharge(room);
+
+        uint32_t targetId = selectStrikeEngageTarget(room, leader, task);
+        if (targetId != 0) {
+            SquadOrder ord;
+            ord.type = SquadOrderType::Engage;
+            ord.targetId = targetId;
+            task.squad->receiveOrder(ord);
+
+            Logger::get().log(leader.getName(),
+                "Isis strike squad returned to Engage target=" +
+                std::to_string(targetId));
+        }
+        task.engageIssued = true;
+    }
+}
+
+void IsisMidBossTactic::updateBossDamageReaction(
+    float dt, const PlatoonLeader& leader) {
+    if (!bossHpTracked_) {
+        bossHpTracked_ = true;
+        previousBossHp_ = leader.getHp();
+        return;
+    }
+
+    float currentHp = leader.getHp();
+    float damageDelta = previousBossHp_ - currentHp;
+    if (damageDelta > 0.f)
+        bossDamageSinceBackstep_ += damageDelta;
+    previousBossHp_ = currentHp;
+
+    if (bossBackstepCooldownTimer_ > 0.f)
+        bossBackstepCooldownTimer_ =
+            std::max(0.f, bossBackstepCooldownTimer_ - dt);
+}
+
+bool IsisMidBossTactic::updateBossPersonalCombat(
+    float dt, Room& room, PlatoonLeader& leader) {
+    if (phase_ != Phase::Engage && phase_ != Phase::Cooldown)
+        return false;
+
+    if (bossPersonalState_ != BossPersonalState::Backstep &&
+        bossPersonalState_ != BossPersonalState::Retreat &&
+        bossDamageSinceBackstep_ >= BOSS_DAMAGE_REACTION_THRESHOLD &&
+        bossBackstepCooldownTimer_ <= 0.f) {
+        beginBossBackstep(room, leader);
+        return true;
+    }
+
+    auto resolveCurrentTarget = [&]() -> Actor* {
+        Actor* target = resolveBossPersonalTarget(room, bossPersonalTargetId_);
+        if (!target) {
+            bossPersonalState_ = BossPersonalState::EvaluateTarget;
+            bossPersonalTargetId_ = 0;
+        }
+        return target;
+    };
+
+    if (bossPersonalState_ == BossPersonalState::EvaluateTarget) {
+        bossPersonalTargetId_ = selectBossPersonalTarget(room, leader);
+        leader.setTacticalTarget(bossPersonalTargetId_);
+        bossPersonalTimer_ = 0.f;
+        bossTargetEvalTimer_ = BOSS_TARGET_EVAL_INTERVAL;
+        if (bossPersonalTargetId_ == 0) {
+            leader.transitionTacticalState(TacticalNpcState::Idle,
+                                           "Isis boss no target");
+            return true;
+        }
+
+        bossPersonalState_ = BossPersonalState::ChaseTarget;
+        leader.transitionTacticalState(TacticalNpcState::Chase,
+                                       "Isis boss chase target");
+        return true;
+    }
+
+    Actor* target = resolveCurrentTarget();
+    if (!target)
+        return true;
+
+    Vec3 toTarget = target->getPosition() - leader.getPosition();
+    float dist = toTarget.length();
+    Vec3 dir = (dist > 0.01f) ? toTarget / dist : Vec3{ 1.f, 0.f, 0.f };
+
+    if (bossPersonalState_ == BossPersonalState::ChaseTarget) {
+        leader.setTacticalTarget(bossPersonalTargetId_);
+        leader.transitionTacticalState(TacticalNpcState::Chase,
+                                       "Isis boss chase target");
+        bossTargetEvalTimer_ -= dt;
+        if (bossTargetEvalTimer_ <= 0.f) {
+            bossTargetEvalTimer_ = BOSS_TARGET_EVAL_INTERVAL;
+            BossTargetScore candidate =
+                selectBossPersonalTargetScore(room, leader);
+            float currentScore = 0.f;
+            if (candidate.targetId != 0 &&
+                candidate.targetId != bossPersonalTargetId_ &&
+                calcBossPersonalTargetScore(room, leader,
+                                            bossPersonalTargetId_,
+                                            currentScore) &&
+                candidate.score > currentScore + BOSS_TARGET_SWITCH_MARGIN) {
+                bossPersonalTargetId_ = candidate.targetId;
+                leader.setTacticalTarget(bossPersonalTargetId_);
+                target = resolveBossPersonalTarget(room, bossPersonalTargetId_);
+                if (!target) {
+                    bossPersonalState_ = BossPersonalState::EvaluateTarget;
+                    bossPersonalTargetId_ = 0;
+                    return true;
+                }
+
+                toTarget = target->getPosition() - leader.getPosition();
+                dist = toTarget.length();
+                dir = (dist > 0.01f) ? toTarget / dist
+                                     : Vec3{ 1.f, 0.f, 0.f };
+
+                char buf[160];
+                std::snprintf(buf, sizeof(buf),
+                    "Isis boss retargeted to %s (score %.1f)",
+                    target->getName().c_str(), candidate.score);
+                Logger::get().log(leader.getName(), buf);
+            }
+        }
+
+        if (dist <= leader.getAttackRange()) {
+            bossPersonalTimer_ = 0.f;
+            bossPersonalState_ = BossPersonalState::AttackWindup;
+            leader.transitionTacticalState(TacticalNpcState::AttackWindup,
+                                           "Isis boss attack windup");
+            return true;
+        }
+
+        moveBossToward(leader, target->getPosition(), BOSS_CHASE_SPEED_MULT, dt);
+        return true;
+    }
+
+    if (bossPersonalState_ == BossPersonalState::AttackWindup) {
+        leader.setFacing(dir);
+        bossPersonalTimer_ += dt;
+        TacticalNpcConfig cfg = leader.getConfig();
+        if (bossPersonalTimer_ < cfg.attackWindupTime)
+            return true;
+
+        if (dist <= leader.getAttackRange()) {
+            target->takeDamage(leader.getAttackDamage());
+            char buf[160];
+            std::snprintf(buf, sizeof(buf),
+                "Isis boss hit %s for %.0f (hp=%.1f)",
+                target->getName().c_str(),
+                leader.getAttackDamage(),
+                target->getHp());
+            Logger::get().log(leader.getName(), buf);
+        } else {
+            Logger::get().log(leader.getName(), "Isis boss attack missed");
+        }
+
+        bossPersonalTimer_ = 0.f;
+        bossPersonalState_ = BossPersonalState::AttackRecover;
+        leader.transitionTacticalState(TacticalNpcState::AttackRecover,
+                                       "Isis boss attack recover");
+        return true;
+    }
+
+    if (bossPersonalState_ == BossPersonalState::AttackRecover) {
+        leader.setFacing(dir);
+        bossPersonalTimer_ += dt;
+        TacticalNpcConfig cfg = leader.getConfig();
+        if (bossPersonalTimer_ < cfg.attackRecoverTime)
+            return true;
+
+        bossPersonalTimer_ = 0.f;
+        bossPersonalState_ = BossPersonalState::EvaluateTarget;
+        return true;
+    }
+
+    if (bossPersonalState_ == BossPersonalState::Backstep) {
+        leader.transitionTacticalState(TacticalNpcState::Chase,
+                                       "Isis boss backstep");
+        Vec3 toBackstep = bossBackstepTargetPos_ - leader.getPosition();
+        float backstepDist = toBackstep.length();
+        if (backstepDist <= 1.f) {
+            bossPersonalState_ = BossPersonalState::Retreat;
+            return true;
+        }
+
+        Vec3 backstepDir = toBackstep / backstepDist;
+        leader.setPosition(leader.getPosition() +
+            backstepDir * leader.getLeaderMoveSpeed() *
+            BOSS_BACKSTEP_SPEED_MULT * dt);
+        leader.setFacing(dir);
+        return true;
+    }
+
+    if (bossPersonalState_ == BossPersonalState::Retreat) {
+        leader.transitionTacticalState(TacticalNpcState::Chase,
+                                       "Isis boss retreat");
+        if (dist >= BOSS_RETREAT_DIST) {
+            bossPersonalTimer_ = 0.f;
+            bossPersonalState_ = BossPersonalState::EvaluateTarget;
+            return true;
+        }
+
+        Vec3 awayDir = (dist > 0.01f) ? dir * -1.f : Vec3{ -1.f, 0.f, 0.f };
+        leader.setPosition(leader.getPosition() +
+            awayDir * leader.getLeaderMoveSpeed() *
+            BOSS_RETREAT_SPEED_MULT * dt);
+        leader.setFacing(dir);
+        return true;
+    }
+
+    return true;
+}
+
+void IsisMidBossTactic::resetBossPersonalCombat(PlatoonLeader& leader,
+                                                const char* reason) {
+    bossPersonalState_ = BossPersonalState::EvaluateTarget;
+    bossPersonalTimer_ = 0.f;
+    bossTargetEvalTimer_ = 0.f;
+    bossPersonalTargetId_ = 0;
+    leader.setTacticalTarget(0);
+    leader.transitionTacticalState(TacticalNpcState::Idle, reason);
+}
+
+uint32_t IsisMidBossTactic::selectBossPersonalTarget(
+    Room& room, const PlatoonLeader& leader) const {
+    return selectBossPersonalTargetScore(room, leader).targetId;
+}
+
+IsisMidBossTactic::BossTargetScore
+IsisMidBossTactic::selectBossPersonalTargetScore(
+    Room& room, const PlatoonLeader& leader) const {
+    std::vector<PlayerCluster> clusters = buildPlayerClusters(room, CLUSTER_RADIUS);
+    if (clusters.empty())
+        return {};
+
+    Vec3 leaderPos = leader.getPosition();
+    BossTargetScore best{};
+    bool hasBest = false;
+
+    for (const PlayerCluster& cluster : clusters) {
+        float clusterBaseScore =
+            static_cast<float>(cluster.playerIds.size()) * 1000.f;
+        for (uint32_t playerId : cluster.playerIds) {
+            auto* player = dynamic_cast<Player*>(room.findActorById(playerId));
+            if (!player || !player->isAlive())
+                continue;
+
+            float distance = Vec3::distance(leaderPos, player->getPosition());
+            float score = clusterBaseScore - distance;
+            bool better = !hasBest ||
+                score > best.score + 0.001f ||
+                (std::fabs(score - best.score) <= 0.001f &&
+                 playerId < best.targetId);
+
+            if (!better)
+                continue;
+
+            best.targetId = playerId;
+            best.score = score;
+            hasBest = true;
+        }
+    }
+
+    return best;
+}
+
+bool IsisMidBossTactic::calcBossPersonalTargetScore(
+    Room& room, const PlatoonLeader& leader,
+    uint32_t targetId, float& outScore) const {
+    if (targetId == 0)
+        return false;
+
+    auto* target = dynamic_cast<Player*>(room.findActorById(targetId));
+    if (!target || !target->isAlive())
+        return false;
+
+    std::vector<PlayerCluster> clusters = buildPlayerClusters(room, CLUSTER_RADIUS);
+    Vec3 leaderPos = leader.getPosition();
+    for (const PlayerCluster& cluster : clusters) {
+        if (std::find(cluster.playerIds.begin(), cluster.playerIds.end(),
+                      targetId) == cluster.playerIds.end()) {
+            continue;
+        }
+
+        float distance = Vec3::distance(leaderPos, target->getPosition());
+        outScore = static_cast<float>(cluster.playerIds.size()) * 1000.f -
+                   distance;
+        return true;
+    }
+
+    return false;
+}
+
+Actor* IsisMidBossTactic::resolveBossPersonalTarget(
+    Room& room, uint32_t targetId) const {
+    if (targetId == 0)
+        return nullptr;
+    Actor* target = room.findActorById(targetId);
+    return (target && target->isAlive()) ? target : nullptr;
+}
+
+void IsisMidBossTactic::beginBossBackstep(Room& room, PlatoonLeader& leader) {
+    if (bossPersonalTargetId_ == 0)
+        bossPersonalTargetId_ = selectBossPersonalTarget(room, leader);
+
+    Actor* target = resolveBossPersonalTarget(room, bossPersonalTargetId_);
+    Vec3 awayDir{ -1.f, 0.f, 0.f };
+    if (target) {
+        Vec3 fromTarget = leader.getPosition() - target->getPosition();
+        if (fromTarget.lengthSq() > 0.01f)
+            awayDir = fromTarget.normalized();
+    }
+
+    bossBackstepTargetPos_ =
+        leader.getPosition() + awayDir * BOSS_BACKSTEP_DIST;
+    bossDamageSinceBackstep_ = 0.f;
+    bossBackstepCooldownTimer_ = BOSS_BACKSTEP_COOLDOWN;
+    bossPersonalTimer_ = 0.f;
+    bossPersonalState_ = BossPersonalState::Backstep;
+    leader.setTacticalTarget(bossPersonalTargetId_);
+    leader.transitionTacticalState(TacticalNpcState::Chase,
+                                   "Isis boss damage backstep");
+}
+
+void IsisMidBossTactic::moveBossToward(PlatoonLeader& leader,
+                                       const Vec3& targetPos,
+                                       float speedMult, float dt) const {
+    Vec3 toTarget = targetPos - leader.getPosition();
+    float dist = toTarget.length();
+    if (dist <= 0.01f)
+        return;
+
+    Vec3 dir = toTarget / dist;
+    leader.setFacing(dir);
+    leader.setPosition(leader.getPosition() +
+        dir * leader.getLeaderMoveSpeed() * speedMult * dt);
+}
+
 float IsisMidBossTactic::rollCooldown() {
     std::uniform_real_distribution<float> dist(MIN_COOLDOWN, MAX_COOLDOWN);
-    return dist(rng_);
+    return dist(isisCooldownRng());
 }
 
 bool IsisMidBossTactic::hasLiveBomberSquad(const PlatoonLeader& leader) const {
     const auto& squads = leader.getSquads();
     for (size_t i = 2; i < squads.size() && i < 4; ++i) {
+        if (squads[i] && !squads[i]->isEmpty())
+            return true;
+    }
+    return false;
+}
+
+bool IsisMidBossTactic::hasLiveBuddySquad(const PlatoonLeader& leader) const {
+    const auto& squads = leader.getSquads();
+    for (size_t i = 0; i < squads.size() && i < 2; ++i) {
         if (squads[i] && !squads[i]->isEmpty())
             return true;
     }
@@ -1357,21 +1871,21 @@ bool IsisMidBossTactic::allLiveSquadsAtSlots(
     return anyLiveSquad;
 }
 
-bool IsisMidBossTactic::activeBombersAtSlots(Room& room) const {
-    if (activeBomberSquads_.empty())
+bool IsisMidBossTactic::activeStrikeSquadsAtSlots(Room& room) const {
+    if (activeStrikeSquads_.empty())
         return true;
-    for (TacticalSquad* squad : activeBomberSquads_) {
+    for (TacticalSquad* squad : activeStrikeSquads_) {
         if (squad && !squad->isEmpty() && !squad->areMembersAtSlots(room))
             return false;
     }
     return true;
 }
 
-bool IsisMidBossTactic::activeBombersComplete(Room& room) const {
-    if (activeBomberSquads_.empty())
+bool IsisMidBossTactic::activeStrikeTasksEngaged() const {
+    if (activeStrikeTasks_.empty())
         return true;
-    for (TacticalSquad* squad : activeBomberSquads_) {
-        if (squad && !squad->isEmpty() && !squad->areChargeMembersComplete(room))
+    for (const StrikeTask& task : activeStrikeTasks_) {
+        if (!task.engageIssued)
             return false;
     }
     return true;

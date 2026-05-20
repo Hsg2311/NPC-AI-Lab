@@ -89,6 +89,14 @@ struct DebugTacticalNpcEntry {
     float       slotZ{ 0.f };
 };
 
+struct DebugTelegraphEntry {
+    float x{ 0.f };
+    float z{ 0.f };
+    float radius{ 0.f };
+    float progress{ 0.f };
+    int   kind{ 0 };
+};
+
 struct DebugSnapshot {
     uint64_t                           tick{ 0 };
     bool                               paused{ false };
@@ -96,6 +104,7 @@ struct DebugSnapshot {
     std::vector<DebugNpcEntry>         npcs;
     std::vector<DebugGroupEntry>       groups;
     std::vector<DebugTacticalNpcEntry> tacticalNpcs;
+    std::vector<DebugTelegraphEntry>   telegraphs;
 };
 
 } // namespace sim

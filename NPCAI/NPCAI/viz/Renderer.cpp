@@ -1,4 +1,5 @@
 ﻿#include "Renderer.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -201,6 +202,37 @@ void Renderer::drawGroups(HDC hdc, int w, int h, const sim::DebugSnapshot& snap)
             SelectObject(hdc, op_);
             DeleteObject(mp_);
         }
+    }
+}
+
+void Renderer::drawTelegraphs(HDC hdc, int w, int h,
+                              const sim::DebugSnapshot& snap) {
+    for (const auto& t : snap.telegraphs) {
+        POINT center = worldToScreen(t.x, t.z, w, h);
+        int radiusPx = static_cast<int>(t.radius * camera_.scale);
+        int innerPx = static_cast<int>(radiusPx * std::clamp(t.progress, 0.f, 1.f));
+
+        HPEN outerPen = CreatePen(PS_SOLID, 2, RGB(255, 90, 40));
+        HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, outerPen));
+        drawCircleOutline(hdc, center, radiusPx);
+        SelectObject(hdc, oldPen);
+        DeleteObject(outerPen);
+
+        HPEN innerPen = CreatePen(PS_DOT, 2, RGB(255, 190, 60));
+        oldPen = static_cast<HPEN>(SelectObject(hdc, innerPen));
+        drawCircleOutline(hdc, center, innerPx);
+        SelectObject(hdc, oldPen);
+        DeleteObject(innerPen);
+
+        const int cross = 6;
+        HPEN crossPen = CreatePen(PS_SOLID, 1, RGB(255, 180, 80));
+        oldPen = static_cast<HPEN>(SelectObject(hdc, crossPen));
+        MoveToEx(hdc, center.x - cross, center.y, nullptr);
+        LineTo(hdc, center.x + cross, center.y);
+        MoveToEx(hdc, center.x, center.y - cross, nullptr);
+        LineTo(hdc, center.x, center.y + cross);
+        SelectObject(hdc, oldPen);
+        DeleteObject(crossPen);
     }
 }
 
@@ -666,6 +698,7 @@ void Renderer::render(HDC hdc, int clientW, int clientH,
     drawBackground(hdc, clientW, clientH);
     drawGrid(hdc, clientW, clientH);
     drawGroups(hdc, clientW, clientH, snapshot);
+    drawTelegraphs(hdc, clientW, clientH, snapshot);
 
     for (const auto& npc : snapshot.npcs) {
         drawNpc(hdc, clientW, clientH, npc, snapshot);
