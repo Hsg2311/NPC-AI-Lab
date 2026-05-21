@@ -12,7 +12,7 @@
 namespace sim {
 
 void ScenarioGrandBaum::setup(Room& room) {
-    auto p1 = std::make_shared<Player>("P1", Vec3{ 0.f, 0.f, 0.f }, 10000.f, 30.f);
+    auto p1 = std::make_shared<Player>("P1", Vec3{ 0.f, 0.f, 0.f }, 10000.f, 15.f);
     room.addActor(p1);
     controlledPlayer_ = p1.get();
 
@@ -26,7 +26,7 @@ void ScenarioGrandBaum::setup(Room& room) {
 
     TacticalNpcConfig slimeCfg;
     slimeCfg.maxHp             = 60.f;
-    slimeCfg.moveSpeed         = 13.f;
+    slimeCfg.moveSpeed         = 8.f;
     slimeCfg.attackRange       = 1.8f;
     slimeCfg.attackDamage      = 8.f;
     slimeCfg.attackWindupTime  = 0.35f;
