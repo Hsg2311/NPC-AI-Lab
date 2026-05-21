@@ -539,7 +539,7 @@ RetreatForPincer
   -> 플레이어 군집 중심 기준 반대 방향 max(현재 보스 거리 + 35m, 90m)에 후퇴 목표 고정
   -> 모든 부대는 보스 후퇴 목표 주변의 역할별 FormationHold로 집결
   -> Bomber 부대는 보스 전방 좌우, Buddy 부대는 보스 후방/측면 좌우에 정렬
-  -> 부대 후퇴 speedMult 1.15, 이시스 본체 후퇴 speedMult 6.5 적용
+  -> 부대 후퇴 speedMult 1.15, 이시스 본체 후퇴 speedMult 15.5 적용
   -> 이시스 본체도 Chase 상태로 표시되며 같은 후퇴 목표로 빠르게 이동
   -> 이시스와 부대가 도착하거나 5초가 지나면 RegroupBombers
 
@@ -552,20 +552,31 @@ FirstBomberWedge
   -> Bomber 부대: 상위 최대 2개 플레이어 군집에 WedgeCharge
   -> WedgeCharge가 공용 쐐기 준비 슬롯을 만든 뒤 ChargeThrough 돌진
   -> 1차 대상 군집의 플레이어 ID를 저장
+  -> 1차 Bomber 돌진 시작과 동시에 Buddy 2차 대상 군집을 평가하고, Buddy만 2차 쐐기 준비 위치로 이동 시작
   -> 각 Bomber 부대는 자기 돌진이 끝나는 즉시 해당 군집 우선 Engage로 복귀
   -> 모든 Bomber 부대가 Engage 복귀하거나 7초 타임아웃 시 RegroupBuddies
 
 RegroupBuddies
-  -> 플레이어 군집을 다시 평가하되 1차 대상 군집에는 약한 반복 페널티 적용
-  -> Buddy 부대: 선택 군집 좌우 대각선 랠리 지점에 FormationHold
+  -> 1차 Bomber가 끝난 뒤 Buddy 준비 완료와 이시스 선두 합류를 기다리는 phase
+  -> 2차 준비 명령이 아직 없으면 플레이어 군집을 평가하되 1차 대상 군집에는 약한 반복 페널티 적용
+  -> Buddy 부대: retreatTargetPos_ 주변 후퇴 진영 앞쪽 좌우 랠리 지점에 FormationHold
+  -> 선택 군집 중심은 Buddy의 바라보는 방향과 이후 WedgeCharge 돌진 목표로만 사용
   -> Buddy 전열 이동은 Isis 전술 전용 speedMult 0.75 사용
-  -> Buddy가 랠리 슬롯에 도착하거나 3.5초가 지나면 SecondBuddyWedge
+  -> 살아있는 Buddy 부대 중 랜덤으로 1개를 선택하고, 이시스가 해당 Buddy 쐐기의 선두/apex 위치로 이동
+  -> Buddy가 랠리 슬롯에 도착하고 이시스도 선두/apex에 도착하면 SecondBuddyWedge
+  -> 이시스 합류 대기에는 타임아웃을 두지 않으며, 선택 Buddy가 전멸하면 살아있는 Buddy를 다시 선택
 
 SecondBuddyWedge
-  -> Buddy 부대: 군집을 한 번 더 재평가한 뒤 상위 최대 2개 플레이어 군집에 WedgeCharge
+  -> Buddy 부대: 2차 준비 시작 시점에 저장한 상위 최대 2개 플레이어 군집에 WedgeCharge
   -> 점수는 playerCount * 1000 - distanceToIsis - repeatPenalty
   -> 1차 대상과 플레이어 ID가 겹치는 군집에는 SECOND_STRIKE_REPEAT_PENALTY = 350 적용
   -> Buddy WedgeCharge에는 ISIS_BUDDY_WEDGE_SPACING_MULT = 1.90을 적용해 쐐기 간격을 넓힘
+  -> 이시스가 합류한 Buddy WedgeCharge는 reserveWedgeApex로 첫 apex 슬롯을 비우고, Buddy 멤버는 그 뒤 슬롯부터 배치
+  -> 이시스 본체는 Buddy가 WedgeCharge 준비 슬롯을 만든 뒤 실제 ChargeThrough를 시작할 때까지 선두/apex에서 대기
+  -> 선택 Buddy 부대의 WedgeCharge가 active 상태가 되면 이시스도 같은 방향으로 ChargeThrough 표시와 함께 돌진
+  -> 2차 보스 합류 중 이시스 본체는 타겟 플레이어가 아니라 쐐기 돌진 방향을 바라봄
+  -> 이시스 본체의 2차 합류 돌진 speedMult는 28.0으로, Buddy 실속도와 맞춰 apex 선두를 유지
+  -> 이시스가 합류한 Buddy WedgeCharge는 ISIS_BOSS_JOINED_WEDGE_DAMAGE_MULT = 1.50으로 피해 강화
   -> 각 Buddy 부대는 자기 돌진이 끝나는 즉시 해당 군집 우선 Engage로 복귀
   -> 모든 Buddy 부대가 Engage 복귀하거나 7초 타임아웃 시 Cooldown
 
@@ -574,17 +585,18 @@ Cooldown
   -> 종료 후 Engage 복귀
 ```
 
-플레이어 군집이 3개 이상이면 모든 군집을 동시에 처리하지 않는다. 군집 내 플레이어 수가 많은 순서, 이시스에게 가까운 순서, 대표 플레이어 ID가 낮은 순서로 상위 2개만 선택한다. 2차 Buddy 돌진은 군집을 다시 평가하며, 1차 Bomber 대상과 겹치는 군집에만 약한 반복 페널티를 적용한다. 이 페널티는 같은 인원수 군집 사이의 대상 변화를 유도하지만, 2명 이상이 뭉친 큰 군집 우선 원칙을 깨지는 않는다.
+플레이어 군집이 3개 이상이면 모든 군집을 동시에 처리하지 않는다. 군집 내 플레이어 수가 많은 순서, 이시스에게 가까운 순서, 대표 플레이어 ID가 낮은 순서로 상위 2개만 선택한다. 2차 Buddy 대상은 1차 Bomber 돌진이 시작되는 시점에 다시 평가하고, 1차 Bomber 대상과 겹치는 군집에만 약한 반복 페널티를 적용한다. 이때 저장한 군집을 2차 돌진 발행 시 그대로 사용하므로 준비 위치와 돌진 대상이 어긋나지 않는다. 이 페널티는 같은 인원수 군집 사이의 대상 변화를 유도하지만, 2명 이상이 뭉친 큰 군집 우선 원칙을 깨지는 않는다.
 
 돌진 완료 후 Engage 복귀는 부대 단위로 처리한다. 같은 웨이브 안에서 먼저 돌진을 끝낸 부대는 다른 부대를 기다리지 않고 즉시 `Engage`를 받는다. Engage 대상은 해당 부대가 돌진했던 군집의 살아있는 플레이어 중 부대 중심에 가장 가까운 대상을 우선하고, 없으면 기존 이시스 주 타겟 선택으로 대체한다.
 
 Bomber/Buddy 돌진은 이시스 전용 공격 로직을 만들지 않고 고블린이 사용하던 공용 `WedgeCharge -> ChargeThrough` 실행 경로를 그대로 사용한다. 따라서 피해량, 충돌 반경, 플레이어별 1회 히트 판정은 `TacticalSquad`와 `TacticalNpc`의 기존 `WedgeCharge` 규칙을 따른다.
 단, `SquadOrder::chargeSpeedMult`가 지정되면 해당 `WedgeCharge`의 돌진 속도 배율만 덮어쓴다. 이시스 1차 Bomber와 2차 Buddy 돌진은 `ISIS_WEDGE_SPEED_MULT = 1.50`을 지정하고, 고블린은 값을 지정하지 않아 공용 기본 `WEDGE_SPEED_MULT`를 그대로 사용한다.
 또한 `SquadOrder::wedgeSpacingMult`가 지정되면 해당 `WedgeCharge`의 쐐기 준비 슬롯 간격만 덮어쓴다. 이시스 2차 Buddy 돌진은 `1.90`을 지정하고, 1차 Bomber와 고블린은 기본 간격을 사용한다.
+`SquadOrder::wedgeDamageMult`가 지정되면 해당 `WedgeCharge`의 공용 충돌 피해만 배율 적용한다. 이시스 본체가 합류한 2차 Buddy 쐐기는 `1.50`을 지정해 기본 피해 35를 52.5로 강화한다. 보스는 별도 추가 히트를 넣지 않고, 합류한 대형의 강화 피해로만 표현한다.
 
 ### 11.1 Isis boss personal combat
 
-이시스 본체는 그랜드밤처럼 전술 클래스 내부의 별도 보스 개인 FSM을 사용한다. 이 개인 전투는 `Engage`와 `Cooldown` phase에서만 실행되며, `RetreatForPincer`, `RegroupBombers`, `FirstBomberWedge`, `RegroupBuddies`, `SecondBuddyWedge` 중에는 일시 중단된다. 다만 표시 상태는 전술 상황을 보여주도록 유지한다. `RetreatForPincer`는 `Chase`, 전열 정비와 쐐기 진행 구간은 `HoldSlot`으로 표시한다.
+이시스 본체는 그랜드밤처럼 전술 클래스 내부의 별도 보스 개인 FSM을 사용한다. 이 개인 전투는 `Engage`와 `Cooldown` phase에서만 실행되며, `RetreatForPincer`, `RegroupBombers`, `FirstBomberWedge`, `RegroupBuddies`, `SecondBuddyWedge` 중에는 일시 중단된다. 다만 표시 상태는 전술 상황을 보여주도록 유지한다. `RetreatForPincer`는 `Chase`, 전열 정비와 쐐기 대기 구간은 `HoldSlot`, 2차 보스 합류 돌진 중에는 `ChargeThrough`로 표시한다.
 
 개인 전투 흐름:
 

@@ -7,13 +7,6 @@
 
 namespace sim {
 
-static constexpr float WEDGE_EXIT_DISTANCE = 35.f;
-static constexpr float WEDGE_PREP_APEX_DISTANCE = 10.f;
-static constexpr float WEDGE_PASS_DISTANCE = 6.f;
-static constexpr float WEDGE_IMPACT_RADIUS = 3.f;
-static constexpr float WEDGE_SPEED_MULT    = 1.35f;
-static constexpr float WEDGE_CHARGE_DAMAGE = 35.f;
-
 TacticalSquad::TacticalSquad(int squadId, float memberAttackRange, float memberSeparationRadius)
     : squadId_(squadId)
     , memberAttackRange_(memberAttackRange)
@@ -326,8 +319,9 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
 
             if (!wedgePrepared_) {
                 Vec3 prepareApex = centroid + forward * WEDGE_PREP_APEX_DISTANCE;
+                int slotCount = count + (ord.reserveWedgeApex ? 1 : 0);
                 std::vector<Vec3> slots =
-                    calcWedgeSlots(prepareApex, forward, count,
+                    calcWedgeSlots(prepareApex, forward, slotCount,
                                    ord.wedgeSpacingMult);
                 Vec3 exitApex = targetCenter + forward * WEDGE_EXIT_DISTANCE;
 
@@ -336,6 +330,8 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
                 wedgeExitSlots_.clear();
 
                 std::vector<bool> slotUsed(slots.size(), false);
+                if (ord.reserveWedgeApex && !slotUsed.empty())
+                    slotUsed[0] = true;
                 for (int i = 0; i < count; ++i) {
                     Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
                     auto* tnpc = dynamic_cast<TacticalNpc*>(a);
@@ -394,7 +390,10 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
                 cmd.chargeDir    = forward;
                 cmd.chargeCenter = targetCenter;
                 cmd.impactRadius = std::max(WEDGE_IMPACT_RADIUS, memberAttackRange_);
-                cmd.impactDamage = WEDGE_CHARGE_DAMAGE;
+                float damageMult = (ord.wedgeDamageMult > 0.f)
+                    ? ord.wedgeDamageMult
+                    : 1.f;
+                cmd.impactDamage = WEDGE_CHARGE_DAMAGE * damageMult;
                 cmd.passDistance = WEDGE_PASS_DISTANCE;
                 cmd.speedMult    = (ord.chargeSpeedMult > 0.f)
                     ? ord.chargeSpeedMult

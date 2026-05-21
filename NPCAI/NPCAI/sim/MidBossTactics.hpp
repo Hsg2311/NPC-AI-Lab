@@ -179,7 +179,7 @@ private:
                           bool rememberTargets, const char* strikeLabel);
     void issueBomberRegroup(Room& room, TacticalSquad* squad,
                             const StrikeCluster& strikeCluster, float sideSign);
-    void issueBuddyColumn(Room& room, TacticalSquad* squad,
+    Vec3 issueBuddyColumn(Room& room, TacticalSquad* squad,
                           const StrikeCluster& strikeCluster, float sideSign);
     std::vector<StrikeCluster> selectStrikeClusters(const Room& room,
                                                     const PlatoonLeader& leader,
@@ -201,6 +201,18 @@ private:
     void beginBossBackstep(Room& room, PlatoonLeader& leader);
     void moveBossToward(PlatoonLeader& leader, const Vec3& targetPos,
                         float speedMult, float dt) const;
+    void selectBossJoinedBuddySquad(const PlatoonLeader& leader);
+    void resetBossBuddyWedgeJoin();
+    bool isBossJoinedBuddySquad(const TacticalSquad* squad) const;
+    bool ensureBossBuddyWedgeJoin(Room& room, const PlatoonLeader& leader);
+    bool isBossBuddyWedgeJoinReady(const PlatoonLeader& leader) const;
+    bool areSecondStrikePrepSquadsAtSlots(Room& room) const;
+    bool isSecondStrikePrepReady(Room& room, const PlatoonLeader& leader) const;
+    void setupBossBuddyWedgeJoin(Room& room, TacticalSquad* squad,
+                                 const StrikeCluster& strikeCluster,
+                                 const Vec3& squadCenter);
+    void syncBossBuddyWedgeChargeStart(const PlatoonLeader& leader);
+    void updateBossBuddyWedgeJoin(float dt, PlatoonLeader& leader);
     float rollCooldown();
     bool hasLiveBomberSquad(const PlatoonLeader& leader) const;
     bool hasLiveBuddySquad(const PlatoonLeader& leader) const;
@@ -221,11 +233,21 @@ private:
     std::vector<TacticalSquad*> activeStrikeSquads_{};
     std::vector<StrikeTask> activeStrikeTasks_{};
     std::vector<uint32_t> firstStrikeTargetIds_{};
+    bool secondStrikePrepIssued_{ false };
+    std::vector<TacticalSquad*> secondStrikePrepSquads_{};
+    std::vector<StrikeCluster> secondStrikeClusters_{};
     BossPersonalState bossPersonalState_{ BossPersonalState::EvaluateTarget };
     float bossPersonalTimer_{ 0.f };
     float bossTargetEvalTimer_{ 0.f };
     uint32_t bossPersonalTargetId_{ 0 };
     Vec3 bossBackstepTargetPos_{};
+    int bossJoinedBuddySquadIndex_{ -1 };
+    bool bossBuddyWedgeJoinActive_{ false };
+    bool bossBuddyWedgeChargeStarted_{ false };
+    bool bossBuddyWedgeChargeComplete_{ false };
+    Vec3 bossBuddyWedgePreparePos_{};
+    Vec3 bossBuddyWedgeExitPos_{};
+    Vec3 bossBuddyWedgeDir_{ 1.f, 0.f, 0.f };
     bool bossHpTracked_{ false };
     float previousBossHp_{ 0.f };
     float bossDamageSinceBackstep_{ 0.f };
@@ -257,6 +279,10 @@ private:
     static constexpr float BUDDY_SPEED_MULT = 0.75f;
     static constexpr float ISIS_WEDGE_SPEED_MULT = 1.50f;
     static constexpr float ISIS_BUDDY_WEDGE_SPACING_MULT = 1.90f;
+    static constexpr float ISIS_BOSS_JOINED_WEDGE_DAMAGE_MULT = 1.50f;
+    static constexpr float ISIS_BOSS_WEDGE_JOIN_SPEED_MULT = 15.5f;
+    static constexpr float ISIS_BOSS_WEDGE_CHARGE_SPEED_MULT = 28.0f;
+    static constexpr float ISIS_BOSS_WEDGE_JOIN_READY_DIST = 1.5f;
     static constexpr float SECOND_STRIKE_REPEAT_PENALTY = 350.0f;
     static constexpr float BOMBER_REGROUP_SPEED_MULT = 0.75f;
     static constexpr float BOMBER_REGROUP_BACK_OFFSET = 28.0f;

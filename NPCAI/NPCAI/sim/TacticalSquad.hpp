@@ -39,12 +39,21 @@ struct SquadOrder {
     float          speedMult          = 1.f;
     float          chargeSpeedMult    = 0.f; // WedgeCharge only: 0 = shared default
     float          wedgeSpacingMult   = 0.f; // WedgeCharge only: 0 = shared default
+    float          wedgeDamageMult    = 1.f; // WedgeCharge only: damage multiplier
+    bool           reserveWedgeApex   = false; // WedgeCharge only: leave first apex slot empty
     std::vector<uint32_t> targetIds    = {};  // WedgeCharge 대상 군집 플레이어들
 };
 
 // ─── TacticalSquad ───────────────────────────────────────────────────────────
 class TacticalSquad {
 public:
+    static constexpr float WEDGE_EXIT_DISTANCE = 35.f;
+    static constexpr float WEDGE_PREP_APEX_DISTANCE = 10.f;
+    static constexpr float WEDGE_PASS_DISTANCE = 6.f;
+    static constexpr float WEDGE_IMPACT_RADIUS = 3.f;
+    static constexpr float WEDGE_SPEED_MULT = 1.35f;
+    static constexpr float WEDGE_CHARGE_DAMAGE = 35.f;
+
     TacticalSquad(int squadId, float memberAttackRange, float memberSeparationRadius);
 
     // ── 멤버 관리 ─────────────────────────────────────────────────────────────
@@ -70,6 +79,7 @@ public:
     Vec3 calcCentroid(Room& room) const;
     bool areMembersAtSlots(Room& room) const;
     bool areChargeMembersComplete(Room& room) const;
+    bool isWedgeChargeActive() const { return activeWedgeChargeId_ != 0; }
     void endActiveWedgeCharge(Room& room);
 
 private:

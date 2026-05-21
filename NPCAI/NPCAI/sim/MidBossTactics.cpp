@@ -916,13 +916,15 @@ void IsisMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
             issueWedgeStrike(room, leader,
                              false, false, true, "first Bomber wedge");
             pincerIssued_ = true;
+            if (hasLiveBuddySquad(leader))
+                issueRegroupBuddies(room, leader);
         }
         updateActiveStrikeEngage(room, leader, false);
 
         if (activeStrikeTasksEngaged()) {
             if (hasLiveBuddySquad(leader)) {
                 enterPhase(Phase::RegroupBuddies,
-                           "Isis first wedge completed - regrouping Buddies", leader);
+                           "Isis first wedge completed - waiting for Buddy boss join", leader);
             } else {
                 enterCooldown(leader, "Isis first wedge completed - no live Buddies");
                 issueEngage(room, leader);
@@ -931,7 +933,7 @@ void IsisMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
             updateActiveStrikeEngage(room, leader, true);
             if (hasLiveBuddySquad(leader)) {
                 enterPhase(Phase::RegroupBuddies,
-                           "Isis first wedge timeout - regrouping Buddies", leader);
+                           "Isis first wedge timeout - waiting for Buddy boss join", leader);
             } else {
                 enterCooldown(leader, "Isis first wedge timeout - no live Buddies");
                 issueEngage(room, leader);
@@ -939,23 +941,25 @@ void IsisMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
         }
     } else if (phase_ == Phase::RegroupBuddies) {
         phaseTimer_ += dt;
-        buddyRefreshTimer_ -= dt;
-        if (!pincerIssued_) {
+        if (!secondStrikePrepIssued_)
             issueRegroupBuddies(room, leader);
-            pincerIssued_ = true;
-            buddyRefreshTimer_ = BUDDY_REFRESH_INTERVAL;
-        } else if (phaseTimer_ < BUDDY_REFRESH_DURATION &&
-                   buddyRefreshTimer_ <= 0.f) {
-            issueRegroupBuddies(room, leader);
-            buddyRefreshTimer_ = BUDDY_REFRESH_INTERVAL;
+
+        if (!hasLiveBuddySquad(leader)) {
+            enterCooldown(leader, "Isis Buddy join cancelled - no live Buddies");
+            issueEngage(room, leader);
+            return;
         }
 
-        if (activeStrikeSquadsAtSlots(room)) {
+        if (!ensureBossBuddyWedgeJoin(room, leader)) {
+            enterCooldown(leader, "Isis Buddy join cancelled - no available boss wedge");
+            issueEngage(room, leader);
+            return;
+        }
+
+        updateBossBuddyWedgeJoin(dt, leader);
+        if (isSecondStrikePrepReady(room, leader)) {
             enterPhase(Phase::SecondBuddyWedge,
-                       "Isis Buddy line formed - second WedgeCharge started", leader);
-        } else if (phaseTimer_ >= REGROUP_TIMEOUT) {
-            enterPhase(Phase::SecondBuddyWedge,
-                       "Isis Buddy regroup timeout - second WedgeCharge started", leader);
+                       "Isis Buddy line and boss joined - second WedgeCharge started", leader);
         }
     } else if (phase_ == Phase::SecondBuddyWedge) {
         phaseTimer_ += dt;
@@ -964,9 +968,12 @@ void IsisMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
                              true, true, false, "second Buddy wedge");
             pincerIssued_ = true;
         }
+        syncBossBuddyWedgeChargeStart(leader);
+        updateBossBuddyWedgeJoin(dt, leader);
         updateActiveStrikeEngage(room, leader, false);
 
-        if (activeStrikeTasksEngaged()) {
+        if (activeStrikeTasksEngaged() &&
+            (!bossBuddyWedgeJoinActive_ || bossBuddyWedgeChargeComplete_)) {
             enterCooldown(leader, "Isis two-stage WedgeStrike completed");
             issueEngage(room, leader);
         } else if (phaseTimer_ >= PINCER_TIMEOUT) {
@@ -980,8 +987,20 @@ void IsisMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
         phase_ == Phase::FirstBomberWedge ||
         phase_ == Phase::RegroupBuddies ||
         phase_ == Phase::SecondBuddyWedge) {
-        leader.transitionTacticalState(TacticalNpcState::HoldSlot,
-                                       "Isis tactical command");
+        if (bossBuddyWedgeJoinActive_ &&
+            bossBuddyWedgeDir_.lengthSq() > 0.01f) {
+            leader.setFacing(bossBuddyWedgeDir_);
+        }
+
+        if (phase_ == Phase::SecondBuddyWedge && bossBuddyWedgeJoinActive_ &&
+            bossBuddyWedgeChargeStarted_ && !bossBuddyWedgeChargeComplete_) {
+            leader.transitionTacticalState(TacticalNpcState::ChargeThrough,
+                                           "Isis boss joined Buddy wedge");
+        } else {
+            leader.transitionTacticalState(TacticalNpcState::HoldSlot,
+                                           "Isis tactical command");
+        }
+        return;
     }
 
     Player* primary = selectPrimaryTarget(room, leader);
@@ -1064,6 +1083,16 @@ void IsisMidBossTactic::enterPhase(Phase next, const char* reason,
     pincerIssued_ = false;
     activeStrikeSquads_.clear();
     activeStrikeTasks_.clear();
+    bool preserveSecondPrep =
+        next == Phase::FirstBomberWedge ||
+        next == Phase::RegroupBuddies ||
+        next == Phase::SecondBuddyWedge;
+    if (!preserveSecondPrep) {
+        secondStrikePrepIssued_ = false;
+        secondStrikePrepSquads_.clear();
+        secondStrikeClusters_.clear();
+        resetBossBuddyWedgeJoin();
+    }
     if (next == Phase::RetreatForPincer || next == Phase::Engage)
         firstStrikeTargetIds_.clear();
     resetBossPersonalCombat(leader,
@@ -1217,6 +1246,9 @@ void IsisMidBossTactic::issueRegroupBombers(Room& room,
 
 void IsisMidBossTactic::issueRegroupBuddies(Room& room,
                                             PlatoonLeader& leader) {
+    if (secondStrikePrepIssued_)
+        return;
+
     std::vector<StrikeCluster> clusters =
         selectStrikeClusters(room, leader, true);
     if (clusters.empty()) {
@@ -1224,20 +1256,23 @@ void IsisMidBossTactic::issueRegroupBuddies(Room& room,
         return;
     }
 
+    secondStrikePrepIssued_ = true;
+    secondStrikePrepSquads_.clear();
+    secondStrikeClusters_ = clusters;
+
     const auto& squads = leader.getSquads();
     TacticalSquad* buddySquads[2] = {
         squads.size() > 0 ? squads[0] : nullptr,
         squads.size() > 1 ? squads[1] : nullptr
     };
 
-    activeStrikeSquads_.clear();
     for (int i = 0; i < 2; ++i) {
         if (!buddySquads[i] || buddySquads[i]->isEmpty())
             continue;
         int clusterIdx = (clusters.size() == 1) ? 0 : i;
         issueBuddyColumn(room, buddySquads[i], clusters[clusterIdx],
                          i == 0 ? -1.f : 1.f);
-        activeStrikeSquads_.push_back(buddySquads[i]);
+        secondStrikePrepSquads_.push_back(buddySquads[i]);
     }
 }
 
@@ -1247,8 +1282,12 @@ void IsisMidBossTactic::issueWedgeStrike(Room& room, PlatoonLeader& leader,
                                          bool rememberTargets,
                                          const char* strikeLabel) {
     std::vector<StrikeCluster> clusters =
-        selectStrikeClusters(room, leader, applyRepeatPenalty);
+        (useBuddySquads && !secondStrikeClusters_.empty())
+            ? secondStrikeClusters_
+            : selectStrikeClusters(room, leader, applyRepeatPenalty);
     if (clusters.empty()) {
+        if (useBuddySquads)
+            resetBossBuddyWedgeJoin();
         issueEngage(room, leader);
         return;
     }
@@ -1267,8 +1306,13 @@ void IsisMidBossTactic::issueWedgeStrike(Room& room, PlatoonLeader& leader,
     activeStrikeTasks_.clear();
     if (rememberTargets)
         firstStrikeTargetIds_.clear();
+    if (useBuddySquads) {
+        bossBuddyWedgeChargeStarted_ = false;
+        bossBuddyWedgeChargeComplete_ = false;
+    }
 
     int assignedSquad = 0;
+    bool bossJoinedStrikeIssued = false;
     for (int i = 0; i < 2; ++i) {
         TacticalSquad* squad = strikeSquads[i];
         if (!squad || squad->isEmpty())
@@ -1288,8 +1332,17 @@ void IsisMidBossTactic::issueWedgeStrike(Room& room, PlatoonLeader& leader,
         ord.targetIds = strikeCluster.cluster.playerIds;
         ord.tacticCenter = strikeCluster.cluster.centroid;
         ord.chargeSpeedMult = ISIS_WEDGE_SPEED_MULT;
-        if (useBuddySquads)
+        if (useBuddySquads) {
             ord.wedgeSpacingMult = ISIS_BUDDY_WEDGE_SPACING_MULT;
+            if (isBossJoinedBuddySquad(squad)) {
+                ord.wedgeDamageMult = ISIS_BOSS_JOINED_WEDGE_DAMAGE_MULT;
+                ord.reserveWedgeApex = true;
+                setupBossBuddyWedgeJoin(room, squad, strikeCluster,
+                                        squad->calcCentroid(room));
+                bossBuddyWedgeChargeComplete_ = false;
+                bossJoinedStrikeIssued = true;
+            }
+        }
         squad->receiveOrder(ord);
         activeStrikeSquads_.push_back(squad);
         activeStrikeTasks_.push_back(
@@ -1318,6 +1371,11 @@ void IsisMidBossTactic::issueWedgeStrike(Room& room, PlatoonLeader& leader,
         Logger::get().log(leader.getName(), msg);
 
         ++assignedSquad;
+    }
+
+    if (useBuddySquads && bossBuddyWedgeJoinActive_ &&
+        !bossJoinedStrikeIssued) {
+        resetBossBuddyWedgeJoin();
     }
 }
 
@@ -1358,29 +1416,27 @@ void IsisMidBossTactic::issueBomberRegroup(Room& room, TacticalSquad* squad,
     squad->receiveOrder(ord);
 }
 
-void IsisMidBossTactic::issueBuddyColumn(Room& room, TacticalSquad* squad,
+Vec3 IsisMidBossTactic::issueBuddyColumn(Room& room, TacticalSquad* squad,
                                          const StrikeCluster& strikeCluster,
                                          float sideSign) {
     if (!squad || squad->isEmpty())
-        return;
+        return {};
 
-    Vec3 fallbackDir = strikeCluster.cluster.centroid - squad->calcCentroid(room);
-    if (fallbackDir.lengthSq() <= 0.01f)
-        fallbackDir = Vec3{ 1.f, 0.f, 0.f };
+    Vec3 attackDir = strikeCluster.cluster.centroid - retreatTargetPos_;
+    if (attackDir.lengthSq() > 0.01f)
+        attackDir = attackDir.normalized();
+    else
+        attackDir = Vec3{ 1.f, 0.f, 0.f };
 
-    Vec3 playerFacing = calcAveragePlayerFacing(room, fallbackDir);
-    if (playerFacing.lengthSq() <= 0.01f)
-        playerFacing = fallbackDir.normalized();
-
-    Vec3 right{ -playerFacing.z, 0.f, playerFacing.x };
+    Vec3 right{ -attackDir.z, 0.f, attackDir.x };
     if (right.lengthSq() <= 0.01f)
         right = Vec3{ 0.f, 0.f, 1.f };
     else
         right = right.normalized();
 
-    Vec3 center = strikeCluster.cluster.centroid
-        - playerFacing.normalized() * BUDDY_BACK_OFFSET
-        + right * (BUDDY_SIDE_OFFSET * sideSign);
+    Vec3 center = retreatTargetPos_
+        + attackDir * RETREAT_BOMBER_FRONT_OFFSET
+        + right * (RETREAT_BUDDY_SIDE_OFFSET * sideSign);
 
     SquadOrder ord;
     ord.type = SquadOrderType::FormationHold;
@@ -1392,6 +1448,210 @@ void IsisMidBossTactic::issueBuddyColumn(Room& room, TacticalSquad* squad,
     ord.slotColumnCount = BUDDY_COLUMN_COUNT;
     ord.speedMult = BUDDY_SPEED_MULT;
     squad->receiveOrder(ord);
+    return center;
+}
+
+void IsisMidBossTactic::selectBossJoinedBuddySquad(
+    const PlatoonLeader& leader) {
+    resetBossBuddyWedgeJoin();
+
+    const auto& squads = leader.getSquads();
+    std::vector<int> candidates;
+    for (int i = 0; i < 2; ++i) {
+        if (static_cast<size_t>(i) >= squads.size())
+            continue;
+        TacticalSquad* squad = squads[static_cast<size_t>(i)];
+        if (squad && !squad->isEmpty())
+            candidates.push_back(i);
+    }
+
+    if (candidates.empty())
+        return;
+
+    std::uniform_int_distribution<int> dist(
+        0, static_cast<int>(candidates.size()) - 1);
+    bossJoinedBuddySquadIndex_ = candidates[dist(isisCooldownRng())];
+}
+
+void IsisMidBossTactic::resetBossBuddyWedgeJoin() {
+    bossJoinedBuddySquadIndex_ = -1;
+    bossBuddyWedgeJoinActive_ = false;
+    bossBuddyWedgeChargeStarted_ = false;
+    bossBuddyWedgeChargeComplete_ = false;
+    bossBuddyWedgePreparePos_ = {};
+    bossBuddyWedgeExitPos_ = {};
+    bossBuddyWedgeDir_ = Vec3{ 1.f, 0.f, 0.f };
+}
+
+bool IsisMidBossTactic::isBossJoinedBuddySquad(
+    const TacticalSquad* squad) const {
+    return squad && bossJoinedBuddySquadIndex_ >= 0 &&
+        squad->getSquadId() == bossJoinedBuddySquadIndex_;
+}
+
+bool IsisMidBossTactic::ensureBossBuddyWedgeJoin(
+    Room& room, const PlatoonLeader& leader) {
+    const auto& squads = leader.getSquads();
+    if (bossBuddyWedgeJoinActive_) {
+        bool selectedAlive = false;
+        for (int i = 0; i < 2; ++i) {
+            if (static_cast<size_t>(i) >= squads.size())
+                continue;
+            TacticalSquad* squad = squads[static_cast<size_t>(i)];
+            if (squad && !squad->isEmpty() &&
+                isBossJoinedBuddySquad(squad)) {
+                selectedAlive = true;
+                break;
+            }
+        }
+        if (selectedAlive)
+            return true;
+        resetBossBuddyWedgeJoin();
+    }
+
+    if (secondStrikeClusters_.empty())
+        return false;
+
+    if (bossJoinedBuddySquadIndex_ < 0)
+        selectBossJoinedBuddySquad(leader);
+    if (bossJoinedBuddySquadIndex_ < 0)
+        return false;
+
+    bool selectedAlive = false;
+    for (int i = 0; i < 2; ++i) {
+        if (static_cast<size_t>(i) >= squads.size())
+            continue;
+        TacticalSquad* squad = squads[static_cast<size_t>(i)];
+        if (squad && !squad->isEmpty() && isBossJoinedBuddySquad(squad)) {
+            selectedAlive = true;
+            break;
+        }
+    }
+    if (!selectedAlive) {
+        selectBossJoinedBuddySquad(leader);
+        if (bossJoinedBuddySquadIndex_ < 0)
+            return false;
+    }
+
+    for (int i = 0; i < 2; ++i) {
+        if (static_cast<size_t>(i) >= squads.size())
+            continue;
+
+        TacticalSquad* squad = squads[static_cast<size_t>(i)];
+        if (!squad || squad->isEmpty() || !isBossJoinedBuddySquad(squad))
+            continue;
+
+        if (!squad->areMembersAtSlots(room))
+            return true;
+
+        int clusterIdx = 0;
+        if (secondStrikeClusters_.size() > 1)
+            clusterIdx = std::min(i, 1);
+
+        setupBossBuddyWedgeJoin(
+            room, squad, secondStrikeClusters_[static_cast<size_t>(clusterIdx)],
+            squad->calcCentroid(room));
+        return bossBuddyWedgeJoinActive_;
+    }
+
+    resetBossBuddyWedgeJoin();
+    return false;
+}
+
+bool IsisMidBossTactic::isBossBuddyWedgeJoinReady(
+    const PlatoonLeader& leader) const {
+    if (!bossBuddyWedgeJoinActive_)
+        return bossJoinedBuddySquadIndex_ < 0;
+    if (bossBuddyWedgeChargeStarted_)
+        return true;
+    return Vec3::distance(leader.getPosition(), bossBuddyWedgePreparePos_) <=
+        ISIS_BOSS_WEDGE_JOIN_READY_DIST;
+}
+
+bool IsisMidBossTactic::areSecondStrikePrepSquadsAtSlots(Room& room) const {
+    if (secondStrikePrepSquads_.empty())
+        return false;
+
+    for (TacticalSquad* squad : secondStrikePrepSquads_) {
+        if (squad && !squad->isEmpty() && !squad->areMembersAtSlots(room))
+            return false;
+    }
+    return true;
+}
+
+bool IsisMidBossTactic::isSecondStrikePrepReady(
+    Room& room, const PlatoonLeader& leader) const {
+    return secondStrikePrepIssued_ &&
+        areSecondStrikePrepSquadsAtSlots(room) &&
+        isBossBuddyWedgeJoinReady(leader);
+}
+
+void IsisMidBossTactic::setupBossBuddyWedgeJoin(
+    Room& /*room*/, TacticalSquad* squad,
+    const StrikeCluster& strikeCluster, const Vec3& squadCenter) {
+    if (!isBossJoinedBuddySquad(squad))
+        return;
+
+    Vec3 forward = strikeCluster.cluster.centroid - squadCenter;
+    if (forward.lengthSq() > 0.01f)
+        forward = forward.normalized();
+    else
+        forward = Vec3{ 1.f, 0.f, 0.f };
+
+    bossBuddyWedgeJoinActive_ = true;
+    bossBuddyWedgeDir_ = forward;
+    bossBuddyWedgePreparePos_ =
+        squadCenter + forward * TacticalSquad::WEDGE_PREP_APEX_DISTANCE;
+    bossBuddyWedgeExitPos_ =
+        strikeCluster.cluster.centroid +
+        forward * TacticalSquad::WEDGE_EXIT_DISTANCE;
+}
+
+void IsisMidBossTactic::syncBossBuddyWedgeChargeStart(
+    const PlatoonLeader& leader) {
+    if (!bossBuddyWedgeJoinActive_ || bossBuddyWedgeChargeStarted_ ||
+        bossJoinedBuddySquadIndex_ < 0)
+        return;
+
+    const auto& squads = leader.getSquads();
+    for (int i = 0; i < 2; ++i) {
+        if (static_cast<size_t>(i) >= squads.size())
+            continue;
+
+        TacticalSquad* squad = squads[static_cast<size_t>(i)];
+        if (!squad || !isBossJoinedBuddySquad(squad))
+            continue;
+
+        if (squad->isWedgeChargeActive())
+            bossBuddyWedgeChargeStarted_ = true;
+        return;
+    }
+}
+
+void IsisMidBossTactic::updateBossBuddyWedgeJoin(
+    float dt, PlatoonLeader& leader) {
+    if (!bossBuddyWedgeJoinActive_)
+        return;
+
+    Vec3 targetPos = bossBuddyWedgeChargeStarted_
+        ? bossBuddyWedgeExitPos_
+        : bossBuddyWedgePreparePos_;
+    float arriveDist = bossBuddyWedgeChargeStarted_ ? 0.75f : 1.0f;
+
+    Vec3 toTarget = targetPos - leader.getPosition();
+    float dist = toTarget.length();
+    if (dist <= arriveDist) {
+        if (bossBuddyWedgeChargeStarted_)
+            bossBuddyWedgeChargeComplete_ = true;
+        if (bossBuddyWedgeDir_.lengthSq() > 0.01f)
+            leader.setFacing(bossBuddyWedgeDir_);
+        return;
+    }
+
+    float speedMult = bossBuddyWedgeChargeStarted_
+        ? ISIS_BOSS_WEDGE_CHARGE_SPEED_MULT
+        : ISIS_BOSS_WEDGE_JOIN_SPEED_MULT;
+    moveBossToward(leader, targetPos, speedMult, dt);
 }
 
 std::vector<IsisMidBossTactic::StrikeCluster>
