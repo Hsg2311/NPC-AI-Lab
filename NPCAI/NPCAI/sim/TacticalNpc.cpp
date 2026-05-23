@@ -18,6 +18,7 @@ static const char* tacticalStateStr(TacticalNpcState s) {
         case TacticalNpcState::AttackRecover: return "AttackRecover";
         case TacticalNpcState::Flank:         return "Flank";
         case TacticalNpcState::ChargeThrough: return "ChargeThrough";
+        case TacticalNpcState::Confused:      return "Confused";
         case TacticalNpcState::Dead:          return "Dead";
         case TacticalNpcState::HoldSlot:      return "HoldSlot";
     }
@@ -93,6 +94,10 @@ void TacticalNpc::reviveAt(const Vec3& pos) {
     guardNearestPlayer_ = false;
     useHoldFacing_ = false;
     holdFacing_ = {};
+    confusedAnchor_ = pos;
+    confusedTarget_ = pos;
+    confusedRetargetTimer_ = 0.f;
+    confusedWanderStep_ = 0;
     speedMult_ = 1.f;
     windupTimer_ = 0.f;
     recoverTimer_ = 0.f;
@@ -118,6 +123,7 @@ void TacticalNpc::consumePendingCommand() {
         case TacticalCommandType::EngageTarget:
             guardNearestPlayer_ = false;
             useHoldFacing_ = false;
+            confusedRetargetTimer_ = 0.f;
             speedMult_ = 1.f;
             targetId_ = pendingCmd_.targetId;
             transitionTo(TacticalNpcState::Chase, "명령: EngageTarget");
@@ -125,6 +131,7 @@ void TacticalNpc::consumePendingCommand() {
         case TacticalCommandType::FlankTarget:
             guardNearestPlayer_ = false;
             useHoldFacing_ = false;
+            confusedRetargetTimer_ = 0.f;
             chargeComplete_ = false;
             targetId_          = pendingCmd_.targetId;
             assignedSlot_      = pendingCmd_.slotOffset;
@@ -136,6 +143,7 @@ void TacticalNpc::consumePendingCommand() {
         case TacticalCommandType::ChargeThrough:
             guardNearestPlayer_ = false;
             useHoldFacing_ = false;
+            confusedRetargetTimer_ = 0.f;
             targetId_          = pendingCmd_.targetId;
             assignedSlot_      = pendingCmd_.slotOffset;
             chargeId_          = pendingCmd_.chargeId;
@@ -152,6 +160,7 @@ void TacticalNpc::consumePendingCommand() {
             guardNearestPlayer_ = false;
             useHoldFacing_ = pendingCmd_.useHoldFacing;
             holdFacing_ = pendingCmd_.holdFacing;
+            confusedRetargetTimer_ = 0.f;
             speedMult_ = pendingCmd_.speedMult;
             chargeComplete_ = false;
             targetId_     = pendingCmd_.targetId;
@@ -162,6 +171,7 @@ void TacticalNpc::consumePendingCommand() {
             guardNearestPlayer_ = true;
             useHoldFacing_ = pendingCmd_.useHoldFacing;
             holdFacing_ = pendingCmd_.holdFacing;
+            confusedRetargetTimer_ = 0.f;
             speedMult_ = pendingCmd_.speedMult;
             targetId_     = pendingCmd_.targetId;
             assignedSlot_ = pendingCmd_.slotOffset;
@@ -171,6 +181,7 @@ void TacticalNpc::consumePendingCommand() {
             guardNearestPlayer_ = false;
             useHoldFacing_ = false;
             chargeComplete_ = false;
+            confusedRetargetTimer_ = 0.f;
             speedMult_ = 1.f;
             targetId_ = 0;
             transitionTo(TacticalNpcState::Idle, "명령: Idle");
@@ -181,7 +192,12 @@ void TacticalNpc::consumePendingCommand() {
             chargeComplete_ = false;
             speedMult_ = 1.f;
             targetId_ = 0;
-            transitionTo(TacticalNpcState::Idle, "명령: Confused");
+            assignedSlot_ = {};
+            confusedAnchor_ = position_;
+            confusedTarget_ = position_;
+            confusedRetargetTimer_ = 0.f;
+            confusedWanderStep_ = 0;
+            transitionTo(TacticalNpcState::Confused, "명령: Confused");
             break;
         default: break;
     }
@@ -208,6 +224,7 @@ void TacticalNpc::update(float dt, Room& room) {
         case TacticalNpcState::AttackRecover: updateAttackRecover(dt, room); break;
         case TacticalNpcState::Flank:    updateFlank   (dt, room); break;
         case TacticalNpcState::ChargeThrough: updateChargeThrough(dt, room); break;
+        case TacticalNpcState::Confused: updateConfused(dt, room); break;
         case TacticalNpcState::HoldSlot: updateHoldSlot(dt, room); break;
         case TacticalNpcState::Dead:          /* 종료 상태 */                 break;
     }
@@ -396,6 +413,54 @@ void TacticalNpc::updateChargeThrough(float dt, Room& room) {
 
 // ─── HoldSlot ─────────────────────────────────────────────────────────────────
 // 슬롯까지 이동 후 대기. 타겟이 범위 내여도 공격하지 않는다 (경계 상태).
+
+void TacticalNpc::updateConfused(float dt, Room& room) {
+    targetId_ = 0;
+    confusedRetargetTimer_ -= dt;
+
+    float distToTarget = Vec3::distance(position_, confusedTarget_);
+    if (confusedRetargetTimer_ <= 0.f || distToTarget < 0.75f) {
+        ++confusedWanderStep_;
+        float seedA = static_cast<float>(
+            (id_ * 37u + static_cast<uint32_t>(confusedWanderStep_) * 101u) %
+            997u);
+        float seedB = static_cast<float>(
+            (id_ * 53u + static_cast<uint32_t>(confusedWanderStep_) * 193u) %
+            991u);
+        float r1 = std::sinf(seedA * 12.9898f) * 43758.5453f;
+        float r2 = std::sinf(seedB * 78.233f) * 24634.6345f;
+        r1 -= std::floorf(r1);
+        r2 -= std::floorf(r2);
+
+        constexpr float TWO_PI = 2.f * 3.14159265f;
+        float angle = r1 * TWO_PI;
+        float radius = CONFUSED_WANDER_RADIUS * (0.25f + 0.75f * r2);
+        confusedTarget_ = confusedAnchor_ +
+            Vec3{ std::cosf(angle) * radius, 0.f, std::sinf(angle) * radius };
+        confusedRetargetTimer_ =
+            CONFUSED_RETARGET_MIN + CONFUSED_RETARGET_SPAN * r1;
+        distToTarget = Vec3::distance(position_, confusedTarget_);
+    }
+
+    Vec3 toTarget = confusedTarget_ - position_;
+    Vec3 moveDir = (toTarget.length() > 0.01f)
+        ? toTarget.normalized()
+        : Vec3{ 1.f, 0.f, 0.f };
+
+    float confusedSeparationRadius = std::max(separationRadius_, CONFUSED_SEPARATION_RADIUS);
+    nearbyCache_.clear();
+    room.findNearbyNpcPositions(position_, confusedSeparationRadius, id_, nearbyCache_);
+    Vec3 sep = calcSeparationForce(confusedSeparationRadius, nearbyCache_);
+    if (sep.lengthSq() > 0.01f)
+        moveDir = (moveDir + sep.normalized() * CONFUSED_SEPARATION_WEIGHT).normalized();
+
+    Vec3 fromAnchor = position_ - confusedAnchor_;
+    if (fromAnchor.length() > CONFUSED_WANDER_RADIUS * 1.25f)
+        moveDir = (confusedAnchor_ - position_).normalized();
+
+    facing_ = moveDir;
+    position_ += moveDir * (moveSpeed_ * CONFUSED_SPEED_MULT * dt);
+}
 
 void TacticalNpc::updateHoldSlot(float dt, Room& room) {
     Actor* target = resolveTarget(room);

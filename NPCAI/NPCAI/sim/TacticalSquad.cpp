@@ -1,5 +1,6 @@
 #include "TacticalSquad.hpp"
 #include "Room.hpp"
+#include "Player.hpp"
 #include "Logger.hpp"
 #include <cmath>
 #include <cstdio>
@@ -25,6 +26,9 @@ void TacticalSquad::removeMember(uint32_t npcId) {
 }
 
 void TacticalSquad::receiveOrder(const SquadOrder& order) {
+    leaderlessBrawlEnabled_ = false;
+    leaderlessBrawlTimer_ = 0.f;
+    leaderlessRetargetTimer_ = 0.f;
     currentOrder_ = order;
     orderDirty_   = true;
     wedgePrepared_ = false;
@@ -41,9 +45,14 @@ void TacticalSquad::updateBoxLeaderPos(const Vec3& pos) {
 
 // ─── update ───────────────────────────────────────────────────────────────────
 
-void TacticalSquad::update(float /*dt*/, Room& room) {
+void TacticalSquad::update(float dt, Room& room) {
     removeDeadMembers(room);
     if (memberIds_.empty()) return;
+
+    if (leaderlessBrawlEnabled_) {
+        updateLeaderlessBrawl(dt, room);
+        return;
+    }
 
     if (orderDirty_) {
         // 새 명령 수신 시 1회 계산 (FlankLeft/Right/Encircle/DenseHold/DenseAdvance)
@@ -66,6 +75,57 @@ void TacticalSquad::update(float /*dt*/, Room& room) {
         activeWedgeChargeId_ = 0;
     }
     // Encircle/DenseHold/WedgeCharge: 슬롯/돌진 목표 고정 — 재계산 없음
+}
+
+// ─── leaderless brawl ─────────────────────────────────────────────────────────
+
+void TacticalSquad::updateLeaderlessBrawl(float dt, Room& room) {
+    if (leaderlessBrawlTimer_ > 0.f) {
+        leaderlessBrawlTimer_ -= dt;
+        if (leaderlessBrawlTimer_ > 0.f)
+            return;
+        leaderlessRetargetTimer_ = 0.f;
+    }
+
+    leaderlessRetargetTimer_ -= dt;
+    if (leaderlessRetargetTimer_ > 0.f)
+        return;
+    leaderlessRetargetTimer_ = LEADERLESS_RETARGET_INTERVAL;
+
+    currentOrder_ = {};
+    currentOrder_.targetId = selectNearestPlayerToSquad(room);
+    currentOrder_.type = (currentOrder_.targetId != 0)
+        ? SquadOrderType::Engage
+        : SquadOrderType::Idle;
+    orderDirty_ = false;
+    wedgePrepared_ = false;
+    wedgeMemberIds_.clear();
+    wedgePrepareSlots_.clear();
+    wedgeExitSlots_.clear();
+    activeWedgeChargeId_ = 0;
+
+    pushCommandsToMembers(room);
+}
+
+uint32_t TacticalSquad::selectNearestPlayerToSquad(Room& room) const {
+    Vec3 center = calcCentroid(room);
+    uint32_t bestId = 0;
+    float bestDistSq = -1.f;
+
+    for (Player* player : room.getLivingPlayers()) {
+        if (!player || !player->isAlive())
+            continue;
+
+        float distSq = Vec3::distanceSq(center, player->getPosition());
+        if (bestId == 0 ||
+            distSq < bestDistSq ||
+            (distSq == bestDistSq && player->getId() < bestId)) {
+            bestId = player->getId();
+            bestDistSq = distSq;
+        }
+    }
+
+    return bestId;
 }
 
 // ─── removeDeadMembers ────────────────────────────────────────────────────────
@@ -656,6 +716,18 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
 // ─── pushConfusedToMembers ────────────────────────────────────────────────────
 
 void TacticalSquad::pushConfusedToMembers(Room& room) {
+    endActiveWedgeCharge(room);
+    currentOrder_ = {};
+    currentOrder_.type = SquadOrderType::Idle;
+    orderDirty_ = false;
+    wedgePrepared_ = false;
+    wedgeMemberIds_.clear();
+    wedgePrepareSlots_.clear();
+    wedgeExitSlots_.clear();
+    leaderlessBrawlEnabled_ = true;
+    leaderlessBrawlTimer_ = LEADERLESS_CONFUSED_DURATION;
+    leaderlessRetargetTimer_ = 0.f;
+
     TacticalCommand cmd;
     cmd.type = TacticalCommandType::Confused;
     for (uint32_t id : memberIds_) {

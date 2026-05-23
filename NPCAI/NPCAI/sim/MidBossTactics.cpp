@@ -221,6 +221,18 @@ void GoblinMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
 
     leader.removeDeadMembersFromSquads(room);
 
+    bool hasLiveSquad = false;
+    for (auto* sq : squads) {
+        if (sq && !sq->isEmpty()) {
+            hasLiveSquad = true;
+            break;
+        }
+    }
+    if (!hasLiveSquad && leaderPhase_ != LeaderPhase::BossSolo) {
+        tacticCooldown_ = 0.f;
+        enterPhase(LeaderPhase::BossSolo, "Goblin squads wiped - boss solo", leader);
+    }
+
     if (leaderPhase_ == LeaderPhase::Cooldown) {
         tacticCooldown_ -= dt;
         if (tacticCooldown_ <= 0.f)
@@ -248,7 +260,8 @@ void GoblinMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
 
     Player* primary = selectPrimaryTarget(room, leader);
 
-    if (!tacticsUnlocked_ && primary && checkTacticsConditions(leader)) {
+    if (leaderPhase_ != LeaderPhase::BossSolo &&
+        !tacticsUnlocked_ && primary && checkTacticsConditions(leader)) {
         tacticsUnlocked_ = true;
         enterPhase(LeaderPhase::TacticalRetreat, "전술 활성화 - 공통 후퇴 시작", leader);
     }
@@ -304,32 +317,7 @@ void GoblinMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
         return;
     }
 
-    if (leaderPhase_ == LeaderPhase::BoxAdvance ||
-        leaderPhase_ == LeaderPhase::Vigilance ||
-        leaderPhase_ == LeaderPhase::DivideAndConquer) {
-        if (primary) {
-            Vec3 dir = primary->getPosition() - leader.getPosition();
-            if (dir.length() > 0.1f)
-                leader.setFacing(dir.normalized());
-        }
-        return;
-    }
-
-    if (primary) {
-        float dist = Vec3::distance(leader.getPosition(), primary->getPosition());
-        Vec3 toPlayer = (primary->getPosition() - leader.getPosition()).normalized();
-        if (dist > BOSS_KEEP_DIST + BOSS_KEEP_TOL) {
-            leader.setPosition(leader.getPosition() +
-                               toPlayer * leader.getLeaderMoveSpeed() * dt);
-            leader.setFacing(toPlayer);
-        } else if (dist < BOSS_KEEP_DIST - BOSS_KEEP_TOL) {
-            leader.setPosition(leader.getPosition() -
-                               toPlayer * leader.getLeaderMoveSpeed() * dt);
-            leader.setFacing(toPlayer);
-        } else {
-            leader.setFacing(toPlayer);
-        }
-    }
+    updateBossPersonalCombat(dt, room, leader);
 }
 
 void GoblinMidBossTactic::enterPhase(LeaderPhase next, const char* reason,
@@ -375,6 +363,9 @@ void GoblinMidBossTactic::evaluateTactics(Room& room, PlatoonLeader& leader) {
     std::vector<TacticalSquad*> liveSquads;
     for (auto* sq : leader.getSquads())
         if (!sq->isEmpty()) liveSquads.push_back(sq);
+
+    if (leaderPhase_ == LeaderPhase::BossSolo)
+        return;
 
     Player* primary = selectPrimaryTarget(room, leader);
 
@@ -803,6 +794,227 @@ void GoblinMidBossTactic::updateDivideAndConquer(float dt, Room& room,
     }
 }
 
+bool GoblinMidBossTactic::updateBossPersonalCombat(
+    float dt, Room& room, PlatoonLeader& leader) {
+    auto resolveCurrentTarget = [&]() -> Actor* {
+        Actor* target = resolveBossPersonalTarget(room, bossPersonalTargetId_);
+        if (!target) {
+            bossPersonalState_ = BossPersonalState::EvaluateTarget;
+            bossPersonalTargetId_ = 0;
+        }
+        return target;
+    };
+
+    if (bossPersonalState_ == BossPersonalState::EvaluateTarget) {
+        bossPersonalTargetId_ = selectBossPersonalTarget(room, leader);
+        leader.setTacticalTarget(bossPersonalTargetId_);
+        bossPersonalTimer_ = 0.f;
+        bossTargetEvalTimer_ = BOSS_TARGET_EVAL_INTERVAL;
+
+        if (bossPersonalTargetId_ == 0) {
+            leader.transitionTacticalState(TacticalNpcState::Idle,
+                                           "Goblin boss no target");
+            return true;
+        }
+
+        bossPersonalState_ = BossPersonalState::ChaseTarget;
+        leader.transitionTacticalState(TacticalNpcState::Chase,
+                                       "Goblin boss chase target");
+        return true;
+    }
+
+    Actor* target = resolveCurrentTarget();
+    if (!target)
+        return true;
+
+    Vec3 toTarget = target->getPosition() - leader.getPosition();
+    float dist = toTarget.length();
+    Vec3 dir = (dist > 0.01f) ? toTarget / dist : Vec3{ 1.f, 0.f, 0.f };
+
+    if (bossPersonalState_ == BossPersonalState::ChaseTarget) {
+        leader.setTacticalTarget(bossPersonalTargetId_);
+        leader.transitionTacticalState(TacticalNpcState::Chase,
+                                       "Goblin boss chase target");
+
+        bossTargetEvalTimer_ -= dt;
+        if (bossTargetEvalTimer_ <= 0.f) {
+            bossTargetEvalTimer_ = BOSS_TARGET_EVAL_INTERVAL;
+            BossTargetScore candidate =
+                selectBossPersonalTargetScore(room, leader);
+            float currentScore = 0.f;
+            if (candidate.targetId != 0 &&
+                candidate.targetId != bossPersonalTargetId_ &&
+                calcBossPersonalTargetScore(room, leader,
+                                            bossPersonalTargetId_,
+                                            currentScore) &&
+                candidate.score > currentScore + BOSS_TARGET_SWITCH_MARGIN) {
+                bossPersonalTargetId_ = candidate.targetId;
+                leader.setTacticalTarget(bossPersonalTargetId_);
+                target = resolveBossPersonalTarget(room, bossPersonalTargetId_);
+                if (!target) {
+                    bossPersonalState_ = BossPersonalState::EvaluateTarget;
+                    bossPersonalTargetId_ = 0;
+                    return true;
+                }
+
+                toTarget = target->getPosition() - leader.getPosition();
+                dist = toTarget.length();
+                dir = (dist > 0.01f) ? toTarget / dist : Vec3{ 1.f, 0.f, 0.f };
+
+                char buf[160];
+                std::snprintf(buf, sizeof(buf),
+                    "Goblin boss retargeted to %s (score %.1f)",
+                    target->getName().c_str(), candidate.score);
+                Logger::get().log(leader.getName(), buf);
+            }
+        }
+
+        if (dist <= leader.getAttackRange()) {
+            bossPersonalTimer_ = 0.f;
+            bossPersonalState_ = BossPersonalState::AttackWindup;
+            leader.transitionTacticalState(TacticalNpcState::AttackWindup,
+                                           "Goblin boss attack windup");
+            return true;
+        }
+
+        moveBossToward(leader, target->getPosition(), BOSS_CHASE_SPEED_MULT, dt);
+        return true;
+    }
+
+    if (bossPersonalState_ == BossPersonalState::AttackWindup) {
+        leader.setFacing(dir);
+        bossPersonalTimer_ += dt;
+        TacticalNpcConfig cfg = leader.getConfig();
+        if (bossPersonalTimer_ < cfg.attackWindupTime)
+            return true;
+
+        if (dist <= leader.getAttackRange()) {
+            target->takeDamage(leader.getAttackDamage());
+            char buf[160];
+            std::snprintf(buf, sizeof(buf),
+                "Goblin boss hit %s for %.0f (hp=%.1f)",
+                target->getName().c_str(),
+                leader.getAttackDamage(),
+                target->getHp());
+            Logger::get().log(leader.getName(), buf);
+        } else {
+            Logger::get().log(leader.getName(), "Goblin boss attack missed");
+        }
+
+        bossPersonalTimer_ = 0.f;
+        bossPersonalState_ = BossPersonalState::AttackRecover;
+        leader.transitionTacticalState(TacticalNpcState::AttackRecover,
+                                       "Goblin boss attack recover");
+        return true;
+    }
+
+    if (bossPersonalState_ == BossPersonalState::AttackRecover) {
+        leader.setFacing(dir);
+        bossPersonalTimer_ += dt;
+        TacticalNpcConfig cfg = leader.getConfig();
+        if (bossPersonalTimer_ < cfg.attackRecoverTime)
+            return true;
+
+        bossPersonalTimer_ = 0.f;
+        bossPersonalState_ = BossPersonalState::EvaluateTarget;
+        return true;
+    }
+
+    return true;
+}
+
+uint32_t GoblinMidBossTactic::selectBossPersonalTarget(
+    Room& room, const PlatoonLeader& leader) const {
+    return selectBossPersonalTargetScore(room, leader).targetId;
+}
+
+GoblinMidBossTactic::BossTargetScore
+GoblinMidBossTactic::selectBossPersonalTargetScore(
+    Room& room, const PlatoonLeader& leader) const {
+    std::vector<PlayerCluster> clusters =
+        MidBossTacticBase::buildPlayerClusters(room, CLUSTER_RADIUS);
+    Vec3 leaderPos = leader.getPosition();
+    BossTargetScore best{};
+    bool hasBest = false;
+
+    for (const PlayerCluster& cluster : clusters) {
+        float clusterBaseScore =
+            static_cast<float>(cluster.playerIds.size()) * 1000.f;
+        for (uint32_t playerId : cluster.playerIds) {
+            auto* player = dynamic_cast<Player*>(room.findActorById(playerId));
+            if (!player || !player->isAlive())
+                continue;
+
+            float distance = Vec3::distance(leaderPos, player->getPosition());
+            float score = clusterBaseScore - distance;
+            bool better = !hasBest ||
+                score > best.score + 0.001f ||
+                (std::fabs(score - best.score) <= 0.001f &&
+                 playerId < best.targetId);
+
+            if (!better)
+                continue;
+
+            best.targetId = playerId;
+            best.score = score;
+            hasBest = true;
+        }
+    }
+
+    return best;
+}
+
+bool GoblinMidBossTactic::calcBossPersonalTargetScore(
+    Room& room, const PlatoonLeader& leader,
+    uint32_t targetId, float& outScore) const {
+    if (targetId == 0)
+        return false;
+
+    auto* target = dynamic_cast<Player*>(room.findActorById(targetId));
+    if (!target || !target->isAlive())
+        return false;
+
+    std::vector<PlayerCluster> clusters =
+        MidBossTacticBase::buildPlayerClusters(room, CLUSTER_RADIUS);
+    Vec3 leaderPos = leader.getPosition();
+
+    for (const PlayerCluster& cluster : clusters) {
+        if (std::find(cluster.playerIds.begin(), cluster.playerIds.end(),
+                      targetId) == cluster.playerIds.end()) {
+            continue;
+        }
+
+        float distance = Vec3::distance(leaderPos, target->getPosition());
+        outScore = static_cast<float>(cluster.playerIds.size()) * 1000.f -
+                   distance;
+        return true;
+    }
+
+    return false;
+}
+
+Actor* GoblinMidBossTactic::resolveBossPersonalTarget(
+    Room& room, uint32_t targetId) const {
+    if (targetId == 0)
+        return nullptr;
+    Actor* target = room.findActorById(targetId);
+    return (target && target->isAlive()) ? target : nullptr;
+}
+
+void GoblinMidBossTactic::moveBossToward(PlatoonLeader& leader,
+                                         const Vec3& targetPos,
+                                         float speedMult, float dt) const {
+    Vec3 toTarget = targetPos - leader.getPosition();
+    float dist = toTarget.length();
+    if (dist <= 0.01f)
+        return;
+
+    Vec3 dir = toTarget / dist;
+    leader.setFacing(dir);
+    leader.setPosition(leader.getPosition() +
+        dir * leader.getLeaderMoveSpeed() * speedMult * dt);
+}
+
 float GoblinMidBossTactic::evaluatePlayerScore(
     const Player* p, const PlatoonLeader& leader) const {
     float dist = Vec3::distance(leader.getPosition(), p->getPosition());
@@ -813,16 +1025,18 @@ float GoblinMidBossTactic::evaluatePlayerScore(
 
 bool GoblinMidBossTactic::allMembersArrived(
     const Room& room, const PlatoonLeader& leader) const {
+    bool anyAlive = false;
     for (auto* sq : leader.getSquads()) {
         for (uint32_t id : sq->getMembers()) {
             Actor* a = room.findActorById(id);
             if (!a || !a->isAlive()) continue;
+            anyAlive = true;
             auto* tnpc = dynamic_cast<TacticalNpc*>(a);
             if (!tnpc) continue;
             if (!tnpc->isAtSlot()) return false;
         }
     }
-    return true;
+    return anyAlive;
 }
 
 std::vector<Vec3> GoblinMidBossTactic::calcSquadBoxOffsets(int numSquads) const {

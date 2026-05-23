@@ -175,7 +175,7 @@ NPC 개별 행동 AI를 FSM에서 Behavior Tree(BT)로 전환하는 방안을 �
 - [o] **전술 이동 속도 부스트** — Flank/HoldSlot 상태에서 `moveSpeed * TACTICAL_SPEED_MULT(2.0)` 적용.
 - [o] **전술 쿨타임** — 전체 멤버 슬롯 도착(`allMembersArrived()`) 즉시 8초 쿨타임 → Engage 복귀 → 재발동.
 - [ ] **포위 이동속도 추가 상승** — 포위 전술 발동 시 `TACTICAL_SPEED_MULT`를 현재 2.0보다 대폭 높이는 것 검토 (예: 4.0 ~ 5.0)
-- [ ] **Confused 방황 구현** — 현재는 Idle 전이로 대체. `confusedTimer_` 기반 랜덤 방황 후 Idle.
+- [o] **Confused 방황 구현** — 리더 사망 시 `Confused(6)`로 6초간 방황 후 가장 가까운 플레이어를 향해 난투.
 - [ ] **전투 효율 기반 Retreat** — 살아있는 Squad 멤버 비율 < 임계값이면 전체 Retreat 명령
 - [ ] **TacticalNpc 상태 범례** — HUD에 TacticalNpcState 색상 범례 별도 추가 (현재 Npc 범례만 있음)
 - [ ] **Squad 연결선** — Squad 멤버 간 얇은 선으로 소속 표시

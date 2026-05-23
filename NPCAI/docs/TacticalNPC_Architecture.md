@@ -128,7 +128,7 @@ public:
 | `GoblinMidBossTactic` | 기존 고블린 중간보스 전술 전체 |
 | `GrandBaumMidBossTactic` | 그랜드밤 방패벽 및 (ㄹ) 외곽 웨이브 기습 |
 
-`MidBossTacticBase`는 전술 phase를 갖지 않는다. `PlayerCluster` 생성, 플레이어 centroid/facing 계산, 가장 가까운 플레이어 선택, Squad별 플레이어 타겟 분배, 전체 Squad `Engage`/`Idle` 발행, 리더 사망 시 `Confused` 발행만 담당한다.
+`MidBossTacticBase`는 전술 phase를 갖지 않는다. `PlayerCluster` 생성, 플레이어 centroid/facing 계산, 가장 가까운 플레이어 선택, Squad별 플레이어 타겟 분배, 전체 Squad `Engage`/`Idle` 발행, 리더 사망 시 `Confused` 발행만 담당한다. `Confused`를 받은 멤버는 `TacticalNpcState::Confused(6)`으로 전환되어 리더 사망 위치 주변을 방황하고, 6초 뒤 각 Squad는 가장 가까운 생존 플레이어를 향한 리더 없는 난투로 전환한다.
 
 ---
 
@@ -146,7 +146,18 @@ Encircle
 Vigilance
 DivideAndConquer
 Cooldown
+BossSolo
 ```
+
+### 4-1-1. 고블린 보스 개인 전투
+
+`GoblinMidBossTactic`은 고블린 중간보스 본체의 개인 전투 FSM도 함께 소유한다. 공용 `PlatoonLeader`는 종족별 상태를 모르고 지휘 실행자로만 유지되며, 고블린 전용 보스 상태는 전술 객체 내부에 둔다.
+
+- 보스는 살아 있는 플레이어 군집을 평가해 가장 우선순위가 높은 타겟을 추격한다. 점수는 `clusterSize * 1000 - distanceToBoss`를 사용한다.
+- 추격 중에는 0.5초마다 타겟을 재평가하되, 새 타겟 점수가 현재 타겟보다 120 이상 높을 때만 교체한다.
+- 개인 전투 FSM은 `EvaluateTarget -> ChaseTarget -> AttackWindup -> AttackRecover` 흐름이다. 표시 상태는 기존 `Idle`, `Chase`, `AttackWindup`, `AttackRecover`를 재사용한다.
+- `TacticalRetreat` 중에는 개인 추격보다 전술 후퇴 이동이 우선한다.
+- 모든 Squad가 전멸하면 phase가 `BossSolo`로 바뀐다. 이 상태에서는 SquadOrder 발행을 중단하고, 보스가 개인 추격/공격 루프만으로 단독 전투를 계속한다.
 
 기본 흐름:
 
@@ -413,6 +424,7 @@ exitApex    = targetCenter  + forward * WEDGE_EXIT_DISTANCE
 | 3 | `AttackRecover` | 공격 후 회복 |
 | 4 | `Flank` | 지정 측면 슬롯으로 이동 |
 | 5 | `ChargeThrough` | 쐐기 돌진 |
+| 6 | `Confused` | 리더 사망 후 방황 |
 | 7 | `Dead` | 사망 |
 | 8 | `HoldSlot` | 지정 슬롯 이동/유지 |
 
@@ -426,7 +438,7 @@ exitApex    = targetCenter  + forward * WEDGE_EXIT_DISTANCE
 | `GuardSlot` | `HoldSlot` | `targetId`, `slotOffset`, `speedMult`, `guardNearestPlayer_ = true` |
 | `ChargeThrough` | `ChargeThrough` | `targetId`, `slotOffset`, `chargeDir`, `chargeId`, 피해 설정 |
 | `Idle` | `Idle` | 타겟 초기화 |
-| `Confused` | `Idle` | 타겟 초기화 |
+| `Confused` | `Confused` | 타겟 초기화 후 리더 사망 위치 주변 방황 시작 |
 
 `GuardSlot`은 상태 자체는 `HoldSlot`을 사용하지만, 도착 후 고정 타겟 대신 가장 가까운 생존 플레이어를 바라본다.
 

@@ -9,7 +9,7 @@ namespace viz {
 // ─── 색상 테이블 ─────────────────────────────────────────────────────────────
 // NpcState int 값: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Return 5=Reposition 6=Dead 7=Investigate
 
-// TacticalNpcState int 값: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Flank 5=ChargeThrough 7=Dead 8=HoldSlot
+// TacticalNpcState int 값: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Flank 5=ChargeThrough 6=Confused 7=Dead 8=HoldSlot
 COLORREF Renderer::tacticalStateColor(int state) {
     switch (state) {
         case 0: return RGB(140, 140, 140);  // Idle          - 회색
@@ -18,6 +18,7 @@ COLORREF Renderer::tacticalStateColor(int state) {
         case 3: return RGB(160,  70,   0);  // AttackRecover - 진한 주황색
         case 4: return RGB(  0, 200, 220);  // Flank         - 청록색
         case 5: return RGB(255,  40, 220);  // ChargeThrough - 마젠타
+        case 6: return RGB(170, 120, 255);  // Confused      - 연보라
         case 7: return RGB( 40,  40,  40);  // Dead          - 거의 검정
         case 8: return RGB(255, 220,   0);  // HoldSlot      - 노란색 (경계)
     }
@@ -676,7 +677,7 @@ void Renderer::drawTacticalNpc(HDC hdc, int w, int h,
     // ── 레이블 ──────────────────────────────────────────────────────────────
     {
         static const char* stateNames[] = {
-            "Idle","Chase","Windup","Recover","Flank","?","?","Dead","HoldSlot"
+            "Idle","Chase","Windup","Recover","Flank","Charge","Confused","Dead","HoldSlot"
         };
         const char* sname = (tnpc.state >= 0 && tnpc.state < 9)
             ? stateNames[tnpc.state] : "?";

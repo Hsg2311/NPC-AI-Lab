@@ -51,7 +51,15 @@ private:
         Encircle,
         Vigilance,
         DivideAndConquer,
-        Cooldown
+        Cooldown,
+        BossSolo
+    };
+
+    enum class BossPersonalState {
+        EvaluateTarget,
+        ChaseTarget,
+        AttackWindup,
+        AttackRecover
     };
 
     enum class DivideTaskType {
@@ -70,9 +78,23 @@ private:
         float                 engageProtectTimer{ 0.f };
     };
 
+    struct BossTargetScore {
+        uint32_t targetId{ 0 };
+        float    score{ 0.f };
+    };
+
     void evaluateTactics(Room& room, PlatoonLeader& leader);
     void enterPhase(LeaderPhase next, const char* reason, PlatoonLeader& leader);
     void enterTacticFailCooldown(Room& room, PlatoonLeader& leader, const char* reason);
+    bool updateBossPersonalCombat(float dt, Room& room, PlatoonLeader& leader);
+    uint32_t selectBossPersonalTarget(Room& room, const PlatoonLeader& leader) const;
+    BossTargetScore selectBossPersonalTargetScore(Room& room,
+                                                  const PlatoonLeader& leader) const;
+    bool calcBossPersonalTargetScore(Room& room, const PlatoonLeader& leader,
+                                     uint32_t targetId, float& outScore) const;
+    Actor* resolveBossPersonalTarget(Room& room, uint32_t targetId) const;
+    void moveBossToward(PlatoonLeader& leader, const Vec3& targetPos,
+                        float speedMult, float dt) const;
     Player* selectPrimaryTarget(Room& room, const PlatoonLeader& leader) const;
     float evaluatePlayerScore(const Player* p, const PlatoonLeader& leader) const;
     int clusterPlayers(const Room& room, const PlatoonLeader& leader) const;
@@ -99,6 +121,10 @@ private:
     Vec3 retreatTargetPos_{};
     uint32_t primaryTargetId_{ 0 };
     std::vector<DivideSquadTask> divideTasks_{};
+    BossPersonalState bossPersonalState_{ BossPersonalState::EvaluateTarget };
+    float bossPersonalTimer_{ 0.f };
+    float bossTargetEvalTimer_{ 0.f };
+    uint32_t bossPersonalTargetId_{ 0 };
 
     static constexpr float TACTIC_INTERVAL          = 1.f;
     static constexpr float CLUSTER_RADIUS           = 20.f;
@@ -116,11 +142,12 @@ private:
     static constexpr float BOX_FRONT_OFFSET         = 15.f;
     static constexpr float BOX_SQUAD_SPACING        = 35.f;
     static constexpr float BOX_ARC_DEPTH            = 10.f;
-    static constexpr float BOSS_KEEP_DIST           = 18.f;
-    static constexpr float BOSS_KEEP_TOL            = 2.f;
     static constexpr float REGROUP_DIST             = 70.f;
     static constexpr float VIGILANCE_GUARD_RADIUS   = 20.f;
     static constexpr float TACTICAL_SPEED_MULT      = 3.f;
+    static constexpr float BOSS_TARGET_EVAL_INTERVAL = 0.5f;
+    static constexpr float BOSS_TARGET_SWITCH_MARGIN = 120.f;
+    static constexpr float BOSS_CHASE_SPEED_MULT    = 1.0f;
 };
 
 class IsisMidBossTactic : public MidBossTacticBase {

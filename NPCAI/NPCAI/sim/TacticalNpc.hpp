@@ -18,6 +18,7 @@ enum class TacticalNpcState {
     AttackRecover = 3,  // 공격 후 쿨다운
     Flank         = 4,  // FlankTarget 명령: assignedSlot 위치까지 이동
     ChargeThrough = 5,
+    Confused      = 6,
     Dead          = 7,  // 종료 상태
     HoldSlot      = 8,  // DenseHold/Encircle/BoxAdvance 명령: 슬롯 이동 후 유지
 };
@@ -105,6 +106,7 @@ protected:
     void updateAttackRecover(float dt, Room& room);
     void updateFlank        (float dt, Room& room);
     void updateChargeThrough(float dt, Room& room);
+    void updateConfused     (float dt, Room& room);
     void updateHoldSlot     (float dt, Room& room);
     void updateDead         ();
 
@@ -129,6 +131,10 @@ protected:
     bool             guardNearestPlayer_{ false };
     bool             useHoldFacing_{ false };
     Vec3             holdFacing_{};
+    Vec3             confusedAnchor_{};
+    Vec3             confusedTarget_{};
+    float            confusedRetargetTimer_{ 0.f };
+    int              confusedWanderStep_{ 0 };
     Vec3             spawnPos_;
     int              squadId_{ -1 };
     std::string      logPrefix_{};
@@ -146,6 +152,12 @@ protected:
     float recoverTimer_{ 0.f };
 
     static constexpr float TACTICAL_SPEED_MULT = 3.0f;
+    static constexpr float CONFUSED_WANDER_RADIUS = 100.0f;
+    static constexpr float CONFUSED_SEPARATION_RADIUS = 6.0f;
+    static constexpr float CONFUSED_SEPARATION_WEIGHT = 0.55f;
+    static constexpr float CONFUSED_SPEED_MULT = 1.f;
+    static constexpr float CONFUSED_RETARGET_MIN = 0.35f;
+    static constexpr float CONFUSED_RETARGET_SPAN = 0.75f;
 
     std::vector<Vec3> nearbyCache_;
 };

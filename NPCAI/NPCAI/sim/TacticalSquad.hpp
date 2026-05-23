@@ -84,6 +84,8 @@ public:
 
 private:
     void pushCommandsToMembers(Room& room);
+    void updateLeaderlessBrawl(float dt, Room& room);
+    uint32_t selectNearestPlayerToSquad(Room& room) const;
 
     // ── 슬롯 계산 ─────────────────────────────────────────────────────────────
     std::vector<Vec3> calcEncircleSlots(const Vec3& targetPos, float sectorAngle,
@@ -106,6 +108,12 @@ private:
     std::vector<Vec3>     wedgePrepareSlots_{};
     std::vector<Vec3>     wedgeExitSlots_{};
     uint32_t              activeWedgeChargeId_{ 0 };
+    bool                  leaderlessBrawlEnabled_{ false };
+    float                 leaderlessBrawlTimer_{ 0.f };
+    float                 leaderlessRetargetTimer_{ 0.f };
+
+    static constexpr float LEADERLESS_CONFUSED_DURATION = 6.0f;
+    static constexpr float LEADERLESS_RETARGET_INTERVAL = 1.5f;
 };
 
 } // namespace sim

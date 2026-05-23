@@ -467,8 +467,8 @@ TacticalSquad        ← 비(非) Actor 코디네이터
 | 2 | `AttackWindup` | 공격 선딜. 이동 없음. `windupTimer_` 완료 시 hit/miss 판정. 타겟 이탈해도 취소 없음. |
 | 3 | `AttackRecover` | 공격 후딜. 약한 separation drift 허용. `recoverTimer_` 완료 후 재공격 또는 Chase. |
 | 4 | `Flank` | `FlankTarget` 명령. `assignedSlot_`(월드 좌표) 위치까지 이동. 도착 후 Chase 또는 AttackWindup. 타겟이 `abandonDist_` 이상 이탈하면 슬롯 포기 → Chase. |
-| 5 | `AlternateWait` | 교대 공격에서 자기 순번이 아닌 대기 상태. 다음 EngageTarget 명령 수신 시 전환. |
-| 6 | `Return` | `Retreat` 명령 또는 타겟 소실 시 `spawnPos_`로 귀환. |
+| 5 | `ChargeThrough` | 쐐기 대형 돌진. 지정 방향으로 통과하며 충돌한 플레이어에게 피해를 준다. |
+| 6 | `Confused` | PlatoonLeader 사망 직후 일정 시간 리더 사망 위치 주변에서 방황한다. |
 | 7 | `Dead` | 종단 상태. |
 | 8 | `HoldSlot` | `DenseHold` 명령. `assignedSlot_` 위치까지 이동 후 제자리 유지. 타겟이 범위 내여도 공격하지 않음 (경계 상태). |
 
@@ -522,6 +522,7 @@ Dead: 종단 상태 (alive_ == false)
 | `HoldSlot` | `Idle` | 타겟 소실/사망 |
 | `AlternateWait` | `Idle` | 타겟 소실/사망 |
 | `Return` | `Idle` | `dist to spawnPos_ < 0.3` |
+| `Confused` | `Confused` | 명시적인 새 명령이나 사망 전까지 방황 |
 | `Dead` | — | 종단 상태 (alive_ == false 감지 즉시) |
 
 #### 명령 구동 전이 (TacticalSquad → TacticalNpc)
@@ -533,10 +534,10 @@ Dead: 종단 상태 (alive_ == false)
 | `EngageTarget` | `Chase` | `targetId_` 갱신 |
 | `FlankTarget` | `Flank` | `targetId_` + `assignedSlot_`(월드 좌표) + `slotRefTargetPos_` + `abandonDist_` 갱신 |
 | `HoldSlot` | `HoldSlot` | `targetId_` + `assignedSlot_`(월드 좌표) 갱신. 도착 후 공격 없이 제자리 유지. |
-| `AlternateWait` | `AlternateWait` | `targetId_` 갱신 |
-| `Retreat` | `Return` | — |
+| `GuardSlot` | `HoldSlot` | `targetId_` + `assignedSlot_` 갱신. 도착 후 가장 가까운 생존 플레이어를 바라봄. |
+| `ChargeThrough` | `ChargeThrough` | `chargeDir`, `chargeId`, 충돌 피해 설정 |
 | `Idle` | `Idle` | `targetId_ = 0` |
-| `Confused` | `Idle` | `targetId_ = 0` (PlatoonLeader 사망 시 발행) |
+| `Confused` | `Confused` | `targetId_ = 0`, 리더 사망 위치 주변 방황 시작 |
 
 #### TacticalNpcConfig 파라미터
 
@@ -695,7 +696,7 @@ void TacticalSquad::pushConfusedToMembers(Room& room) {
 }
 ```
 
-PlatoonLeader의 `update()`에서 `alive_`가 false로 바뀌는 틱에 `deathReported_` 플래그로 1회만 호출된다. Confused 명령을 받은 TacticalNpc는 즉시 `Idle`로 전환된다.
+PlatoonLeader의 `update()`에서 `alive_`가 false로 바뀌는 틱에 `deathReported_` 플래그로 1회만 호출된다. Confused 명령을 받은 TacticalNpc는 즉시 `Confused(6)` 상태로 전환되어 리더 사망 위치 주변을 방황한다. 각 Squad는 6초 뒤 리더 없는 난투 모드로 전환하고, Squad 중심에서 가장 가까운 생존 플레이어에게 `EngageTarget`을 발행한다.
 
 ---
 
@@ -905,8 +906,8 @@ std::vector<DebugTacticalNpcEntry> tacticalNpcs;
 | `AttackWindup(2)` | 주황 | (255, 165, 0) |
 | `AttackRecover(3)` | 진주황 | (200, 100, 0) |
 | `Flank(4)` | 청록 | (0, 200, 220) |
-| `AlternateWait(5)` | 파랑 | (50, 80, 220) |
-| `Return(6)` | 초록 | (50, 180, 50) |
+| `ChargeThrough(5)` | 파랑 | (50, 80, 220) |
+| `Confused(6)` | 연보라 | (170, 120, 255) |
 | `Dead(7)` | 거의 검정 | (40, 40, 40) |
 | `HoldSlot(8)` | 노랑 | (255, 220, 0) |
 
