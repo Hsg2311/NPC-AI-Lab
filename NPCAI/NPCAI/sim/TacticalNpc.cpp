@@ -21,8 +21,18 @@ static const char* tacticalStateStr(TacticalNpcState s) {
         case TacticalNpcState::Confused:      return "Confused";
         case TacticalNpcState::Dead:          return "Dead";
         case TacticalNpcState::HoldSlot:      return "HoldSlot";
+        case TacticalNpcState::PressureWait:  return "PressureWait";
     }
     return "?";
+}
+
+static float hash01(uint32_t v) {
+    v ^= v >> 16;
+    v *= 0x7feb352du;
+    v ^= v >> 15;
+    v *= 0x846ca68bu;
+    v ^= v >> 16;
+    return static_cast<float>(v & 0x00ffffffu) / static_cast<float>(0x01000000u);
 }
 
 // ─── 생성자 ───────────────────────────────────────────────────────────────────
@@ -55,6 +65,12 @@ float TacticalNpc::getRecoverProgress() const {
     return (attackRecoverTime_ > 0.f)
         ? std::min(1.f, recoverTimer_ / attackRecoverTime_)
         : 0.f;
+}
+
+TacticalNpcState TacticalNpc::getDisplayState() const {
+    if (state_ == TacticalNpcState::PressureWait && pressureReentering_)
+        return TacticalNpcState::Chase;
+    return state_;
 }
 
 // ─── receiveCommand ───────────────────────────────────────────────────────────
@@ -101,6 +117,13 @@ void TacticalNpc::reviveAt(const Vec3& pos) {
     speedMult_ = 1.f;
     windupTimer_ = 0.f;
     recoverTimer_ = 0.f;
+    pressureWaitTimer_ = 0.f;
+    resetPressureWaitTarget();
+    pressureWaitAngleOffset_ = 0.f;
+    pressureWaitRadiusOffset_ = 0.f;
+    pressureWaitScatterSeed_ = 0;
+    pressureReentering_ = false;
+    reservedAttackTargetId_ = 0;
 }
 
 // ─── transitionTo ─────────────────────────────────────────────────────────────
@@ -111,12 +134,19 @@ void TacticalNpc::transitionTo(TacticalNpcState next, const char* reason) {
                                 tacticalStateStr(next), reason);
     if (next == TacticalNpcState::AttackWindup)  windupTimer_  = 0.f;
     if (next == TacticalNpcState::AttackRecover) recoverTimer_ = 0.f;
+    if (next == TacticalNpcState::PressureWait) {
+        pressureWaitTimer_ = 0.f;
+        resetPressureWaitTarget();
+        ++pressureWaitScatterSeed_;
+        refreshPressureWaitScatterOffsets();
+        pressureReentering_ = false;
+    }
     state_ = next;
 }
 
 // ─── consumePendingCommand ────────────────────────────────────────────────────
 
-void TacticalNpc::consumePendingCommand() {
+void TacticalNpc::consumePendingCommand(Room& room) {
     if (pendingCmd_.type == TacticalCommandType::None) return;
 
     switch (pendingCmd_.type) {
@@ -125,13 +155,27 @@ void TacticalNpc::consumePendingCommand() {
             useHoldFacing_ = false;
             confusedRetargetTimer_ = 0.f;
             speedMult_ = 1.f;
+            if (targetId_ == pendingCmd_.targetId &&
+                (state_ == TacticalNpcState::Chase ||
+                 state_ == TacticalNpcState::PressureWait ||
+                 state_ == TacticalNpcState::AttackWindup ||
+                 state_ == TacticalNpcState::AttackRecover)) {
+                break;
+            }
+            if (reservedAttackTargetId_ != 0 &&
+                reservedAttackTargetId_ != pendingCmd_.targetId) {
+                releaseAttackReservation(room);
+            }
+            pressureReentering_ = false;
             targetId_ = pendingCmd_.targetId;
             transitionTo(TacticalNpcState::Chase, "명령: EngageTarget");
             break;
         case TacticalCommandType::FlankTarget:
+            releaseAttackReservation(room);
             guardNearestPlayer_ = false;
             useHoldFacing_ = false;
             confusedRetargetTimer_ = 0.f;
+            pressureReentering_ = false;
             chargeComplete_ = false;
             targetId_          = pendingCmd_.targetId;
             assignedSlot_      = pendingCmd_.slotOffset;
@@ -141,9 +185,11 @@ void TacticalNpc::consumePendingCommand() {
             transitionTo(TacticalNpcState::Flank, "명령: FlankTarget");
             break;
         case TacticalCommandType::ChargeThrough:
+            releaseAttackReservation(room);
             guardNearestPlayer_ = false;
             useHoldFacing_ = false;
             confusedRetargetTimer_ = 0.f;
+            pressureReentering_ = false;
             targetId_          = pendingCmd_.targetId;
             assignedSlot_      = pendingCmd_.slotOffset;
             chargeId_          = pendingCmd_.chargeId;
@@ -157,10 +203,12 @@ void TacticalNpc::consumePendingCommand() {
             transitionTo(TacticalNpcState::ChargeThrough, "명령: ChargeThrough");
             break;
         case TacticalCommandType::HoldSlot:
+            releaseAttackReservation(room);
             guardNearestPlayer_ = false;
             useHoldFacing_ = pendingCmd_.useHoldFacing;
             holdFacing_ = pendingCmd_.holdFacing;
             confusedRetargetTimer_ = 0.f;
+            pressureReentering_ = false;
             speedMult_ = pendingCmd_.speedMult;
             chargeComplete_ = false;
             targetId_     = pendingCmd_.targetId;
@@ -168,28 +216,34 @@ void TacticalNpc::consumePendingCommand() {
             transitionTo(TacticalNpcState::HoldSlot, "명령: HoldSlot");
             break;
         case TacticalCommandType::GuardSlot:
+            releaseAttackReservation(room);
             guardNearestPlayer_ = true;
             useHoldFacing_ = pendingCmd_.useHoldFacing;
             holdFacing_ = pendingCmd_.holdFacing;
             confusedRetargetTimer_ = 0.f;
+            pressureReentering_ = false;
             speedMult_ = pendingCmd_.speedMult;
             targetId_     = pendingCmd_.targetId;
             assignedSlot_ = pendingCmd_.slotOffset;
             transitionTo(TacticalNpcState::HoldSlot, "명령: GuardSlot");
             break;
         case TacticalCommandType::Idle:
+            releaseAttackReservation(room);
             guardNearestPlayer_ = false;
             useHoldFacing_ = false;
             chargeComplete_ = false;
             confusedRetargetTimer_ = 0.f;
+            pressureReentering_ = false;
             speedMult_ = 1.f;
             targetId_ = 0;
             transitionTo(TacticalNpcState::Idle, "명령: Idle");
             break;
         case TacticalCommandType::Confused:
+            releaseAttackReservation(room);
             guardNearestPlayer_ = false;
             useHoldFacing_ = false;
             chargeComplete_ = false;
+            pressureReentering_ = false;
             speedMult_ = 1.f;
             targetId_ = 0;
             assignedSlot_ = {};
@@ -208,13 +262,13 @@ void TacticalNpc::consumePendingCommand() {
 
 void TacticalNpc::update(float dt, Room& room) {
     if (!alive_) {
-        updateDead();
+        updateDead(room);
         return;
     }
 
     // 명령 소비 (매 틱 최우선)
     if (pendingCmd_.type != TacticalCommandType::None) {
-        consumePendingCommand();
+        consumePendingCommand(room);
     }
 
     switch (state_) {
@@ -226,6 +280,7 @@ void TacticalNpc::update(float dt, Room& room) {
         case TacticalNpcState::ChargeThrough: updateChargeThrough(dt, room); break;
         case TacticalNpcState::Confused: updateConfused(dt, room); break;
         case TacticalNpcState::HoldSlot: updateHoldSlot(dt, room); break;
+        case TacticalNpcState::PressureWait: updatePressureWait(dt, room); break;
         case TacticalNpcState::Dead:          /* 종료 상태 */                 break;
     }
 }
@@ -239,11 +294,223 @@ void TacticalNpc::updateIdle(float /*dt*/, Room& /*room*/) {
 
 // ─── Chase ────────────────────────────────────────────────────────────────────
 
+bool TacticalNpc::hasReservedAttackSlot() const {
+    return reservedAttackTargetId_ != 0 &&
+        reservedAttackTargetId_ == targetId_;
+}
+
+bool TacticalNpc::canEnterAttackSlot(Room& room) {
+    if (targetId_ == 0)
+        return false;
+
+    if (hasReservedAttackSlot() &&
+        (state_ == TacticalNpcState::AttackWindup ||
+         state_ == TacticalNpcState::AttackRecover)) {
+        return true;
+    }
+
+    if (!room.tryReserveTacticalAttackSlot(targetId_, id_))
+    {
+        reservedAttackTargetId_ = 0;
+        pressureReentering_ = false;
+        return false;
+    }
+
+    reservedAttackTargetId_ = targetId_;
+    return true;
+}
+
+void TacticalNpc::releaseAttackReservation(Room& room) {
+    if (reservedAttackTargetId_ == 0)
+        return;
+
+    room.releaseTacticalAttackSlot(reservedAttackTargetId_, id_);
+    reservedAttackTargetId_ = 0;
+    pressureReentering_ = false;
+}
+
+void TacticalNpc::resetPressureWaitTarget() {
+    pressureWaitDesired_ = {};
+    pressureWaitTargetAnchor_ = {};
+    pressureWaitFacingAnchor_ = { 1.f, 0.f, 0.f };
+    pressureWaitRetargetTimer_ = 0.f;
+    pressureWaitDesiredValid_ = false;
+}
+
+void TacticalNpc::refreshPressureWaitScatterOffsets() {
+    constexpr float PI = 3.14159265f;
+    constexpr float DEG_TO_RAD = PI / 180.f;
+    constexpr float FULL_CIRCLE = 360.0f;
+    uint32_t base = id_ * 73856093u ^
+        static_cast<uint32_t>(squadId_ + 4096) * 19349663u ^
+        pressureWaitScatterSeed_ * 83492791u;
+    float openArc = TACTICAL_PRESSURE_FRONT_GAP_DEGREES * 2.0f;
+    float angleDeg = TACTICAL_PRESSURE_FRONT_GAP_DEGREES +
+        hash01(base) * (FULL_CIRCLE - openArc);
+    pressureWaitAngleOffset_ = angleDeg * DEG_TO_RAD;
+    pressureWaitRadiusOffset_ = TACTICAL_PRESSURE_RADIUS_OFFSET_MIN +
+        hash01(base ^ 0xa511e9b3u) * TACTICAL_PRESSURE_RADIUS_OFFSET_SPAN;
+}
+
+Vec3 TacticalNpc::computePressureWaitDesired(const Actor& target) const {
+    Vec3 targetPos = target.getPosition();
+    float ringRadius = std::max(attackRange_ + TACTICAL_PRESSURE_EXTRA_RADIUS,
+                                separationRadius_ * TACTICAL_PRESSURE_SEPARATION_MULT) +
+        pressureWaitRadiusOffset_;
+
+    Vec3 forward = target.getFacing();
+    forward.y = 0.f;
+    if (forward.lengthSq() <= 0.01f) {
+        forward = targetPos - position_;
+        forward.y = 0.f;
+    }
+    if (forward.lengthSq() <= 0.01f)
+        forward = Vec3{ 1.f, 0.f, 0.f };
+    forward = forward.normalized();
+
+    constexpr float PI = 3.14159265f;
+    float forwardAngle = std::atan2f(forward.z, forward.x);
+    float angle = forwardAngle + pressureWaitAngleOffset_;
+    Vec3 radial{ std::cosf(angle), 0.f, std::sinf(angle) };
+    return targetPos + radial * ringRadius;
+}
+
+void TacticalNpc::moveTowardPressureWait(float dt, Room& room, const Actor& target) {
+    Vec3 targetPos = target.getPosition();
+    Vec3 targetFacing = target.getFacing();
+    targetFacing.y = 0.f;
+    if (targetFacing.lengthSq() <= 0.01f)
+        targetFacing = targetPos - position_;
+    if (targetFacing.lengthSq() <= 0.01f)
+        targetFacing = { 1.f, 0.f, 0.f };
+    targetFacing = targetFacing.normalized();
+
+    pressureWaitRetargetTimer_ += dt;
+    bool targetMoved =
+        Vec3::distanceSq(targetPos, pressureWaitTargetAnchor_) >
+        TACTICAL_PRESSURE_TARGET_MOVE_REFRESH_DIST *
+        TACTICAL_PRESSURE_TARGET_MOVE_REFRESH_DIST;
+    bool facingChanged =
+        pressureWaitFacingAnchor_.lengthSq() <= 0.01f ||
+        targetFacing.dot(pressureWaitFacingAnchor_) <
+        TACTICAL_PRESSURE_FACING_REFRESH_DOT;
+
+    if (!pressureWaitDesiredValid_) {
+        refreshPressureWaitScatterOffsets();
+        pressureWaitDesired_ = computePressureWaitDesired(target);
+        pressureWaitTargetAnchor_ = targetPos;
+        pressureWaitFacingAnchor_ = targetFacing;
+        pressureWaitRetargetTimer_ = 0.f;
+        pressureWaitDesiredValid_ = true;
+    } else if (pressureWaitRetargetTimer_ >= TACTICAL_PRESSURE_RETARGET_INTERVAL &&
+               (targetMoved || facingChanged)) {
+        Vec3 targetDelta = targetPos - pressureWaitTargetAnchor_;
+        targetDelta.y = 0.f;
+        pressureWaitDesired_ += targetDelta;
+
+        Vec3 relative = pressureWaitDesired_ - targetPos;
+        relative.y = 0.f;
+        float relativeLen = relative.length();
+        constexpr float PI = 3.14159265f;
+        constexpr float DEG_TO_RAD = PI / 180.f;
+        float frontGap = TACTICAL_PRESSURE_FRONT_GAP_DEGREES * DEG_TO_RAD;
+        if (relativeLen > 0.01f) {
+            Vec3 dir = relative / relativeLen;
+            float signedAngle = std::atan2f(
+                targetFacing.x * dir.z - targetFacing.z * dir.x,
+                targetFacing.dot(dir));
+            if (std::fabs(signedAngle) < frontGap) {
+                float side = (std::fabs(signedAngle) > 0.001f)
+                    ? ((signedAngle >= 0.f) ? 1.f : -1.f)
+                    : ((std::sinf(pressureWaitAngleOffset_) >= 0.f) ? 1.f : -1.f);
+                float forwardAngle = std::atan2f(targetFacing.z, targetFacing.x);
+                float correctedAngle = forwardAngle + side * frontGap;
+                Vec3 radial{ std::cosf(correctedAngle), 0.f, std::sinf(correctedAngle) };
+                pressureWaitDesired_ = targetPos + radial * relativeLen;
+            }
+        }
+
+        pressureWaitTargetAnchor_ = targetPos;
+        pressureWaitFacingAnchor_ = targetFacing;
+        pressureWaitRetargetTimer_ = 0.f;
+    }
+
+    Vec3 toDesired = pressureWaitDesired_ - position_;
+    toDesired.y = 0.f;
+    float distToDesired = toDesired.length();
+    Vec3 moveDir = (distToDesired > 0.1f)
+        ? toDesired.normalized()
+        : Vec3{ 0.f, 0.f, 0.f };
+
+    nearbyCache_.clear();
+    float pressureSeparationRadius =
+        std::max(separationRadius_, separationRadius_ * TACTICAL_PRESSURE_SEPARATION_RADIUS_MULT);
+    room.findNearbyNpcPositions(position_, pressureSeparationRadius, id_, nearbyCache_);
+    Vec3 sep = calcSeparationForce(pressureSeparationRadius, nearbyCache_);
+    if (sep.lengthSq() > 0.01f && moveDir.lengthSq() > 0.01f) {
+        Vec3 sepPerp = sep - moveDir * sep.dot(moveDir);
+        float sepScale = std::min(1.f, sepPerp.length());
+        float nearTargetScale = std::max(TACTICAL_PRESSURE_NEAR_SEPARATION_MIN_SCALE,
+            std::min(1.f, distToDesired / TACTICAL_PRESSURE_SLOW_RADIUS));
+        moveDir = (moveDir + sepPerp *
+            (separationWeight_ * TACTICAL_PRESSURE_SEPARATION_WEIGHT_MULT *
+             sepScale * nearTargetScale)).normalized();
+    }
+
+    Vec3 lookDir = targetPos - position_;
+    facing_ = (lookDir.length() > 0.1f) ? lookDir.normalized() : moveDir;
+    Vec3 overlapDrift{ 0.f, 0.f, 0.f };
+    nearbyCache_.clear();
+    float overlapRadius = std::max(TACTICAL_PRESSURE_OVERLAP_RADIUS_MIN,
+        separationRadius_ * TACTICAL_PRESSURE_OVERLAP_RADIUS_MULT);
+    room.findNearbyNpcPositions(position_, overlapRadius, id_, nearbyCache_);
+    Vec3 overlapSep = calcSeparationForce(overlapRadius, nearbyCache_);
+    if (overlapSep.lengthSq() > 0.0001f) {
+        Vec3 radial = position_ - targetPos;
+        radial.y = 0.f;
+        if (radial.lengthSq() <= 0.01f)
+            radial = pressureWaitDesired_ - targetPos;
+        radial.y = 0.f;
+        if (radial.lengthSq() > 0.01f) {
+            radial = radial.normalized();
+            float radialDot = overlapSep.dot(radial);
+            Vec3 outward = radial * std::max(0.f, radialDot);
+            Vec3 tangent = overlapSep - radial * radialDot;
+            overlapDrift = outward + tangent * 0.7f;
+        } else {
+            overlapDrift = overlapSep;
+        }
+    }
+
+    if (distToDesired <= TACTICAL_PRESSURE_STOP_RADIUS ||
+        moveDir.lengthSq() <= 0.01f) {
+        if (overlapDrift.lengthSq() > 0.0001f)
+            position_ += overlapDrift *
+                (moveSpeed_ * TACTICAL_PRESSURE_OVERLAP_DRIFT_MULT * dt);
+        return;
+    }
+
+    float slowT = std::min(1.f,
+        (distToDesired - TACTICAL_PRESSURE_STOP_RADIUS) /
+        (TACTICAL_PRESSURE_SLOW_RADIUS - TACTICAL_PRESSURE_STOP_RADIUS));
+    position_ += moveDir *
+        (moveSpeed_ * TACTICAL_PRESSURE_SPEED_MULT * slowT * dt);
+    if (overlapDrift.lengthSq() > 0.0001f)
+        position_ += overlapDrift *
+            (moveSpeed_ * TACTICAL_PRESSURE_OVERLAP_DRIFT_MULT * dt);
+}
+
 void TacticalNpc::updateChase(float dt, Room& room) {
     Actor* target = resolveTarget(room);
     if (!target) {
+        releaseAttackReservation(room);
         targetId_ = 0;
         transitionTo(TacticalNpcState::Idle, "타겟 소실");
+        return;
+    }
+
+    if (!canEnterAttackSlot(room)) {
+        transitionTo(TacticalNpcState::PressureWait, "공격 슬롯 대기");
         return;
     }
 
@@ -269,6 +536,7 @@ void TacticalNpc::updateChase(float dt, Room& room) {
 void TacticalNpc::updateAttackWindup(float dt, Room& room) {
     Actor* target = resolveTarget(room);
     if (!target) {
+        releaseAttackReservation(room);
         targetId_ = 0;
         transitionTo(TacticalNpcState::Idle, "타겟 소실 (windup 중)");
         return;
@@ -285,6 +553,7 @@ void TacticalNpc::updateAttackWindup(float dt, Room& room) {
             Logger::get().log(logPrefix_, buf);
 
             if (!target->isAlive()) {
+                releaseAttackReservation(room);
                 targetId_ = 0;
                 transitionTo(TacticalNpcState::Idle, "타겟 처치");
                 return;
@@ -304,6 +573,7 @@ void TacticalNpc::updateAttackWindup(float dt, Room& room) {
 void TacticalNpc::updateAttackRecover(float dt, Room& room) {
     Actor* target = resolveTarget(room);
     if (!target) {
+        releaseAttackReservation(room);
         targetId_ = 0;
         transitionTo(TacticalNpcState::Idle, "타겟 소실 (recover 중)");
         return;
@@ -313,16 +583,65 @@ void TacticalNpc::updateAttackRecover(float dt, Room& room) {
     nearbyCache_.clear();
     room.findNearbyNpcPositions(position_, BODY_RADIUS * 2.f, id_, nearbyCache_);
     Vec3 push = calcSeparationForce(BODY_RADIUS * 2.f, nearbyCache_);
-    if (push.length() > 0.1f)
-        position_ += push.normalized() * (moveSpeed_ * 0.15f * dt);
+    if (push.lengthSq() > 0.0001f)
+        position_ += push * (moveSpeed_ * TACTICAL_RECOVER_SEPARATION_DRIFT_MULT * dt);
+
+    Vec3 lookDir = target->getPosition() - position_;
+    if (lookDir.lengthSq() > 0.01f)
+        facing_ = lookDir.normalized();
 
     recoverTimer_ += dt;
     if (recoverTimer_ >= attackRecoverTime_) {
-        if (Vec3::distanceSq(position_, target->getPosition()) <= attackRange_ * attackRange_)
+        if (Vec3::distanceSq(position_, target->getPosition()) <= attackRange_ * attackRange_ &&
+            canEnterAttackSlot(room)) {
             transitionTo(TacticalNpcState::AttackWindup, "recover 완료, 사정거리 내");
-        else
-            transitionTo(TacticalNpcState::Chase, "recover 완료, 사정거리 이탈");
+        } else {
+            releaseAttackReservation(room);
+            transitionTo(TacticalNpcState::PressureWait, "recover 완료");
+        }
     }
+}
+
+void TacticalNpc::updatePressureWait(float dt, Room& room) {
+    Actor* target = resolveTarget(room);
+    if (!target) {
+        releaseAttackReservation(room);
+        targetId_ = 0;
+        transitionTo(TacticalNpcState::Idle, "타겟 소실 (PressureWait 중)");
+        return;
+    }
+
+    pressureWaitTimer_ += dt;
+    float reenterDelay = TACTICAL_PRESSURE_REENTER_MIN_TIME +
+        static_cast<float>(id_ % 4u) * TACTICAL_PRESSURE_REENTER_STAGGER;
+    bool canReenter = pressureWaitTimer_ >= reenterDelay && canEnterAttackSlot(room);
+
+    if (canReenter) {
+        pressureReentering_ = true;
+        if (Vec3::distanceSq(position_, target->getPosition()) <= attackRange_ * attackRange_) {
+            transitionTo(TacticalNpcState::AttackWindup, "공격 슬롯 확보");
+            return;
+        }
+
+        Vec3 chaseDir = target->getPosition() - position_;
+        chaseDir.y = 0.f;
+        if (chaseDir.lengthSq() > 0.01f) {
+            chaseDir = chaseDir.normalized();
+
+            nearbyCache_.clear();
+            room.findNearbyNpcPositions(position_, separationRadius_, id_, nearbyCache_);
+            Vec3 sep = calcSeparationForce(separationRadius_, nearbyCache_);
+            Vec3 sepPerp = sep - chaseDir * sep.dot(chaseDir);
+            Vec3 moveDir = (chaseDir + sepPerp * separationWeight_).normalized();
+            facing_ = moveDir;
+            position_ += moveDir *
+                (moveSpeed_ * TACTICAL_PRESSURE_REENTER_SPEED_MULT * dt);
+        }
+        return;
+    }
+
+    pressureReentering_ = false;
+    moveTowardPressureWait(dt, room, *target);
 }
 
 // ─── Flank ────────────────────────────────────────────────────────────────────
@@ -330,6 +649,7 @@ void TacticalNpc::updateAttackRecover(float dt, Room& room) {
 void TacticalNpc::updateFlank(float dt, Room& room) {
     Actor* target = resolveTarget(room);
     if (!target) {
+        releaseAttackReservation(room);
         targetId_ = 0;
         transitionTo(TacticalNpcState::Idle, "타겟 소실 (Flank 중)");
         return;
@@ -347,10 +667,13 @@ void TacticalNpc::updateFlank(float dt, Room& room) {
     if (distToSlot < 0.5f) {
         // 슬롯 도착 — 공격 여부 판정
         float distToTarget = Vec3::distance(position_, target->getPosition());
-        if (distToTarget <= attackRange_)
+        if (distToTarget <= attackRange_ && canEnterAttackSlot(room))
             transitionTo(TacticalNpcState::AttackWindup, "Flank 슬롯 도착, 사정거리 내");
         else
-            transitionTo(TacticalNpcState::Chase, "Flank 슬롯 도착, 사정거리 이탈");
+            transitionTo(canEnterAttackSlot(room)
+                ? TacticalNpcState::Chase
+                : TacticalNpcState::PressureWait,
+                "Flank 슬롯 도착");
         return;
     }
 
@@ -517,7 +840,8 @@ void TacticalNpc::updateHoldSlot(float dt, Room& room) {
 
 // ─── Dead ─────────────────────────────────────────────────────────────────────
 
-void TacticalNpc::updateDead() {
+void TacticalNpc::updateDead(Room& room) {
+    releaseAttackReservation(room);
     targetId_ = 0;
     if (state_ != TacticalNpcState::Dead)
         transitionTo(TacticalNpcState::Dead, "hp 0");
@@ -535,9 +859,10 @@ bool TacticalNpc::isAtSlot() const {
             return chargeComplete_;
         case TacticalNpcState::AttackWindup:
         case TacticalNpcState::AttackRecover:
-            return true;   // 전투 중: 대형 완성으로 간주
+        case TacticalNpcState::PressureWait:
+            return true;   // 전투/압박 대기 중: 대형 완성으로 간주
         default:
-            return false;  // Idle, Chase, Flank, Return, Dead 등: 슬롯 미도달
+            return false;  // Idle, Chase, Flank, Dead 등: 슬롯 미도달
     }
 }
 

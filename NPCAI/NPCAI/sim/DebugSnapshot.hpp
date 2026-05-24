@@ -65,7 +65,7 @@ struct DebugGroupEntry {
     float memoryZ{ 0.f };
 };
 
-// 상태: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Flank 5=ChargeThrough 6=Confused 7=Dead 8=HoldSlot
+// 상태: 0=Idle 1=Chase 2=AttackWindup 3=AttackRecover 4=Flank 5=ChargeThrough 6=Confused 7=Dead 8=HoldSlot 9=PressureWait
 struct DebugTacticalNpcEntry {
     int         id{ 0 };
     float       x{ 0.f };

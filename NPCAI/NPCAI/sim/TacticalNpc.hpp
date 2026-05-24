@@ -21,6 +21,7 @@ enum class TacticalNpcState {
     Confused      = 6,
     Dead          = 7,  // 종료 상태
     HoldSlot      = 8,  // DenseHold/Encircle/BoxAdvance 명령: 슬롯 이동 후 유지
+    PressureWait  = 9,  // 공격 슬롯 대기: 플레이어 탈출 방향을 비운 외곽 압박
 };
 
 // ─── TacticalCommand ─────────────────────────────────────────────────────────
@@ -57,7 +58,7 @@ struct TacticalCommand {
 struct TacticalNpcConfig {
     float maxHp            = 100.f;
     float moveSpeed        = 4.f;
-    float attackRange      = 2.f;
+    float attackRange      = 2.8f;
     float attackDamage     = 15.f;
     float attackWindupTime = 0.4f;
     float attackRecoverTime= 0.8f;
@@ -80,6 +81,7 @@ public:
 
     // ── 접근자 ───────────────────────────────────────────────────────────────
     TacticalNpcState getState()         const { return state_; }
+    TacticalNpcState getDisplayState()  const;
     uint32_t         getTargetId()      const { return targetId_; }
     int              getSquadId()       const { return squadId_; }
     Vec3             getSpawnPos()      const { return spawnPos_; }
@@ -108,11 +110,19 @@ protected:
     void updateChargeThrough(float dt, Room& room);
     void updateConfused     (float dt, Room& room);
     void updateHoldSlot     (float dt, Room& room);
-    void updateDead         ();
+    void updatePressureWait (float dt, Room& room);
+    void updateDead         (Room& room);
 
     // ── 헬퍼 ──────────────────────────────────────────────────────────────────
-    void   consumePendingCommand();
+    void   consumePendingCommand(Room& room);
     Actor* resolveTarget    (Room& room) const;
+    bool   hasReservedAttackSlot() const;
+    bool   canEnterAttackSlot(Room& room);
+    void   releaseAttackReservation(Room& room);
+    void   resetPressureWaitTarget();
+    void   refreshPressureWaitScatterOffsets();
+    Vec3   computePressureWaitDesired(const Actor& target) const;
+    void   moveTowardPressureWait(float dt, Room& room, const Actor& target);
 
     // ── 데이터 ────────────────────────────────────────────────────────────────
     TacticalNpcState state_{ TacticalNpcState::Idle };
@@ -150,8 +160,41 @@ protected:
     float speedMult_{ 1.f };      // Flank 이동 속도 배율 (동시 도착 보정)
     float windupTimer_{ 0.f };
     float recoverTimer_{ 0.f };
+    float pressureWaitTimer_{ 0.f };
+    Vec3  pressureWaitDesired_{};
+    Vec3  pressureWaitTargetAnchor_{};
+    Vec3  pressureWaitFacingAnchor_{ 1.f, 0.f, 0.f };
+    float pressureWaitRetargetTimer_{ 0.f };
+    float pressureWaitAngleOffset_{ 0.f };
+    float pressureWaitRadiusOffset_{ 0.f };
+    uint32_t pressureWaitScatterSeed_{ 0 };
+    bool  pressureWaitDesiredValid_{ false };
+    bool  pressureReentering_{ false };
+    uint32_t reservedAttackTargetId_{ 0 };
 
     static constexpr float TACTICAL_SPEED_MULT = 3.0f;
+    static constexpr int   MAX_TACTICAL_ATTACKERS_PER_TARGET = 5;
+    static constexpr float TACTICAL_PRESSURE_EXTRA_RADIUS = 9.0f;
+    static constexpr float TACTICAL_PRESSURE_SEPARATION_MULT = 2.2f;
+    static constexpr float TACTICAL_PRESSURE_SEPARATION_RADIUS_MULT = 1.35f;
+    static constexpr float TACTICAL_PRESSURE_SPEED_MULT = 0.9f;
+    static constexpr float TACTICAL_PRESSURE_REENTER_MIN_TIME = 0.45f;
+    static constexpr float TACTICAL_PRESSURE_REENTER_STAGGER = 0.12f;
+    static constexpr float TACTICAL_PRESSURE_REENTER_SPEED_MULT = 1.0f;
+    static constexpr float TACTICAL_PRESSURE_RETARGET_INTERVAL = 0.35f;
+    static constexpr float TACTICAL_PRESSURE_TARGET_MOVE_REFRESH_DIST = 1.5f;
+    static constexpr float TACTICAL_PRESSURE_FACING_REFRESH_DOT = 0.9396926f; // cos(20 degrees)
+    static constexpr float TACTICAL_PRESSURE_SLOW_RADIUS = 4.0f;
+    static constexpr float TACTICAL_PRESSURE_STOP_RADIUS = 1.0f;
+    static constexpr float TACTICAL_PRESSURE_SEPARATION_WEIGHT_MULT = 0.35f;
+    static constexpr float TACTICAL_PRESSURE_NEAR_SEPARATION_MIN_SCALE = 0.45f;
+    static constexpr float TACTICAL_PRESSURE_OVERLAP_RADIUS_MIN = 4.0f;
+    static constexpr float TACTICAL_PRESSURE_OVERLAP_RADIUS_MULT = 1.4f;
+    static constexpr float TACTICAL_PRESSURE_OVERLAP_DRIFT_MULT = 0.34f;
+    static constexpr float TACTICAL_PRESSURE_FRONT_GAP_DEGREES = 35.0f;
+    static constexpr float TACTICAL_PRESSURE_RADIUS_OFFSET_MIN = -1.0f;
+    static constexpr float TACTICAL_PRESSURE_RADIUS_OFFSET_SPAN = 7.0f;
+    static constexpr float TACTICAL_RECOVER_SEPARATION_DRIFT_MULT = 0.03f;
     static constexpr float CONFUSED_WANDER_RADIUS = 100.0f;
     static constexpr float CONFUSED_SEPARATION_RADIUS = 6.0f;
     static constexpr float CONFUSED_SEPARATION_WEIGHT = 0.55f;

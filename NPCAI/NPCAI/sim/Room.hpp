@@ -57,6 +57,9 @@ public:
     void clearShieldWallBlockers();
     void knockPlayersOutOfShieldWall(const Vec3& center, float ringRadius);
     int  countNpcsTargeting(uint32_t playerId) const;
+    int  countTacticalAttackers(uint32_t playerId) const;
+    bool tryReserveTacticalAttackSlot(uint32_t playerId, uint32_t npcId);
+    void releaseTacticalAttackSlot(uint32_t playerId, uint32_t npcId);
 
     // 플레이어 공격: 범위 내 생존 NPC + TacticalNpc에게 피해 적용
     int  applyDamageToActorsInRange (const Vec3& center, float radius, float damage);
@@ -88,6 +91,7 @@ private:
     void rebuildLivingPlayersCache(); // F: getLivingPlayers 반복 할당 제거
     void rebuildAggroCount();         // B: countNpcsTargeting O(1)화
     void rebuildSpatialGrid();        // C: findNearbyNpcPositions O(N²) → O(1) 수렴
+    void pruneTacticalAttackReservations();
 
     // 공간 분할 그리드 셀 키 — cx/cz 좌표를 int64_t 하나로 인코딩
     static int64_t gridKey(int cx, int cz);
@@ -120,6 +124,7 @@ private:
     std::vector<PlatoonLeader*>                                  platoonLeaders_{};  // 비소유
 
     std::vector<uint32_t> shieldWallBlockerIds_{};
+    std::unordered_map<uint32_t, std::unordered_set<uint32_t>> reservedTacticalAttackers_{};
 
     uint32_t nextWedgeChargeId_{ 1 };
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>> wedgeChargeHits_{};

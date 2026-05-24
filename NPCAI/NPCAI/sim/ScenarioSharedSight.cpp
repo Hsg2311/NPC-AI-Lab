@@ -33,7 +33,7 @@ void ScenarioSharedSight::setup(Room& room) {
     goblin.maxHp              = 60.f;
     goblin.moveSpeed          = 5.5f;
     goblin.detectionRange     = 7.f;   // 좁은 감지 범위 — 공유 시야의 효과를 부각
-    goblin.attackRange        = 1.8f;
+    goblin.attackRange        = 2.6f;
     goblin.activityZoneRadius = 16.f;
     goblin.attackDamage       = 8.f;
     goblin.attackWindupTime   = 0.30f;

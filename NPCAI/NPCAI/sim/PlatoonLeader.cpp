@@ -45,7 +45,7 @@ void PlatoonLeader::update(float dt, Room& room) {
             else
                 pushConfusedToSquads(room);
         }
-        updateDead();
+        updateDead(room);
         return;
     }
 

@@ -17,7 +17,7 @@ void ScenarioSoloNpc::setup(Room& room) {
     goblin.maxHp              = 60.f;
     goblin.moveSpeed          = 5.5f;
     goblin.detectionRange     = 12.f;
-    goblin.attackRange        = 1.8f;
+    goblin.attackRange        = 2.6f;
     goblin.activityZoneRadius = 24.f;
     goblin.attackDamage       = 8.f;
     goblin.attackWindupTime   = 0.30f;
@@ -32,7 +32,7 @@ void ScenarioSoloNpc::setup(Room& room) {
     orc.maxHp              = 120.f;
     orc.moveSpeed          = 3.0f;
     orc.detectionRange     = 8.f;
-    orc.attackRange        = 3.0f;
+    orc.attackRange        = 3.8f;
     orc.activityZoneRadius = 22.f;
     orc.attackDamage       = 22.f;
     orc.attackWindupTime   = 0.60f;

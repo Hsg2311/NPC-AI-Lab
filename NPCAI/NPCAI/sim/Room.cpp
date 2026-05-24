@@ -11,6 +11,7 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace sim {
 
@@ -25,6 +26,8 @@ static constexpr int SHIELD_WALL_HARD_BLOCK_ITERATIONS = 3;
 static constexpr float SHIELD_WALL_KNOCKBACK_PADDING = 0.4f;
 static constexpr float SHIELD_WALL_KNOCKBACK_SPEED = 90.f;
 static constexpr float SHIELD_WALL_KNOCKBACK_DURATION = 0.32f;
+static constexpr int MAX_TACTICAL_ATTACK_SLOTS_PER_PLAYER = 5;
+static constexpr float TACTICAL_ATTACK_RESERVATION_SWAP_MARGIN = 1.5f;
 
 Room::Room(uint32_t roomId, uint32_t dumpInterval)
     : roomId_(roomId), dumpInterval_(dumpInterval)
@@ -50,6 +53,8 @@ void Room::removeTacticalNpc(uint32_t npcId) {
     shieldWallBlockerIds_.erase(
         std::remove(shieldWallBlockerIds_.begin(), shieldWallBlockerIds_.end(), npcId),
         shieldWallBlockerIds_.end());
+    for (auto& [playerId, reserved] : reservedTacticalAttackers_)
+        reserved.erase(npcId);
 }
 
 void Room::removeTacticalSquad(int squadId) {
@@ -204,7 +209,7 @@ Vec3 Room::adjustPlayerMoveForNpcSoftBlock(const Vec3& playerPos,
     float strongest = 0.f;
     const float radiusSq = SOFT_BLOCK_RADIUS * SOFT_BLOCK_RADIUS;
 
-    auto accumulateBlock = [&](const Actor* actor) {
+    auto accumulateBlock = [&](const Actor* actor, float weight = 1.f) {
         if (!actor || !actor->isAlive()) return;
 
         Vec3 away = predicted - actor->getPosition();
@@ -212,7 +217,7 @@ Vec3 Room::adjustPlayerMoveForNpcSoftBlock(const Vec3& playerPos,
         if (distSq >= radiusSq) return;
 
         float dist = std::sqrt(std::max(distSq, 1e-6f));
-        float t = 1.f - (dist / SOFT_BLOCK_RADIUS);
+        float t = (1.f - (dist / SOFT_BLOCK_RADIUS)) * weight;
         if (t > strongest) strongest = t;
 
         Vec3 pushDir = (dist > 1e-3f) ? (away / dist) : desiredMove.normalized() * -1.f;
@@ -221,8 +226,15 @@ Vec3 Room::adjustPlayerMoveForNpcSoftBlock(const Vec3& playerPos,
 
     for (const auto& [id, npc] : npcs_)
         accumulateBlock(npc.get());
-    for (const auto& [id, tnpc] : tacticalNpcs_)
-        accumulateBlock(tnpc.get());
+    for (const auto& [id, tnpc] : tacticalNpcs_) {
+        float weight = 1.f;
+        if (tnpc &&
+            tnpc->typeName() != std::string("PlatoonLeader") &&
+            tnpc->getState() == TacticalNpcState::PressureWait) {
+            weight = 0.2f;
+        }
+        accumulateBlock(tnpc.get(), weight);
+    }
 
     float speedScale = 1.f - strongest * (1.f - SOFT_BLOCK_MIN_SPEED);
     Vec3 adjusted = desiredMove * speedScale;
@@ -407,6 +419,238 @@ int Room::countNpcsTargeting(uint32_t playerId) const {
     return (it != aggroCount_.end()) ? it->second : 0;
 }
 
+int Room::countTacticalAttackers(uint32_t playerId) const {
+    if (playerId == 0)
+        return 0;
+
+    int count = 0;
+    for (const auto& [id, tnpc] : tacticalNpcs_) {
+        if (!tnpc || !tnpc->isAlive())
+            continue;
+        if (tnpc->typeName() == std::string("PlatoonLeader"))
+            continue;
+        if (tnpc->getTargetId() != playerId)
+            continue;
+
+        TacticalNpcState state = tnpc->getState();
+        if (state == TacticalNpcState::AttackWindup ||
+            state == TacticalNpcState::AttackRecover) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+void Room::pruneTacticalAttackReservations() {
+    for (auto it = reservedTacticalAttackers_.begin();
+         it != reservedTacticalAttackers_.end();) {
+        uint32_t playerId = it->first;
+        Actor* player = findActorById(playerId);
+        auto& reserved = it->second;
+
+        for (auto rit = reserved.begin(); rit != reserved.end();) {
+            uint32_t npcId = *rit;
+            Actor* actor = findActorById(npcId);
+            auto* tnpc = dynamic_cast<TacticalNpc*>(actor);
+            bool remove = !player || !player->isAlive() ||
+                !tnpc || !tnpc->isAlive() ||
+                tnpc->typeName() == std::string("PlatoonLeader") ||
+                tnpc->getTargetId() != playerId;
+
+            if (!remove) {
+                TacticalNpcState state = tnpc->getState();
+                remove = state != TacticalNpcState::PressureWait &&
+                    state != TacticalNpcState::AttackWindup &&
+                    state != TacticalNpcState::AttackRecover &&
+                    state != TacticalNpcState::Chase &&
+                    state != TacticalNpcState::Flank;
+            }
+
+            if (remove)
+                rit = reserved.erase(rit);
+            else
+                ++rit;
+        }
+
+        if (reserved.empty())
+            it = reservedTacticalAttackers_.erase(it);
+        else
+            ++it;
+    }
+}
+
+bool Room::tryReserveTacticalAttackSlot(uint32_t playerId, uint32_t npcId) {
+    if (playerId == 0 || npcId == 0)
+        return false;
+
+    pruneTacticalAttackReservations();
+
+    Actor* player = findActorById(playerId);
+    Actor* actor = findActorById(npcId);
+    auto* tnpc = dynamic_cast<TacticalNpc*>(actor);
+    if (!player || !player->isAlive() ||
+        !tnpc || !tnpc->isAlive() ||
+        tnpc->typeName() == std::string("PlatoonLeader") ||
+        tnpc->getTargetId() != playerId) {
+        return false;
+    }
+
+    auto& reserved = reservedTacticalAttackers_[playerId];
+
+    TacticalNpcState callerState = tnpc->getState();
+    if (callerState == TacticalNpcState::AttackWindup ||
+        callerState == TacticalNpcState::AttackRecover) {
+        return true;
+    }
+
+    std::unordered_set<uint32_t> occupied;
+    for (const auto& [id, other] : tacticalNpcs_) {
+        if (!other || !other->isAlive())
+            continue;
+        if (other->typeName() == std::string("PlatoonLeader"))
+            continue;
+        if (other->getTargetId() != playerId)
+            continue;
+
+        TacticalNpcState state = other->getState();
+        if (state == TacticalNpcState::AttackWindup ||
+            state == TacticalNpcState::AttackRecover) {
+            occupied.insert(id);
+        }
+    }
+
+    if (occupied.size() >=
+        static_cast<size_t>(MAX_TACTICAL_ATTACK_SLOTS_PER_PLAYER)) {
+        reserved.clear();
+        return false;
+    }
+
+    struct ReservationCandidate {
+        uint32_t id{ 0 };
+        float distSq{ 0.f };
+        float dist{ 0.f };
+    };
+
+    std::vector<ReservationCandidate> candidates;
+    candidates.reserve(tacticalNpcs_.size());
+    std::unordered_set<uint32_t> candidateIds;
+
+    for (const auto& [id, other] : tacticalNpcs_) {
+        if (!other || !other->isAlive())
+            continue;
+        if (other->typeName() == std::string("PlatoonLeader"))
+            continue;
+        if (other->getTargetId() != playerId)
+            continue;
+        if (occupied.find(id) != occupied.end())
+            continue;
+
+        TacticalNpcState state = other->getState();
+        if (state != TacticalNpcState::Chase &&
+            state != TacticalNpcState::PressureWait &&
+            state != TacticalNpcState::Flank) {
+            continue;
+        }
+
+        float distSq = Vec3::distanceSq(other->getPosition(), player->getPosition());
+        candidates.push_back({
+            id,
+            distSq,
+            std::sqrtf(distSq)
+        });
+        candidateIds.insert(id);
+    }
+
+    std::sort(candidates.begin(), candidates.end(),
+        [](const ReservationCandidate& a, const ReservationCandidate& b) {
+            if (a.distSq != b.distSq)
+                return a.distSq < b.distSq;
+            return a.id < b.id;
+        });
+
+    for (auto it = reserved.begin(); it != reserved.end();) {
+        if (occupied.find(*it) != occupied.end() ||
+            candidateIds.find(*it) == candidateIds.end()) {
+            it = reserved.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    size_t slotsLeft =
+        static_cast<size_t>(MAX_TACTICAL_ATTACK_SLOTS_PER_PLAYER) - occupied.size();
+
+    auto candidateForId = [&candidates](uint32_t id) -> const ReservationCandidate* {
+        for (const ReservationCandidate& candidate : candidates) {
+            if (candidate.id == id)
+                return &candidate;
+        }
+        return nullptr;
+    };
+
+    auto findWorstReserved = [&reserved, &candidateForId]() {
+        uint32_t worstId = 0;
+        float worstDist = -1.f;
+        for (uint32_t reservedId : reserved) {
+            const ReservationCandidate* candidate = candidateForId(reservedId);
+            if (!candidate)
+                continue;
+            if (candidate->dist > worstDist ||
+                (candidate->dist == worstDist && reservedId > worstId)) {
+                worstDist = candidate->dist;
+                worstId = reservedId;
+            }
+        }
+        return std::pair<uint32_t, float>{ worstId, worstDist };
+    };
+
+    while (reserved.size() > slotsLeft) {
+        auto [worstId, worstDist] = findWorstReserved();
+        if (worstId == 0)
+            break;
+        reserved.erase(worstId);
+    }
+
+    for (const ReservationCandidate& candidate : candidates) {
+        if (reserved.size() >= slotsLeft)
+            break;
+        if (reserved.find(candidate.id) != reserved.end())
+            continue;
+        reserved.insert(candidate.id);
+    }
+
+    if (reserved.size() >= slotsLeft) {
+        for (const ReservationCandidate& candidate : candidates) {
+            if (reserved.find(candidate.id) != reserved.end())
+                continue;
+
+            auto [worstId, worstDist] = findWorstReserved();
+            if (worstId == 0)
+                break;
+            if (candidate.dist + TACTICAL_ATTACK_RESERVATION_SWAP_MARGIN >= worstDist)
+                break;
+
+            reserved.erase(worstId);
+            reserved.insert(candidate.id);
+        }
+    }
+
+    return reserved.find(npcId) != reserved.end();
+}
+
+void Room::releaseTacticalAttackSlot(uint32_t playerId, uint32_t npcId) {
+    if (playerId == 0 || npcId == 0)
+        return;
+
+    auto it = reservedTacticalAttackers_.find(playerId);
+    if (it == reservedTacticalAttackers_.end())
+        return;
+
+    it->second.erase(npcId);
+    if (it->second.empty())
+        reservedTacticalAttackers_.erase(it);
+}
+
 // ─── rebuildAggroCount ───────────────────────────────────────────────────────
 
 void Room::rebuildAggroCount() {
@@ -575,7 +819,7 @@ DebugSnapshot Room::buildSnapshot() const {
         e.z              = pos.z;
         e.dirX           = facing.x;
         e.dirZ           = facing.z;
-        e.state          = static_cast<int>(tnpc->getState());
+        e.state          = static_cast<int>(tnpc->getDisplayState());
         e.targetId       = static_cast<int>(tnpc->getTargetId());
         e.name           = tnpc->getName();
         e.hp             = tnpc->getHp();

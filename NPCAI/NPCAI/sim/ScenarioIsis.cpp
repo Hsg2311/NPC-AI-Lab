@@ -43,7 +43,7 @@ void ScenarioIsis::setup(Room& room) {
     TacticalNpcConfig buddyCfg;
     buddyCfg.maxHp = 75.f;
     buddyCfg.moveSpeed = 17.f;
-    buddyCfg.attackRange = 2.0f;
+    buddyCfg.attackRange = 2.8f;
     buddyCfg.attackDamage = 10.f;
     buddyCfg.attackWindupTime = 0.35f;
     buddyCfg.attackRecoverTime = 0.7f;

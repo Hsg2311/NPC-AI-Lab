@@ -3117,7 +3117,7 @@ TacticalNpcConfig GrandBaumMidBossTactic::findSnakeConfig(
     TacticalNpcConfig cfg;
     cfg.maxHp = 45.f;
     cfg.moveSpeed = 18.f;
-    cfg.attackRange = 1.8f;
+    cfg.attackRange = 2.6f;
     cfg.attackDamage = 12.f;
     cfg.attackWindupTime = 0.35f;
     cfg.attackRecoverTime = 0.8f;

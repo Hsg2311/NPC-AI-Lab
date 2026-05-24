@@ -56,7 +56,7 @@ void ScenarioTactical::setup(Room& room) {
     TacticalNpcConfig cfg;
     cfg.maxHp             = 80.f;
     cfg.moveSpeed         = 17.f;
-    cfg.attackRange       = 2.f;
+    cfg.attackRange       = 2.8f;
     cfg.attackDamage      = 10.f;
     cfg.attackWindupTime  = 0.35f;
     cfg.attackRecoverTime = 0.7f;
