@@ -240,6 +240,19 @@ void GoblinMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
                                          : LeaderPhase::BoxAdvance,
                        "전술 쿨타임 종료", leader);
     } else if (leaderPhase_ == LeaderPhase::Encircle) {
+        auto liveSquads = collectLiveSquads(leader);
+        auto clusters = buildPlayerClusters(room, leader);
+        if (clusters.size() != 1 ||
+            !canStartEncircle(liveSquads, clusters.front())) {
+            enterTacticFailCooldown(room, leader, "포위 중단 - 생존 부대 부족");
+        } else {
+            int liveMembers = countLiveMembers(liveSquads);
+            if (phaseOrderIssued_ && liveMembers != encircleIssuedLiveMembers_) {
+                phaseOrderIssued_ = false;
+                tacticTimer_ = 0.f;
+            }
+        }
+
         if (phaseOrderIssued_ && allMembersArrived(room, leader)) {
             Player* encircleTarget = selectPrimaryTarget(room, leader);
             if (encircleTarget) {
@@ -277,18 +290,29 @@ void GoblinMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
                 ord.targetId = primaryTargetId_;
                 sq->receiveOrder(ord);
             }
-        } else if (clusterPlayers(room, leader) == 1) {
-            enterPhase(LeaderPhase::Encircle, "박스 대형 완성 - 플레이어 군집 포위", leader);
         } else {
-            enterPhase(LeaderPhase::Vigilance, "박스 대형 완성 - 플레이어 분산 경계", leader);
+            auto clusters = buildPlayerClusters(room, leader);
+            auto liveSquads = collectLiveSquads(leader);
+            if (clusters.size() == 1 &&
+                canStartEncircle(liveSquads, clusters.front())) {
+                enterPhase(LeaderPhase::Encircle, "박스 대형 완성 - 플레이어 군집 포위", leader);
+            } else if (clusters.size() == 1) {
+                enterTacticFailCooldown(room, leader, "포위 취소 - 생존 부대 부족");
+            } else {
+                enterPhase(LeaderPhase::Vigilance, "박스 대형 완성 - 플레이어 분산 경계", leader);
+            }
         }
     }
 
     if (leaderPhase_ == LeaderPhase::Vigilance &&
         phaseOrderIssued_ && allMembersArrived(room, leader)) {
         auto clusters = buildPlayerClusters(room, leader);
-        if (clusters.size() <= 1)
+        auto liveSquads = collectLiveSquads(leader);
+        if (clusters.size() <= 1 && !clusters.empty() &&
+            canStartEncircle(liveSquads, clusters.front()))
             enterPhase(LeaderPhase::Encircle, "경계 완료 - 플레이어 재집결 포위", leader);
+        else if (clusters.size() <= 1)
+            enterTacticFailCooldown(room, leader, "포위 취소 - 생존 부대 부족");
         else
             enterPhase(LeaderPhase::DivideAndConquer, "경계 완료 - 각개격파 전환", leader);
     }
@@ -325,6 +349,8 @@ void GoblinMidBossTactic::enterPhase(LeaderPhase next, const char* reason,
     Logger::get().log(leader.getName(), reason);
     leaderPhase_ = next;
     phaseOrderIssued_ = false;
+    if (next != LeaderPhase::Encircle)
+        encircleIssuedLiveMembers_ = 0;
     if (next != LeaderPhase::DivideAndConquer)
         divideTasks_.clear();
     if (next != LeaderPhase::Cooldown)
@@ -492,7 +518,10 @@ void GoblinMidBossTactic::evaluateTactics(Room& room, PlatoonLeader& leader) {
 
         auto clusters = buildPlayerClusters(room, leader);
         if (clusters.size() <= 1) {
-            enterPhase(LeaderPhase::Encircle, "각개격파 취소 - 플레이어 재집결", leader);
+            if (!clusters.empty() && canStartEncircle(liveSquads, clusters.front()))
+                enterPhase(LeaderPhase::Encircle, "각개격파 취소 - 플레이어 재집결", leader);
+            else
+                enterTacticFailCooldown(room, leader, "포위 취소 - 생존 부대 부족");
             return;
         }
 
@@ -505,11 +534,16 @@ void GoblinMidBossTactic::evaluateTactics(Room& room, PlatoonLeader& leader) {
         if (phaseOrderIssued_) return;
 
         constexpr float TWO_PI = 2.f * 3.14159265f;
+        auto clusters = buildPlayerClusters(room, leader);
+        if (clusters.size() != 1 || !canStartEncircle(liveSquads, clusters.front())) {
+            enterTacticFailCooldown(room, leader, "포위 취소 - 생존 부대 부족");
+            return;
+        }
+
         Vec3 encircleCenter = calcPlayerCentroid(room, leader.getPosition());
-        int totalMembers = 0;
-        for (auto* sq : liveSquads)
-            totalMembers += static_cast<int>(sq->getMembers().size());
+        int totalMembers = countLiveMembers(liveSquads);
         if (totalMembers < 1) totalMembers = 1;
+        float encircleRadius = calcEncircleRadius(totalMembers);
 
         float angleAccum = 0.f;
         for (int i = 0; i < numSquads; ++i) {
@@ -525,12 +559,13 @@ void GoblinMidBossTactic::evaluateTactics(Room& room, PlatoonLeader& leader) {
             ord.targetId = primary->getId();
             ord.sectorAngle = sectorAngle;
             ord.sectorSpan = sectorSpan;
-            ord.approachRadius = ENCIRCLE_RADIUS;
+            ord.approachRadius = encircleRadius;
             ord.tacticCenter = encircleCenter;
             liveSquads[static_cast<size_t>(i)]->receiveOrder(ord);
 
             angleAccum += sectorSpan;
         }
+        encircleIssuedLiveMembers_ = totalMembers;
         phaseOrderIssued_ = true;
         return;
     }
@@ -543,6 +578,41 @@ void GoblinMidBossTactic::evaluateTactics(Room& room, PlatoonLeader& leader) {
         ord.targetId = targets[static_cast<size_t>(i)];
         liveSquads[static_cast<size_t>(i)]->receiveOrder(ord);
     }
+}
+
+int GoblinMidBossTactic::countLiveMembers(
+    const std::vector<TacticalSquad*>& liveSquads) const
+{
+    int total = 0;
+    for (const TacticalSquad* squad : liveSquads) {
+        if (!squad)
+            continue;
+        total += static_cast<int>(squad->getMembers().size());
+    }
+    return total;
+}
+
+int GoblinMidBossTactic::minMembersForEncircle(int playerCount) const {
+    if (playerCount <= 1) return 6;
+    if (playerCount == 2) return 8;
+    if (playerCount == 3) return 10;
+    return 12;
+}
+
+bool GoblinMidBossTactic::canStartEncircle(
+    const std::vector<TacticalSquad*>& liveSquads,
+    const PlayerCluster& cluster) const
+{
+    return countLiveMembers(liveSquads) >=
+        minMembersForEncircle(static_cast<int>(cluster.playerIds.size()));
+}
+
+float GoblinMidBossTactic::calcEncircleRadius(int liveMembers) const {
+    constexpr float TWO_PI = 2.f * 3.14159265f;
+    float radiusByCount =
+        static_cast<float>(std::max(liveMembers, 1)) *
+        ENCIRCLE_SLOT_SPACING / TWO_PI;
+    return std::clamp(radiusByCount, ENCIRCLE_MIN_RADIUS, ENCIRCLE_RADIUS);
 }
 
 bool GoblinMidBossTactic::checkTacticsConditions(const PlatoonLeader& leader) const {

@@ -208,6 +208,9 @@ Cooldown 종료:
 `Encircle`:
 
 - 플레이어 centroid 주변 원형 섹터를 Squad별 생존 인원 비율로 나눈다.
+- 플레이어 군집 1개일 때만 발동하며, 군집 크기별 최소 생존 부대원이 필요하다. 기준은 플레이어 1/2/3/4명 이상에 대해 6/8/10/12명이다.
+- 포위 반경은 생존 부대원 수와 `ENCIRCLE_SLOT_SPACING`으로 계산해 `ENCIRCLE_MIN_RADIUS`와 `ENCIRCLE_RADIUS` 사이로 제한한다. 부대원이 줄면 원을 줄여 빈틈을 줄인다.
+- 발동 조건을 만족하지 못하거나 포위 중 최소 인원 아래로 떨어지면 `Engage` fallback과 짧은 fail cooldown으로 전환한다.
 - Squad는 `Encircle` 명령을 받아 멤버별 `HoldSlot`으로 이동한다.
 - 모든 멤버가 슬롯에 도착하면 `Engage` 후 `Cooldown`에 들어간다.
 
@@ -391,7 +394,10 @@ slot_i = center
 Encircle 슬롯:
 
 ```text
-slot_i = tacticCenter + direction(theta_i) * approachRadius
+dynamicRadius = clamp(liveMembers * ENCIRCLE_SLOT_SPACING / 2π,
+                      ENCIRCLE_MIN_RADIUS,
+                      ENCIRCLE_RADIUS)
+slot_i = tacticCenter + direction(theta_i) * dynamicRadius
 ```
 
 RingGuard 슬롯:
@@ -522,7 +528,7 @@ else if (race == GrandBaum) { ... }
 | 위치 | 상수 예 |
 |---|---|
 | `MidBossTacticBase` | 공용 helper, 종족별 전술 상수 없음 |
-| `GoblinMidBossTactic` | `TACTIC_INTERVAL`, `CLUSTER_RADIUS`, `ENCIRCLE_RADIUS`, `TACTIC_HP_THRESHOLD`, `BOX_FRONT_OFFSET`, `REGROUP_DIST` |
+| `GoblinMidBossTactic` | `TACTIC_INTERVAL`, `CLUSTER_RADIUS`, `ENCIRCLE_RADIUS`, `ENCIRCLE_MIN_RADIUS`, `ENCIRCLE_SLOT_SPACING`, `TACTIC_HP_THRESHOLD`, `BOX_FRONT_OFFSET`, `REGROUP_DIST` |
 | `GrandBaumMidBossTactic` | `FIRST_SHIELD_WALL_HP_RATIO`, `SECOND_SHIELD_WALL_HP_RATIO`, `MIN_SHIELD_RING_RADIUS`, `MAX_SHIELD_RING_RADIUS`, `SLIME_RING_SLOT_SPACING`, `MIN_SHIELD_WALL_SLIME_COUNT`, `SHIELDWALL_DAMAGE_MULT`, `BOSS_CHASE_SPEED_MULT`, `BOSS_TARGET_LOCK_DURATION`, `BOSS_SAME_PRIORITY_RETARGET_INTERVAL`, `BOSS_SLIME_THREAT_RANGE`, `SNAKE_OUTER_RADIUS`, `SNAKE_EVASION_RADIUS`, `SNAKE_EVASION_SPEED_MULT`, `SNAKE_STOP_EVADE_RANGE`, `SNAKE_WAVE_MAX_COUNT`, `SNAKE_WAVE_MULTIPLIER` |
 | `TacticalSquad` | `WEDGE_EXIT_DISTANCE`, `WEDGE_PREP_APEX_DISTANCE`, `WEDGE_IMPACT_RADIUS`, `WEDGE_SPEED_MULT` |
 | `TacticalNpc` | `TACTICAL_SPEED_MULT` |

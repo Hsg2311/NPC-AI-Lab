@@ -106,6 +106,11 @@ private:
     void updateDivideAndConquer(float dt, Room& room, PlatoonLeader& leader);
     uint32_t selectReplacementTarget(Room& room, const PlatoonLeader& leader,
                                      const std::vector<uint32_t>& playerIds) const;
+    int countLiveMembers(const std::vector<TacticalSquad*>& liveSquads) const;
+    int minMembersForEncircle(int playerCount) const;
+    bool canStartEncircle(const std::vector<TacticalSquad*>& liveSquads,
+                          const PlayerCluster& cluster) const;
+    float calcEncircleRadius(int liveMembers) const;
     bool allMembersArrived(const Room& room, const PlatoonLeader& leader) const;
     std::vector<Vec3> calcSquadBoxOffsets(int numSquads) const;
     bool checkTacticsConditions(const PlatoonLeader& leader) const;
@@ -120,6 +125,7 @@ private:
     Vec3 boxAdvanceTargetPos_{};
     Vec3 retreatTargetPos_{};
     uint32_t primaryTargetId_{ 0 };
+    int encircleIssuedLiveMembers_{ 0 };
     std::vector<DivideSquadTask> divideTasks_{};
     BossPersonalState bossPersonalState_{ BossPersonalState::EvaluateTarget };
     float bossPersonalTimer_{ 0.f };
@@ -129,6 +135,8 @@ private:
     static constexpr float TACTIC_INTERVAL          = 1.f;
     static constexpr float CLUSTER_RADIUS           = 20.f;
     static constexpr float ENCIRCLE_RADIUS          = 50.0f;
+    static constexpr float ENCIRCLE_MIN_RADIUS      = 18.0f;
+    static constexpr float ENCIRCLE_SLOT_SPACING    = 7.5f;
     static constexpr float TACTIC_HP_THRESHOLD      = 0.70f;
     static constexpr float TACTIC_SQUAD_RATIO       = 0.80f;
     static constexpr float TACTIC_COOLDOWN_DURATION = 8.0f;
