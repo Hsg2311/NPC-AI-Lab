@@ -117,6 +117,7 @@ protected:
     void   consumePendingCommand(Room& room);
     Actor* resolveTarget    (Room& room) const;
     bool   hasReservedAttackSlot() const;
+    void   updateReservedAttackStaleTimer(float dt, Room& room);
     bool   canEnterAttackSlot(Room& room);
     void   releaseAttackReservation(Room& room);
     void   resetPressureWaitTarget();
@@ -171,9 +172,12 @@ protected:
     bool  pressureWaitDesiredValid_{ false };
     bool  pressureReentering_{ false };
     uint32_t reservedAttackTargetId_{ 0 };
+    float reservedAttackStaleTimer_{ 0.f };
 
     static constexpr float TACTICAL_SPEED_MULT = 3.0f;
     static constexpr int   MAX_TACTICAL_ATTACKERS_PER_TARGET = 5;
+    static constexpr float TACTICAL_ATTACK_RESERVATION_MAX_DIST = 18.0f;
+    static constexpr float TACTICAL_ATTACK_RESERVATION_STALE_TIME = 3.0f;
     static constexpr float TACTICAL_PRESSURE_EXTRA_RADIUS = 9.0f;
     static constexpr float TACTICAL_PRESSURE_SEPARATION_MULT = 2.2f;
     static constexpr float TACTICAL_PRESSURE_SEPARATION_RADIUS_MULT = 1.35f;

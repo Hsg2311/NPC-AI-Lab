@@ -27,7 +27,6 @@ static constexpr float SHIELD_WALL_KNOCKBACK_PADDING = 0.4f;
 static constexpr float SHIELD_WALL_KNOCKBACK_SPEED = 90.f;
 static constexpr float SHIELD_WALL_KNOCKBACK_DURATION = 0.32f;
 static constexpr int MAX_TACTICAL_ATTACK_SLOTS_PER_PLAYER = 5;
-static constexpr float TACTICAL_ATTACK_RESERVATION_SWAP_MARGIN = 1.5f;
 
 Room::Room(uint32_t roomId, uint32_t dumpInterval)
     : roomId_(roomId), dumpInterval_(dumpInterval)
@@ -497,12 +496,6 @@ bool Room::tryReserveTacticalAttackSlot(uint32_t playerId, uint32_t npcId) {
 
     auto& reserved = reservedTacticalAttackers_[playerId];
 
-    TacticalNpcState callerState = tnpc->getState();
-    if (callerState == TacticalNpcState::AttackWindup ||
-        callerState == TacticalNpcState::AttackRecover) {
-        return true;
-    }
-
     std::unordered_set<uint32_t> occupied;
     for (const auto& [id, other] : tacticalNpcs_) {
         if (!other || !other->isAlive())
@@ -519,16 +512,19 @@ bool Room::tryReserveTacticalAttackSlot(uint32_t playerId, uint32_t npcId) {
         }
     }
 
-    if (occupied.size() >=
-        static_cast<size_t>(MAX_TACTICAL_ATTACK_SLOTS_PER_PLAYER)) {
-        reserved.clear();
-        return false;
+    for (uint32_t occupiedId : occupied)
+        reserved.insert(occupiedId);
+
+    TacticalNpcState callerState = tnpc->getState();
+    if (callerState == TacticalNpcState::AttackWindup ||
+        callerState == TacticalNpcState::AttackRecover) {
+        reserved.insert(npcId);
+        return true;
     }
 
     struct ReservationCandidate {
         uint32_t id{ 0 };
         float distSq{ 0.f };
-        float dist{ 0.f };
     };
 
     std::vector<ReservationCandidate> candidates;
@@ -555,8 +551,7 @@ bool Room::tryReserveTacticalAttackSlot(uint32_t playerId, uint32_t npcId) {
         float distSq = Vec3::distanceSq(other->getPosition(), player->getPosition());
         candidates.push_back({
             id,
-            distSq,
-            std::sqrtf(distSq)
+            distSq
         });
         candidateIds.insert(id);
     }
@@ -569,16 +564,13 @@ bool Room::tryReserveTacticalAttackSlot(uint32_t playerId, uint32_t npcId) {
         });
 
     for (auto it = reserved.begin(); it != reserved.end();) {
-        if (occupied.find(*it) != occupied.end() ||
+        if (occupied.find(*it) == occupied.end() &&
             candidateIds.find(*it) == candidateIds.end()) {
             it = reserved.erase(it);
         } else {
             ++it;
         }
     }
-
-    size_t slotsLeft =
-        static_cast<size_t>(MAX_TACTICAL_ATTACK_SLOTS_PER_PLAYER) - occupied.size();
 
     auto candidateForId = [&candidates](uint32_t id) -> const ReservationCandidate* {
         for (const ReservationCandidate& candidate : candidates) {
@@ -588,51 +580,42 @@ bool Room::tryReserveTacticalAttackSlot(uint32_t playerId, uint32_t npcId) {
         return nullptr;
     };
 
-    auto findWorstReserved = [&reserved, &candidateForId]() {
+    auto findWorstReserved = [&reserved, &candidateForId, &occupied]() {
         uint32_t worstId = 0;
-        float worstDist = -1.f;
+        float worstDistSq = -1.f;
         for (uint32_t reservedId : reserved) {
+            if (occupied.find(reservedId) != occupied.end())
+                continue;
             const ReservationCandidate* candidate = candidateForId(reservedId);
             if (!candidate)
                 continue;
-            if (candidate->dist > worstDist ||
-                (candidate->dist == worstDist && reservedId > worstId)) {
-                worstDist = candidate->dist;
+            if (candidate->distSq > worstDistSq ||
+                (candidate->distSq == worstDistSq && reservedId > worstId)) {
+                worstDistSq = candidate->distSq;
                 worstId = reservedId;
             }
         }
-        return std::pair<uint32_t, float>{ worstId, worstDist };
+        return std::pair<uint32_t, float>{ worstId, worstDistSq };
     };
 
-    while (reserved.size() > slotsLeft) {
+    while (reserved.size() >
+           static_cast<size_t>(MAX_TACTICAL_ATTACK_SLOTS_PER_PLAYER)) {
         auto [worstId, worstDist] = findWorstReserved();
         if (worstId == 0)
             break;
         reserved.erase(worstId);
     }
 
+    if (reserved.find(npcId) != reserved.end())
+        return true;
+
     for (const ReservationCandidate& candidate : candidates) {
-        if (reserved.size() >= slotsLeft)
+        if (reserved.size() >=
+            static_cast<size_t>(MAX_TACTICAL_ATTACK_SLOTS_PER_PLAYER))
             break;
         if (reserved.find(candidate.id) != reserved.end())
             continue;
         reserved.insert(candidate.id);
-    }
-
-    if (reserved.size() >= slotsLeft) {
-        for (const ReservationCandidate& candidate : candidates) {
-            if (reserved.find(candidate.id) != reserved.end())
-                continue;
-
-            auto [worstId, worstDist] = findWorstReserved();
-            if (worstId == 0)
-                break;
-            if (candidate.dist + TACTICAL_ATTACK_RESERVATION_SWAP_MARGIN >= worstDist)
-                break;
-
-            reserved.erase(worstId);
-            reserved.insert(candidate.id);
-        }
     }
 
     return reserved.find(npcId) != reserved.end();

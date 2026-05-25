@@ -124,6 +124,7 @@ void TacticalNpc::reviveAt(const Vec3& pos) {
     pressureWaitScatterSeed_ = 0;
     pressureReentering_ = false;
     reservedAttackTargetId_ = 0;
+    reservedAttackStaleTimer_ = 0.f;
 }
 
 // ─── transitionTo ─────────────────────────────────────────────────────────────
@@ -299,24 +300,62 @@ bool TacticalNpc::hasReservedAttackSlot() const {
         reservedAttackTargetId_ == targetId_;
 }
 
+void TacticalNpc::updateReservedAttackStaleTimer(float dt, Room& room) {
+    if (!hasReservedAttackSlot()) {
+        reservedAttackStaleTimer_ = 0.f;
+        return;
+    }
+
+    Actor* target = resolveTarget(room);
+    if (!target) {
+        reservedAttackStaleTimer_ = 0.f;
+        return;
+    }
+
+    float rangeSq = attackRange_ * attackRange_;
+    float distSq = Vec3::distanceSq(position_, target->getPosition());
+    if (state_ == TacticalNpcState::AttackWindup ||
+        state_ == TacticalNpcState::AttackRecover ||
+        distSq <= rangeSq) {
+        reservedAttackStaleTimer_ = 0.f;
+        return;
+    }
+
+    reservedAttackStaleTimer_ += dt;
+}
+
 bool TacticalNpc::canEnterAttackSlot(Room& room) {
     if (targetId_ == 0)
         return false;
 
-    if (hasReservedAttackSlot() &&
-        (state_ == TacticalNpcState::AttackWindup ||
-         state_ == TacticalNpcState::AttackRecover)) {
+    if (hasReservedAttackSlot()) {
+        Actor* target = resolveTarget(room);
+        if (!target) {
+            releaseAttackReservation(room);
+            return false;
+        }
+
+        float maxDistSq = TACTICAL_ATTACK_RESERVATION_MAX_DIST *
+            TACTICAL_ATTACK_RESERVATION_MAX_DIST;
+        if (Vec3::distanceSq(position_, target->getPosition()) > maxDistSq ||
+            reservedAttackStaleTimer_ >= TACTICAL_ATTACK_RESERVATION_STALE_TIME) {
+            releaseAttackReservation(room);
+            return false;
+        }
+
         return true;
     }
 
     if (!room.tryReserveTacticalAttackSlot(targetId_, id_))
     {
         reservedAttackTargetId_ = 0;
+        reservedAttackStaleTimer_ = 0.f;
         pressureReentering_ = false;
         return false;
     }
 
     reservedAttackTargetId_ = targetId_;
+    reservedAttackStaleTimer_ = 0.f;
     return true;
 }
 
@@ -326,6 +365,7 @@ void TacticalNpc::releaseAttackReservation(Room& room) {
 
     room.releaseTacticalAttackSlot(reservedAttackTargetId_, id_);
     reservedAttackTargetId_ = 0;
+    reservedAttackStaleTimer_ = 0.f;
     pressureReentering_ = false;
 }
 
@@ -509,6 +549,7 @@ void TacticalNpc::updateChase(float dt, Room& room) {
         return;
     }
 
+    updateReservedAttackStaleTimer(dt, room);
     if (!canEnterAttackSlot(room)) {
         transitionTo(TacticalNpcState::PressureWait, "공격 슬롯 대기");
         return;
@@ -596,7 +637,6 @@ void TacticalNpc::updateAttackRecover(float dt, Room& room) {
             canEnterAttackSlot(room)) {
             transitionTo(TacticalNpcState::AttackWindup, "recover 완료, 사정거리 내");
         } else {
-            releaseAttackReservation(room);
             transitionTo(TacticalNpcState::PressureWait, "recover 완료");
         }
     }
@@ -612,6 +652,7 @@ void TacticalNpc::updatePressureWait(float dt, Room& room) {
     }
 
     pressureWaitTimer_ += dt;
+    updateReservedAttackStaleTimer(dt, room);
     float reenterDelay = TACTICAL_PRESSURE_REENTER_MIN_TIME +
         static_cast<float>(id_ % 4u) * TACTICAL_PRESSURE_REENTER_STAGGER;
     bool canReenter = pressureWaitTimer_ >= reenterDelay && canEnterAttackSlot(room);
@@ -667,6 +708,7 @@ void TacticalNpc::updateFlank(float dt, Room& room) {
     if (distToSlot < 0.5f) {
         // 슬롯 도착 — 공격 여부 판정
         float distToTarget = Vec3::distance(position_, target->getPosition());
+        updateReservedAttackStaleTimer(dt, room);
         if (distToTarget <= attackRange_ && canEnterAttackSlot(room))
             transitionTo(TacticalNpcState::AttackWindup, "Flank 슬롯 도착, 사정거리 내");
         else
