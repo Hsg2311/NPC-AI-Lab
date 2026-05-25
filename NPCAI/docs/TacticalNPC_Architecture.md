@@ -347,7 +347,7 @@ SnakeThreat > SlimeThreat > Nearest
 
 ## 6. TacticalSquad
 
-`TacticalSquad`는 Actor가 아닌 지휘 보조 객체다. 멤버 `TacticalNpc`의 id 목록을 보유하고, `SquadOrder`를 개별 `TacticalCommand`로 변환한다.
+`TacticalSquad`는 Actor가 아닌 지휘 보조 객체다. 멤버 `TacticalNpc`의 id 목록(`memberIds_`)과 raw 포인터 캐시(`memberCache_`)를 병행 보유하고, `SquadOrder`를 개별 `TacticalCommand`로 변환한다.
 
 ### 6-1. 주요 책임
 

@@ -57,7 +57,7 @@ public:
     TacticalSquad(int squadId, float memberAttackRange, float memberSeparationRadius);
 
     // ── 멤버 관리 ─────────────────────────────────────────────────────────────
-    void addMember(uint32_t npcId);
+    void addMember(TacticalNpc* npc);
     void removeMember(uint32_t npcId);
 
     // ── PlatoonLeader 명령 수신 및 Room tick 갱신 ────────────────────────────
@@ -67,18 +67,19 @@ public:
 
     // ── 접근자 ────────────────────────────────────────────────────────────────
     int getSquadId() const { return squadId_; }
-    const std::vector<uint32_t>& getMembers() const { return memberIds_; }
+    const std::vector<uint32_t>&    getMembers()      const { return memberIds_; }
+    const std::vector<TacticalNpc*>& getMemberCache() const { return memberCache_; }
     bool isEmpty() const { return memberIds_.empty(); }
 
     // 소속 멤버 전체에 Confused 명령 발행 (PlatoonLeader 사망 시)
     void pushConfusedToMembers(Room& room);
     // PlatoonLeader::evaluateTactics()에서 isEmpty() 평가 전 호출
-    void removeDeadMembers(Room& room);
+    void removeDeadMembers();
     // BoxAdvance 중 leaderPos 갱신 (기존 호출 호환용)
     void updateBoxLeaderPos(const Vec3& pos);
-    Vec3 calcCentroid(Room& room) const;
-    bool areMembersAtSlots(Room& room) const;
-    bool areChargeMembersComplete(Room& room) const;
+    Vec3 calcCentroid() const;
+    bool areMembersAtSlots() const;
+    bool areChargeMembersComplete() const;
     bool isWedgeChargeActive() const { return activeWedgeChargeId_ != 0; }
     void endActiveWedgeCharge(Room& room);
 
@@ -97,20 +98,23 @@ private:
     std::vector<Vec3> calcWedgeSlots(const Vec3& apex, const Vec3& forward,
                                      int count, float spacingMult) const;
 
-    int                   squadId_;
-    float                 memberAttackRange_;
-    float                 memberSeparationRadius_;
-    std::vector<uint32_t> memberIds_;
+    int                     squadId_;
+    float                   memberAttackRange_;
+    float                   memberSeparationRadius_;
+    std::vector<uint32_t>   memberIds_;
+    std::vector<TacticalNpc*> memberCache_;
     SquadOrder            currentOrder_{};
     bool                  orderDirty_{ false }; // 새 명령 수신 후 1회 슬롯 재계산
     bool                  wedgePrepared_{ false };
-    std::vector<uint32_t> wedgeMemberIds_{};
+    std::vector<uint32_t>   wedgeMemberIds_{};
+    std::vector<TacticalNpc*> wedgeMemberCache_{};
     std::vector<Vec3>     wedgePrepareSlots_{};
     std::vector<Vec3>     wedgeExitSlots_{};
     uint32_t              activeWedgeChargeId_{ 0 };
     bool                  leaderlessBrawlEnabled_{ false };
     float                 leaderlessBrawlTimer_{ 0.f };
     float                 leaderlessRetargetTimer_{ 0.f };
+    float                 boxRefreshTimer_{ 0.f };
 
     static constexpr float LEADERLESS_CONFUSED_DURATION = 6.0f;
     static constexpr float LEADERLESS_RETARGET_INTERVAL = 1.5f;

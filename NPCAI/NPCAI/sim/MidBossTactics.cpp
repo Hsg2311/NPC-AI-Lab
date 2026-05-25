@@ -189,9 +189,9 @@ void MidBossTacticBase::assignSquadsToPlayers(
         else         centroid = leader.getPosition();
 
         for (int pi = 0; pi < numPlayers; ++pi) {
-            float d = Vec3::distance(centroid,
+            float dSq = Vec3::distanceSq(centroid,
                 players[static_cast<size_t>(pi)]->getPosition());
-            entries.push_back({ d, si, pi });
+            entries.push_back({ dSq, si, pi });
         }
     }
 
@@ -710,7 +710,7 @@ void GoblinMidBossTactic::issueDivideAndConquer(
     int chargeSquadIdx = 0;
     float bestDist = -1.f;
     for (int i = 0; i < static_cast<int>(liveSquads.size()); ++i) {
-        float d = Vec3::distance(liveSquads[static_cast<size_t>(i)]->calcCentroid(room),
+        float d = Vec3::distance(liveSquads[static_cast<size_t>(i)]->calcCentroid(),
                                  chargeCluster.centroid);
         if (bestDist < 0.f || d < bestDist) {
             bestDist = d;
@@ -795,10 +795,10 @@ void GoblinMidBossTactic::updateDivideAndConquer(float dt, Room& room,
         } else if (!task.taskCompleted) {
             switch (task.type) {
                 case DivideTaskType::Charge:
-                    task.taskCompleted = task.squad->areChargeMembersComplete(room);
+                    task.taskCompleted = task.squad->areChargeMembersComplete();
                     break;
                 case DivideTaskType::Screen:
-                    task.taskCompleted = task.squad->areMembersAtSlots(room);
+                    task.taskCompleted = task.squad->areMembersAtSlots();
                     break;
                 default:
                     break;
@@ -1094,17 +1094,12 @@ float GoblinMidBossTactic::evaluatePlayerScore(
 }
 
 bool GoblinMidBossTactic::allMembersArrived(
-    const Room& room, const PlatoonLeader& leader) const {
+    const Room& /*room*/, const PlatoonLeader& leader) const {
     bool anyAlive = false;
     for (auto* sq : leader.getSquads()) {
-        for (uint32_t id : sq->getMembers()) {
-            Actor* a = room.findActorById(id);
-            if (!a || !a->isAlive()) continue;
-            anyAlive = true;
-            auto* tnpc = dynamic_cast<TacticalNpc*>(a);
-            if (!tnpc) continue;
-            if (!tnpc->isAtSlot()) return false;
-        }
+        if (sq->isEmpty()) continue;
+        anyAlive = true;
+        if (!sq->areMembersAtSlots()) return false;
     }
     return anyAlive;
 }
@@ -1622,7 +1617,7 @@ void IsisMidBossTactic::issueWedgeStrike(Room& room, PlatoonLeader& leader,
                 ord.wedgeDamageMult = ISIS_BOSS_JOINED_WEDGE_DAMAGE_MULT;
                 ord.reserveWedgeApex = true;
                 setupBossBuddyWedgeJoin(room, squad, strikeCluster,
-                                        squad->calcCentroid(room));
+                                        squad->calcCentroid());
                 bossBuddyWedgeChargeComplete_ = false;
                 bossJoinedStrikeIssued = true;
             }
@@ -1669,7 +1664,7 @@ void IsisMidBossTactic::issueBomberRegroup(Room& room, TacticalSquad* squad,
     if (!squad || squad->isEmpty())
         return;
 
-    Vec3 fallbackDir = strikeCluster.cluster.centroid - squad->calcCentroid(room);
+    Vec3 fallbackDir = strikeCluster.cluster.centroid - squad->calcCentroid();
     if (fallbackDir.lengthSq() <= 0.01f)
         fallbackDir = Vec3{ 1.f, 0.f, 0.f };
 
@@ -1825,7 +1820,7 @@ bool IsisMidBossTactic::ensureBossBuddyWedgeJoin(
         if (!squad || squad->isEmpty() || !isBossJoinedBuddySquad(squad))
             continue;
 
-        if (!squad->areMembersAtSlots(room))
+        if (!squad->areMembersAtSlots())
             return true;
 
         int clusterIdx = 0;
@@ -1834,7 +1829,7 @@ bool IsisMidBossTactic::ensureBossBuddyWedgeJoin(
 
         setupBossBuddyWedgeJoin(
             room, squad, secondStrikeClusters_[static_cast<size_t>(clusterIdx)],
-            squad->calcCentroid(room));
+            squad->calcCentroid());
         return bossBuddyWedgeJoinActive_;
     }
 
@@ -1857,7 +1852,7 @@ bool IsisMidBossTactic::areSecondStrikePrepSquadsAtSlots(Room& room) const {
         return false;
 
     for (TacticalSquad* squad : secondStrikePrepSquads_) {
-        if (squad && !squad->isEmpty() && !squad->areMembersAtSlots(room))
+        if (squad && !squad->isEmpty() && !squad->areMembersAtSlots())
             return false;
     }
     return true;
@@ -2006,7 +2001,7 @@ Player* IsisMidBossTactic::selectPrimaryTarget(
 
 uint32_t IsisMidBossTactic::selectStrikeEngageTarget(
     Room& room, const PlatoonLeader& leader, const StrikeTask& task) const {
-    Vec3 from = task.squad ? task.squad->calcCentroid(room)
+    Vec3 from = task.squad ? task.squad->calcCentroid()
                            : leader.getPosition();
 
     uint32_t bestTargetId = 0;
@@ -2041,7 +2036,7 @@ void IsisMidBossTactic::updateActiveStrikeEngage(
             continue;
         }
 
-        if (!forceAll && !task.squad->areChargeMembersComplete(room))
+        if (!forceAll && !task.squad->areChargeMembersComplete())
             continue;
 
         task.squad->endActiveWedgeCharge(room);
@@ -2409,7 +2404,7 @@ bool IsisMidBossTactic::allLiveSquadsAtSlots(
         if (!squad || squad->isEmpty())
             continue;
         anyLiveSquad = true;
-        if (!squad->areMembersAtSlots(room))
+        if (!squad->areMembersAtSlots())
             return false;
     }
     return anyLiveSquad;
@@ -2419,7 +2414,7 @@ bool IsisMidBossTactic::activeStrikeSquadsAtSlots(Room& room) const {
     if (activeStrikeSquads_.empty())
         return true;
     for (TacticalSquad* squad : activeStrikeSquads_) {
-        if (squad && !squad->isEmpty() && !squad->areMembersAtSlots(room))
+        if (squad && !squad->isEmpty() && !squad->areMembersAtSlots())
             return false;
     }
     return true;
@@ -3211,7 +3206,7 @@ void GrandBaumMidBossTactic::updateSnakeEvasion(
         return;
 
     if (!snakeWanderCenterSet_) {
-        snakeWanderCenter_    = snakeSquad->calcCentroid(room);
+        snakeWanderCenter_    = snakeSquad->calcCentroid();
         snakeWanderCenterSet_ = true;
     }
 
@@ -3351,7 +3346,7 @@ void GrandBaumMidBossTactic::issueOriginalSnakeRetreat(
     if (targetId == 0)
         return;
 
-    Vec3 snakeCentroid = originalSnakeSquad->calcCentroid(room);
+    Vec3 snakeCentroid = originalSnakeSquad->calcCentroid();
     Vec3 retreatDir = snakeCentroid - shieldWallRingCenter_;
     if (retreatDir.lengthSq() <= 0.01f) {
         Vec3 playerCentroid = calcPlayerCentroid(room, leader.getPosition());
@@ -3404,7 +3399,7 @@ void GrandBaumMidBossTactic::spawnSnakeWave(
         std::string name = "WaveSnake" + std::to_string(i + 1);
         auto snake = std::make_shared<TacticalNpc>(name, pos, cfg);
         snake->setSquadId(snakeWaveSquadId_);
-        waveSquadPtr->addMember(snake->getId());
+        waveSquadPtr->addMember(snake.get());
         snakeWaveNpcIds_.push_back(snake->getId());
         room.addTacticalNpc(snake);
     }
@@ -3458,7 +3453,7 @@ void GrandBaumMidBossTactic::updateSnakeAmbush(
         snakeRetreatTimer_ += dt;
 
         if (!snakeWaveSpawned_ &&
-            ((!originalSnakeSquad || originalSnakeSquad->areMembersAtSlots(room)) ||
+            ((!originalSnakeSquad || originalSnakeSquad->areMembersAtSlots()) ||
              snakeRetreatTimer_ >= SNAKE_RETREAT_MAX_TIME)) {
             spawnSnakeWave(room, leader, originalSnakeSquad);
             snakeAmbushStage_ = SnakeAmbushStage::WaveActive;
@@ -3553,7 +3548,7 @@ void GrandBaumMidBossTactic::reviveOriginalSnakeSquad(
         snake->setSquadId(originalSnakeSquad->getSquadId());
         const std::vector<uint32_t>& members = originalSnakeSquad->getMembers();
         if (std::find(members.begin(), members.end(), memberId) == members.end())
-            originalSnakeSquad->addMember(memberId);
+            originalSnakeSquad->addMember(snake);
     }
 
     snakePersonalTargets_.clear();

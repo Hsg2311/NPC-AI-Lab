@@ -2,6 +2,7 @@
 #include "Room.hpp"
 #include "Player.hpp"
 #include "Logger.hpp"
+#include <cassert>
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
@@ -16,23 +17,33 @@ TacticalSquad::TacticalSquad(int squadId, float memberAttackRange, float memberS
 
 // ─── 멤버 관리 ────────────────────────────────────────────────────────────────
 
-void TacticalSquad::addMember(uint32_t npcId) {
-    memberIds_.push_back(npcId);
+void TacticalSquad::addMember(TacticalNpc* npc) {
+    assert(npc != nullptr);
+    assert(memberIds_.size() == memberCache_.size());
+    memberIds_.push_back(npc->getId());
+    memberCache_.push_back(npc);
 }
 
 void TacticalSquad::removeMember(uint32_t npcId) {
-    memberIds_.erase(std::remove(memberIds_.begin(), memberIds_.end(), npcId),
-                     memberIds_.end());
+    for (size_t i = 0; i < memberIds_.size(); ++i) {
+        if (memberIds_[i] == npcId) {
+            memberIds_.erase(memberIds_.begin() + static_cast<ptrdiff_t>(i));
+            memberCache_.erase(memberCache_.begin() + static_cast<ptrdiff_t>(i));
+            return;
+        }
+    }
 }
 
 void TacticalSquad::receiveOrder(const SquadOrder& order) {
     leaderlessBrawlEnabled_ = false;
     leaderlessBrawlTimer_ = 0.f;
     leaderlessRetargetTimer_ = 0.f;
+    boxRefreshTimer_ = 0.f;
     currentOrder_ = order;
     orderDirty_   = true;
     wedgePrepared_ = false;
     wedgeMemberIds_.clear();
+    wedgeMemberCache_.clear();
     wedgePrepareSlots_.clear();
     wedgeExitSlots_.clear();
     activeWedgeChargeId_ = 0;
@@ -46,7 +57,6 @@ void TacticalSquad::updateBoxLeaderPos(const Vec3& pos) {
 // ─── update ───────────────────────────────────────────────────────────────────
 
 void TacticalSquad::update(float dt, Room& room) {
-    removeDeadMembers(room);
     if (memberIds_.empty()) return;
 
     if (leaderlessBrawlEnabled_) {
@@ -60,17 +70,21 @@ void TacticalSquad::update(float dt, Room& room) {
         orderDirty_ = false;
         return;
     } else if (currentOrder_.type == SquadOrderType::BoxAdvance) {
-        pushCommandsToMembers(room);
+        boxRefreshTimer_ -= dt;
+        if (boxRefreshTimer_ <= 0.f) {
+            pushCommandsToMembers(room);
+            boxRefreshTimer_ = 0.1f;  // 10Hz
+        }
         return;
     }
     if (currentOrder_.type == SquadOrderType::WedgeCharge &&
-        !wedgePrepared_ && areMembersAtSlots(room)) {
+        !wedgePrepared_ && areMembersAtSlots()) {
         wedgePrepared_ = true;
         pushCommandsToMembers(room);
     }
     if (currentOrder_.type == SquadOrderType::WedgeCharge &&
         wedgePrepared_ && activeWedgeChargeId_ != 0 &&
-        areChargeMembersComplete(room)) {
+        areChargeMembersComplete()) {
         room.endWedgeCharge(activeWedgeChargeId_);
         activeWedgeChargeId_ = 0;
     }
@@ -108,7 +122,7 @@ void TacticalSquad::updateLeaderlessBrawl(float dt, Room& room) {
 }
 
 uint32_t TacticalSquad::selectNearestPlayerToSquad(Room& room) const {
-    Vec3 center = calcCentroid(room);
+    Vec3 center = calcCentroid();
     uint32_t bestId = 0;
     float bestDistSq = -1.f;
 
@@ -130,55 +144,51 @@ uint32_t TacticalSquad::selectNearestPlayerToSquad(Room& room) const {
 
 // ─── removeDeadMembers ────────────────────────────────────────────────────────
 
-void TacticalSquad::removeDeadMembers(Room& room) {
-    memberIds_.erase(
-        std::remove_if(memberIds_.begin(), memberIds_.end(),
-            [&room](uint32_t id) {
-                Actor* a = room.findActorById(id);
-                return !a || !a->isAlive();
-            }),
-        memberIds_.end());
+void TacticalSquad::removeDeadMembers() {
+    size_t w = 0;
+    for (size_t r = 0; r < memberIds_.size(); ++r) {
+        if (memberCache_[r] && memberCache_[r]->isAlive()) {
+            memberIds_[w]   = memberIds_[r];
+            memberCache_[w] = memberCache_[r];
+            ++w;
+        }
+    }
+    memberIds_.resize(w);
+    memberCache_.resize(w);
 }
 
-Vec3 TacticalSquad::calcCentroid(Room& room) const {
+Vec3 TacticalSquad::calcCentroid() const {
     Vec3 sum{};
     int count = 0;
-    for (uint32_t id : memberIds_) {
-        Actor* a = room.findActorById(id);
-        if (a && a->isAlive()) {
-            sum += a->getPosition();
+    for (TacticalNpc* tnpc : memberCache_) {
+        if (tnpc && tnpc->isAlive()) {
+            sum += tnpc->getPosition();
             ++count;
         }
     }
     return (count > 0) ? (sum / static_cast<float>(count)) : Vec3{};
 }
 
-bool TacticalSquad::areMembersAtSlots(Room& room) const {
+bool TacticalSquad::areMembersAtSlots() const {
     bool anyAlive = false;
-    for (uint32_t id : memberIds_) {
-        Actor* a = room.findActorById(id);
-        if (!a || !a->isAlive()) continue;
+    for (TacticalNpc* tnpc : memberCache_) {
+        if (!tnpc || !tnpc->isAlive()) continue;
         anyAlive = true;
-        auto* tnpc = dynamic_cast<TacticalNpc*>(a);
-        if (tnpc && !tnpc->isAtSlot()) return false;
+        if (!tnpc->isAtSlot()) return false;
     }
     return anyAlive;
 }
 
-bool TacticalSquad::areChargeMembersComplete(Room& room) const {
+bool TacticalSquad::areChargeMembersComplete() const {
     bool anyAlive = false;
-    for (uint32_t id : memberIds_) {
-        Actor* a = room.findActorById(id);
-        if (!a || !a->isAlive()) continue;
+    for (TacticalNpc* tnpc : memberCache_) {
+        if (!tnpc || !tnpc->isAlive()) continue;
         anyAlive = true;
-        auto* tnpc = dynamic_cast<TacticalNpc*>(a);
-        if (tnpc) {
-            TacticalNpcState st = tnpc->getState();
-            if (st == TacticalNpcState::AttackWindup ||
-                st == TacticalNpcState::AttackRecover)
-                continue;
-            if (!tnpc->isChargeComplete()) return false;
-        }
+        TacticalNpcState st = tnpc->getState();
+        if (st == TacticalNpcState::AttackWindup ||
+            st == TacticalNpcState::AttackRecover)
+            continue;
+        if (!tnpc->isChargeComplete()) return false;
     }
     return anyAlive;
 }
@@ -295,10 +305,8 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
         case SquadOrderType::Idle: {
             TacticalCommand cmd;
             cmd.type = TacticalCommandType::Idle;
-            for (uint32_t id : memberIds_) {
-                Actor* a = room.findActorById(id);
-                if (auto* tnpc = dynamic_cast<TacticalNpc*>(a))
-                    tnpc->receiveCommand(cmd);
+            for (TacticalNpc* tnpc : memberCache_) {
+                if (tnpc && tnpc->isAlive()) tnpc->receiveCommand(cmd);
             }
             break;
         }
@@ -307,10 +315,8 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
             TacticalCommand cmd;
             cmd.type     = TacticalCommandType::EngageTarget;
             cmd.targetId = ord.targetId;
-            for (uint32_t id : memberIds_) {
-                Actor* a = room.findActorById(id);
-                if (auto* tnpc = dynamic_cast<TacticalNpc*>(a))
-                    tnpc->receiveCommand(cmd);
+            for (TacticalNpc* tnpc : memberCache_) {
+                if (tnpc && tnpc->isAlive()) tnpc->receiveCommand(cmd);
             }
             break;
         }
@@ -320,13 +326,12 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
                 return;
 
             for (int i = 0; i < count; ++i) {
-                Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
-                if (auto* tnpc = dynamic_cast<TacticalNpc*>(a)) {
-                    TacticalCommand cmd;
-                    cmd.type = TacticalCommandType::EngageTarget;
-                    cmd.targetId = ord.targetIds[static_cast<size_t>(i) % ord.targetIds.size()];
-                    tnpc->receiveCommand(cmd);
-                }
+                TacticalNpc* tnpc = memberCache_[static_cast<size_t>(i)];
+                if (!tnpc || !tnpc->isAlive()) continue;
+                TacticalCommand cmd;
+                cmd.type     = TacticalCommandType::EngageTarget;
+                cmd.targetId = ord.targetIds[static_cast<size_t>(i) % ord.targetIds.size()];
+                tnpc->receiveCommand(cmd);
             }
             break;
         }
@@ -342,26 +347,24 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
             // 각 NPC에게 가장 가까운 미사용 슬롯 배정 (경로 교차 최소화)
             std::vector<bool> slotUsed(static_cast<size_t>(count), false);
             for (int i = 0; i < count; ++i) {
-                Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
-                if (!a || !a->isAlive()) continue;
+                TacticalNpc* tnpc = memberCache_[static_cast<size_t>(i)];
+                if (!tnpc || !tnpc->isAlive()) continue;
 
-                int   bestSlot = -1;
-                float bestDist = -1.f;
+                int   bestSlot   = -1;
+                float bestDistSq = -1.f;
                 for (int j = 0; j < count; ++j) {
                     if (slotUsed[static_cast<size_t>(j)]) continue;
-                    float d = Vec3::distance(a->getPosition(), slots[static_cast<size_t>(j)]);
-                    if (bestDist < 0.f || d < bestDist) { bestDist = d; bestSlot = j; }
+                    float dSq = Vec3::distanceSq(tnpc->getPosition(), slots[static_cast<size_t>(j)]);
+                    if (bestDistSq < 0.f || dSq < bestDistSq) { bestDistSq = dSq; bestSlot = j; }
                 }
                 if (bestSlot < 0) continue;
                 slotUsed[static_cast<size_t>(bestSlot)] = true;
 
-                if (auto* tnpc = dynamic_cast<TacticalNpc*>(a)) {
-                    TacticalCommand cmd;
-                    cmd.type       = TacticalCommandType::HoldSlot;
-                    cmd.targetId   = ord.targetId;
-                    cmd.slotOffset = slots[static_cast<size_t>(bestSlot)];
-                    tnpc->receiveCommand(cmd);
-                }
+                TacticalCommand cmd;
+                cmd.type       = TacticalCommandType::HoldSlot;
+                cmd.targetId   = ord.targetId;
+                cmd.slotOffset = slots[static_cast<size_t>(bestSlot)];
+                tnpc->receiveCommand(cmd);
             }
             break;
         }
@@ -370,7 +373,7 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
             Actor* targetActor = room.findActorById(ord.targetId);
             if (!targetActor || !targetActor->isAlive()) return;
 
-            Vec3 centroid = calcCentroid(room);
+            Vec3 centroid = calcCentroid();
             Vec3 targetCenter = ord.tacticCenter;
             Vec3 forward = targetCenter - centroid;
             float flen = forward.length();
@@ -393,18 +396,17 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
                 if (ord.reserveWedgeApex && !slotUsed.empty())
                     slotUsed[0] = true;
                 for (int i = 0; i < count; ++i) {
-                    Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
-                    auto* tnpc = dynamic_cast<TacticalNpc*>(a);
-                    if (!tnpc) continue;
+                    TacticalNpc* tnpc = memberCache_[static_cast<size_t>(i)];
+                    if (!tnpc || !tnpc->isAlive()) continue;
 
-                    int bestSlot = -1;
-                    float bestDist = -1.f;
+                    int   bestSlot   = -1;
+                    float bestDistSq = -1.f;
                     for (int j = 0; j < static_cast<int>(slots.size()); ++j) {
                         if (slotUsed[static_cast<size_t>(j)]) continue;
-                        float d = Vec3::distance(tnpc->getPosition(), slots[static_cast<size_t>(j)]);
-                        if (bestDist < 0.f || d < bestDist) {
-                            bestDist = d;
-                            bestSlot = j;
+                        float dSq = Vec3::distanceSq(tnpc->getPosition(), slots[static_cast<size_t>(j)]);
+                        if (bestDistSq < 0.f || dSq < bestDistSq) {
+                            bestDistSq = dSq;
+                            bestSlot   = j;
                         }
                     }
                     if (bestSlot < 0) continue;
@@ -415,6 +417,7 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
                     Vec3 exitSlot = exitApex + rel;
 
                     wedgeMemberIds_.push_back(tnpc->getId());
+                    wedgeMemberCache_.push_back(tnpc);
                     wedgePrepareSlots_.push_back(prepareSlot);
                     wedgeExitSlots_.push_back(exitSlot);
 
@@ -430,10 +433,9 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
             if (activeWedgeChargeId_ == 0)
                 activeWedgeChargeId_ = room.beginWedgeCharge();
 
-            for (size_t i = 0; i < wedgeMemberIds_.size(); ++i) {
-                Actor* a = room.findActorById(wedgeMemberIds_[i]);
-                auto* tnpc = dynamic_cast<TacticalNpc*>(a);
-                if (!tnpc) continue;
+            for (size_t i = 0; i < wedgeMemberCache_.size(); ++i) {
+                TacticalNpc* tnpc = wedgeMemberCache_[i];
+                if (!tnpc || !tnpc->isAlive()) continue;
 
                 TacticalNpcState st = tnpc->getState();
                 if (st == TacticalNpcState::AttackWindup ||
@@ -468,15 +470,8 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
             if (!targetActor || !targetActor->isAlive()) return;
             Vec3 targetPos = targetActor->getPosition();
 
-            // 현재 멤버 centroid 계산
-            Vec3 centroid{};
-            int liveCount = 0;
-            for (uint32_t id : memberIds_) {
-                Actor* a = room.findActorById(id);
-                if (a && a->isAlive()) { centroid += a->getPosition(); ++liveCount; }
-            }
-            if (liveCount == 0) return;
-            centroid = centroid / static_cast<float>(liveCount);
+            Vec3 centroid = calcCentroid();
+            if (memberIds_.empty()) return;
 
             Vec3 fwd = (targetPos - centroid);
             float flen = fwd.length();
@@ -485,14 +480,13 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
             std::vector<Vec3> slots = calcDenseSlots(centroid, fwd, count);
 
             for (int i = 0; i < count; ++i) {
-                Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
-                if (auto* tnpc = dynamic_cast<TacticalNpc*>(a)) {
-                    TacticalCommand cmd;
-                    cmd.type       = TacticalCommandType::HoldSlot;
-                    cmd.targetId   = ord.targetId;
-                    cmd.slotOffset = slots[static_cast<size_t>(i)];
-                    tnpc->receiveCommand(cmd);
-                }
+                TacticalNpc* tnpc = memberCache_[static_cast<size_t>(i)];
+                if (!tnpc || !tnpc->isAlive()) continue;
+                TacticalCommand cmd;
+                cmd.type       = TacticalCommandType::HoldSlot;
+                cmd.targetId   = ord.targetId;
+                cmd.slotOffset = slots[static_cast<size_t>(i)];
+                tnpc->receiveCommand(cmd);
             }
             break;
         }
@@ -512,14 +506,13 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
                                                      ord.slotColumnCount);
 
             for (int i = 0; i < count; ++i) {
-                Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
-                if (auto* tnpc = dynamic_cast<TacticalNpc*>(a)) {
-                    TacticalCommand cmd;
-                    cmd.type       = TacticalCommandType::GuardSlot;
-                    cmd.targetId   = ord.targetId;
-                    cmd.slotOffset = slots[static_cast<size_t>(i)];
-                    tnpc->receiveCommand(cmd);
-                }
+                TacticalNpc* tnpc = memberCache_[static_cast<size_t>(i)];
+                if (!tnpc || !tnpc->isAlive()) continue;
+                TacticalCommand cmd;
+                cmd.type       = TacticalCommandType::GuardSlot;
+                cmd.targetId   = ord.targetId;
+                cmd.slotOffset = slots[static_cast<size_t>(i)];
+                tnpc->receiveCommand(cmd);
             }
             break;
         }
@@ -541,37 +534,34 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
                                                      ord.slotColumnCount);
 
             for (int i = 0; i < count; ++i) {
-                Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
-                if (auto* tnpc = dynamic_cast<TacticalNpc*>(a)) {
-                    TacticalCommand cmd;
-                    cmd.type = (ord.type == SquadOrderType::FormationGuard)
-                        ? TacticalCommandType::GuardSlot
-                        : TacticalCommandType::HoldSlot;
-                    cmd.targetId   = ord.targetId;
-                    cmd.slotOffset = slots[static_cast<size_t>(i)];
-                    cmd.speedMult  = ord.speedMult;
-                    tnpc->receiveCommand(cmd);
-                }
+                TacticalNpc* tnpc = memberCache_[static_cast<size_t>(i)];
+                if (!tnpc || !tnpc->isAlive()) continue;
+                TacticalCommand cmd;
+                cmd.type = (ord.type == SquadOrderType::FormationGuard)
+                    ? TacticalCommandType::GuardSlot
+                    : TacticalCommandType::HoldSlot;
+                cmd.targetId   = ord.targetId;
+                cmd.slotOffset = slots[static_cast<size_t>(i)];
+                cmd.speedMult  = ord.speedMult;
+                tnpc->receiveCommand(cmd);
             }
             break;
         }
 
         case SquadOrderType::RingGuard: {
-            std::vector<uint32_t> liveMemberIds;
-            liveMemberIds.reserve(memberIds_.size());
-            for (uint32_t id : memberIds_) {
-                Actor* a = room.findActorById(id);
-                auto* tnpc = dynamic_cast<TacticalNpc*>(a);
+            std::vector<TacticalNpc*> liveMembers;
+            liveMembers.reserve(memberCache_.size());
+            for (TacticalNpc* tnpc : memberCache_) {
                 if (tnpc && tnpc->isAlive())
-                    liveMemberIds.push_back(id);
+                    liveMembers.push_back(tnpc);
             }
 
-            int liveCount = static_cast<int>(liveMemberIds.size());
+            int liveCount = static_cast<int>(liveMembers.size());
             if (liveCount <= 0)
                 return;
 
             std::vector<Vec3> slots;
-            slots.reserve(liveMemberIds.size());
+            slots.reserve(liveMembers.size());
             if (ord.slotSpacingScale > 1.f && ord.approachRadius > 0.01f &&
                 ord.sectorSpan > 0.01f) {
                 float minArcSpacing = ord.slotSpacingScale;
@@ -613,18 +603,17 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
 
             std::vector<bool> slotUsed(slots.size(), false);
             for (int i = 0; i < liveCount; ++i) {
-                Actor* a = room.findActorById(liveMemberIds[static_cast<size_t>(i)]);
-                auto* tnpc = dynamic_cast<TacticalNpc*>(a);
+                TacticalNpc* tnpc = liveMembers[static_cast<size_t>(i)];
                 if (!tnpc || !tnpc->isAlive()) continue;
 
-                int bestSlot = -1;
-                float bestDist = -1.f;
+                int   bestSlot   = -1;
+                float bestDistSq = -1.f;
                 for (int j = 0; j < static_cast<int>(slots.size()); ++j) {
                     if (slotUsed[static_cast<size_t>(j)]) continue;
-                    float d = Vec3::distance(tnpc->getPosition(), slots[static_cast<size_t>(j)]);
-                    if (bestDist < 0.f || d < bestDist) {
-                        bestDist = d;
-                        bestSlot = j;
+                    float dSq = Vec3::distanceSq(tnpc->getPosition(), slots[static_cast<size_t>(j)]);
+                    if (bestDistSq < 0.f || dSq < bestDistSq) {
+                        bestDistSq = dSq;
+                        bestSlot   = j;
                     }
                 }
                 if (bestSlot < 0) continue;
@@ -653,15 +642,14 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
             Vec3 retreatDelta = ord.tacticCenter - ord.leaderPos;
 
             for (int i = 0; i < count; ++i) {
-                Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
-                if (auto* tnpc = dynamic_cast<TacticalNpc*>(a)) {
-                    TacticalCommand cmd;
-                    cmd.type       = TacticalCommandType::HoldSlot;
-                    cmd.targetId   = ord.targetId;
-                    cmd.slotOffset = tnpc->getPosition() + retreatDelta;
-                    cmd.speedMult  = ord.speedMult;
-                    tnpc->receiveCommand(cmd);
-                }
+                TacticalNpc* tnpc = memberCache_[static_cast<size_t>(i)];
+                if (!tnpc || !tnpc->isAlive()) continue;
+                TacticalCommand cmd;
+                cmd.type       = TacticalCommandType::HoldSlot;
+                cmd.targetId   = ord.targetId;
+                cmd.slotOffset = tnpc->getPosition() + retreatDelta;
+                cmd.speedMult  = ord.speedMult;
+                tnpc->receiveCommand(cmd);
             }
             break;
         }
@@ -689,17 +677,16 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
             std::vector<Vec3> slots = calcDenseSlots(squadCenter, faceDir, count);
 
             for (int i = 0; i < count; ++i) {
-                Actor* a = room.findActorById(memberIds_[static_cast<size_t>(i)]);
-                auto*  tnpc = dynamic_cast<TacticalNpc*>(a);
-                if (!tnpc) continue;
+                TacticalNpc* tnpc = memberCache_[static_cast<size_t>(i)];
+                if (!tnpc || !tnpc->isAlive()) continue;
 
                 TacticalNpcState st = tnpc->getState();
 
                 // HoldSlot 이동 중에도 슬롯 변화가 작으면 현재 목표 유지 — 매 틱 재발행 방지
                 if (st == TacticalNpcState::HoldSlot) {
-                    float drift = Vec3::distance(tnpc->getAssignedSlot(),
-                                                 slots[static_cast<size_t>(i)]);
-                    if (drift < 2.0f) continue;
+                    float driftSq = Vec3::distanceSq(tnpc->getAssignedSlot(),
+                                                     slots[static_cast<size_t>(i)]);
+                    if (driftSq < 4.0f) continue;
                 }
 
                 TacticalCommand cmd;
@@ -722,6 +709,7 @@ void TacticalSquad::pushConfusedToMembers(Room& room) {
     orderDirty_ = false;
     wedgePrepared_ = false;
     wedgeMemberIds_.clear();
+    wedgeMemberCache_.clear();
     wedgePrepareSlots_.clear();
     wedgeExitSlots_.clear();
     leaderlessBrawlEnabled_ = true;
@@ -730,10 +718,8 @@ void TacticalSquad::pushConfusedToMembers(Room& room) {
 
     TacticalCommand cmd;
     cmd.type = TacticalCommandType::Confused;
-    for (uint32_t id : memberIds_) {
-        Actor* a = room.findActorById(id);
-        if (auto* tnpc = dynamic_cast<TacticalNpc*>(a))
-            tnpc->receiveCommand(cmd);
+    for (TacticalNpc* tnpc : memberCache_) {
+        if (tnpc && tnpc->isAlive()) tnpc->receiveCommand(cmd);
     }
 }
 

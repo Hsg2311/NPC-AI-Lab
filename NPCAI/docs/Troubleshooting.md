@@ -2011,3 +2011,174 @@ if (st == TacticalNpcState::AttackWindup)
 | PlatoonLeader가 dead 플레이어를 primary로 선택 | `PlatoonLeader.cpp:101-109` (`selectPrimaryTarget`) | `getLivingPlayers()` 사용 → 생존 플레이어만 대상 |
 | Dead NPC에게도 `update()` 호출 | `Npc.cpp:68-72`, `TacticalNpc.cpp:113-117` | `!alive_` 조기 탈출 → `updateDead()` 후 즉시 return |
 | TacticalNpc에게 명령 발행 후 해당 틱 내 사망 | `TacticalNpc.cpp:113-117` | `!alive_` 체크가 `consumePendingCommand()` 이전에 위치 → 명령 소비 실행 안 됨 |
+
+---
+
+# TacticalSquad 최적화 기록 (2026-05-25)
+
+> 졸업작품 이식 대비 — TacticalSquad 멤버 순회 비용 제거
+> 대상 파일: `sim/TacticalSquad.hpp`, `sim/TacticalSquad.cpp`, `sim/MidBossTactics.cpp`
+
+---
+
+## [Opt-G] TacticalNpc* 포인터 캐시 — findActorById + dynamic_cast 제거
+
+> 대상 파일: `sim/TacticalSquad.hpp`, `sim/TacticalSquad.cpp`, 호출 측 5곳
+
+### 동기
+
+`pushCommandsToMembers`, `calcCentroid`, `areMembersAtSlots`, `areChargeMembersComplete` 등
+모든 멤버 루프에서 매 틱 `Room::findActorById()` → `dynamic_cast<TacticalNpc*>` 패턴이 반복됐다.
+멤버 수 × 루프 종류 × 60fps = 빈번한 map 탐색 + RTTI 발생.
+
+### 문제점 (변경 전)
+
+```cpp
+for (uint32_t id : memberIds_) {
+    Actor* a = room.findActorById(id);
+    if (auto* tnpc = dynamic_cast<TacticalNpc*>(a)) {
+        ...
+    }
+}
+```
+
+### 수정
+
+`TacticalSquad`에 `std::vector<TacticalNpc*> memberCache_`를 추가하고
+`addMember` / `removeMember` / `removeDeadMembers` 세 함수에서 `memberIds_`와 항상 동기화한다.
+
+```cpp
+// TacticalSquad.hpp (변경 후)
+void addMember(TacticalNpc* npc);            // 기존: addMember(uint32_t)
+std::vector<TacticalNpc*> memberCache_;      // 추가
+std::vector<TacticalNpc*> wedgeMemberCache_; // WedgeCharge 전용 서브셋
+
+// TacticalSquad.cpp (변경 후) — 멤버 루프
+TacticalNpc* tnpc = memberCache_[i];
+if (!tnpc || !tnpc->isAlive()) continue;
+```
+
+`removeDeadMembers()`는 write-index 방식으로 두 벡터를 동시에 압축. Room 참조 불필요 → 시그니처 `removeDeadMembers()`(인자 없음)로 변경.
+`calcCentroid()`, `areMembersAtSlots()`, `areChargeMembersComplete()`도 Room 인자 제거.
+
+`addMember(TacticalNpc*)` 호출 측 5곳 모두 `npc.get()` 형태로 교체
+(ScenarioTactical/GrandBaum/Isis, MidBossTactics 2곳).
+
+불변식: `memberIds_[i]` ↔ `memberCache_[i]` 항상 동일 NPC. `addMember` 진입 시 `assert(npc != nullptr)` + `assert(memberIds_.size() == memberCache_.size())` 추가.
+
+**안전성:** `tacticalNpcs_`가 `shared_ptr<TacticalNpc>`를 보유하며 사망해도 맵에서 제거되지 않음. Room과 TacticalSquad 수명이 같으므로 raw pointer 캐시 안전.
+
+**비용 변화:** 멤버 루프당 map 탐색 + RTTI → 배열 인덱스 직접 접근.
+
+---
+
+## [Opt-H] TacticalSquad::update() 중복 removeDeadMembers 제거
+
+> 대상 파일: `sim/TacticalSquad.cpp`
+
+### 동기
+
+`TacticalSquad::update()` 첫 줄에서 `removeDeadMembers(room)`을 호출했는데,
+같은 틱의 step 7에서 tactic이 `leader.removeDeadMembersFromSquads(room)`을 이미 호출했다.
+
+### 원인 분석
+
+```
+step 7: PlatoonLeader / tactic update
+        → leader.removeDeadMembersFromSquads()  ← 1회차 호출
+step 8: TacticalSquad::update()
+        → removeDeadMembers()                   ← 항상 no-op (NPC 사망은 step 9)
+step 9: TacticalNpc::update()
+```
+
+NPC 사망은 step 9에서 발생하므로 step 8의 두 번째 호출은 항상 빈 루프.
+
+### 수정
+
+`TacticalSquad::update()` 첫 줄의 `removeDeadMembers()` 호출 제거.
+
+**비용 변화:** 틱당 멤버 수만큼 루프 1회 절감. [Opt-G] 이후 개별 비용은 작지만 코드 명확성 개선.
+
+---
+
+## [Opt-I] BoxAdvance 슬롯 재계산 10Hz 제한
+
+> 대상 파일: `sim/TacticalSquad.hpp`, `sim/TacticalSquad.cpp`
+
+### 동기
+
+BoxAdvance 대형에서 drift 체크(2.0 units)로 **명령 전송**은 억제했으나,
+`calcDenseSlots` + centroid 계산은 여전히 60fps로 실행됐다.
+
+### 수정
+
+```cpp
+// TacticalSquad.hpp — 타이머 멤버 추가
+float boxRefreshTimer_{ 0.f };
+
+// TacticalSquad.cpp — receiveOrder() 리셋
+boxRefreshTimer_ = 0.f;
+
+// TacticalSquad.cpp — update() BoxAdvance 분기
+} else if (currentOrder_.type == SquadOrderType::BoxAdvance) {
+    boxRefreshTimer_ -= dt;
+    if (boxRefreshTimer_ <= 0.f) {
+        pushCommandsToMembers(room);
+        boxRefreshTimer_ = 0.1f;  // 10Hz
+    }
+    return;
+}
+```
+
+drift 체크(2.0 units)는 `pushCommandsToMembers` 내부에 그대로 유지.
+
+**비용 변화:** 슬롯 계산 60fps → 10Hz (6분의 1).
+
+---
+
+## [Opt-J] 슬롯 배정 / 거리 비교 distanceSq 변환
+
+> 대상 파일: `sim/TacticalSquad.cpp`, `sim/MidBossTactics.cpp`
+
+### 동기
+
+슬롯 배정 루프(Encircle, WedgeCharge, RingGuard)와 `assignSquadsToPlayers`,
+BoxAdvance drift check에서 비교 전용 거리 계산에 `Vec3::distance()`(내부 sqrt 포함)를 사용했다.
+
+### 수정
+
+**슬롯 배정 3곳 (TacticalSquad.cpp):**
+
+```cpp
+// 변경 전
+float bestDist = -1.f;
+float d = Vec3::distance(a->getPosition(), slots[j]);
+if (bestDist < 0.f || d < bestDist) { bestDist = d; bestSlot = j; }
+
+// 변경 후
+float bestDistSq = -1.f;
+float dSq = Vec3::distanceSq(a->getPosition(), slots[j]);
+if (bestDistSq < 0.f || dSq < bestDistSq) { bestDistSq = dSq; bestSlot = j; }
+```
+
+**assignSquadsToPlayers (MidBossTactics.cpp):**
+
+```cpp
+// 변경 전
+float d = Vec3::distance(centroid, players[pi]->getPosition());
+// 변경 후
+float dSq = Vec3::distanceSq(centroid, players[pi]->getPosition());
+```
+
+**BoxAdvance drift check (TacticalSquad.cpp):**
+
+```cpp
+// 변경 전
+float drift = Vec3::distance(tnpc->getAssignedSlot(), slots[i]);
+if (drift < 2.0f) continue;
+// 변경 후
+float driftSq = Vec3::distanceSq(tnpc->getAssignedSlot(), slots[i]);
+if (driftSq < 4.0f) continue;
+```
+
+**비용 변화:** 배정 루프 + drift check마다 sqrt 제거.

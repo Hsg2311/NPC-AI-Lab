@@ -1042,3 +1042,23 @@ NPC들이 플레이어를 순수하게 원형으로 둘러싸는 것만 남겼�
   `PlatoonLeader::evaluateTactics()` 첫 줄에서 호출. 플레이어 공격으로 Squad 전체가 사망해도
   PlatoonLeader가 빈 squad에 Engage 명령을 발행하는 1틱 오평가 방지.
   (`TacticalSquad.hpp:52`, `PlatoonLeader.cpp:54`)
+
+---
+
+## 갱신: 2026-05-25 — TacticalSquad 멤버 순회 최적화
+
+### 배경
+
+TacticalSquad 멤버 루프 전반의 map 탐색 + RTTI 비용 제거. 졸업작품 이식 대비.
+
+### 변경 내용
+
+- [o] **[Opt-G] TacticalNpc* 포인터 캐시** — `memberCache_` / `wedgeMemberCache_` 추가.
+  `addMember(uint32_t)` → `addMember(TacticalNpc*)` API 변경.
+  `removeDeadMembers()` / `calcCentroid()` / `areMembersAtSlots()` / `areChargeMembersComplete()` Room 인자 제거.
+  호출 측 5곳(ScenarioTactical/GrandBaum/Isis, MidBossTactics 2곳) 모두 교체.
+  `addMember`에 null/size assert 추가.
+- [o] **[Opt-H] 중복 removeDeadMembers 제거** — `TacticalSquad::update()` 첫 줄 호출 제거.
+  step 7(tactic)이 이미 호출하므로 step 8 호출은 항상 no-op.
+- [o] **[Opt-I] BoxAdvance 10Hz 제한** — `boxRefreshTimer_` 추가. 슬롯 계산 60fps → 10Hz.
+- [o] **[Opt-J] distanceSq 변환** — Encircle/WedgeCharge/RingGuard 슬롯 배정, `assignSquadsToPlayers`, BoxAdvance drift check에서 sqrt 제거.

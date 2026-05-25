@@ -26,9 +26,9 @@ void PlatoonLeader::setTactic(std::unique_ptr<IMidBossTactic> tactic) {
     tactic_ = std::move(tactic);
 }
 
-void PlatoonLeader::removeDeadMembersFromSquads(Room& room) {
+void PlatoonLeader::removeDeadMembersFromSquads(Room& /*room*/) {
     for (auto* sq : squads_)
-        sq->removeDeadMembers(room);
+        sq->removeDeadMembers();
 }
 
 void PlatoonLeader::pushConfusedToSquads(Room& room) {

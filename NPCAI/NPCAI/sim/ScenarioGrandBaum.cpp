@@ -73,7 +73,7 @@ void ScenarioGrandBaum::setup(Room& room) {
             float z = origin.z + static_cast<float>(i / columns) * 2.f;
             auto npc = std::make_shared<TacticalNpc>(name, Vec3{ x, 0.f, z }, cfg);
             npc->setSquadId(squadId);
-            squadPtr->addMember(npc->getId());
+            squadPtr->addMember(npc.get());
             room.addTacticalNpc(npc);
         }
 
