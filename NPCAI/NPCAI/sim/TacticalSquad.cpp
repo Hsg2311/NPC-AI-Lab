@@ -47,6 +47,7 @@ void TacticalSquad::receiveOrder(const SquadOrder& order) {
     wedgePrepareSlots_.clear();
     wedgeExitSlots_.clear();
     activeWedgeChargeId_ = 0;
+    wedgeChargeReleased_ = !order.waitForChargeRelease;
 }
 
 void TacticalSquad::updateBoxLeaderPos(const Vec3& pos) {
@@ -80,7 +81,8 @@ void TacticalSquad::update(float dt, Room& room) {
     if (currentOrder_.type == SquadOrderType::WedgeCharge &&
         !wedgePrepared_ && areMembersAtSlots()) {
         wedgePrepared_ = true;
-        pushCommandsToMembers(room);
+        if (wedgeChargeReleased_)
+            pushCommandsToMembers(room);
     }
     if (currentOrder_.type == SquadOrderType::WedgeCharge &&
         wedgePrepared_ && activeWedgeChargeId_ != 0 &&
@@ -117,6 +119,7 @@ void TacticalSquad::updateLeaderlessBrawl(float dt, Room& room) {
     wedgePrepareSlots_.clear();
     wedgeExitSlots_.clear();
     activeWedgeChargeId_ = 0;
+    wedgeChargeReleased_ = true;
 
     pushCommandsToMembers(room);
 }
@@ -200,6 +203,40 @@ void TacticalSquad::endActiveWedgeCharge(Room& room) {
         return;
     room.endWedgeCharge(activeWedgeChargeId_);
     activeWedgeChargeId_ = 0;
+}
+
+void TacticalSquad::releaseWedgeCharge() {
+    if (currentOrder_.type != SquadOrderType::WedgeCharge ||
+        wedgeChargeReleased_)
+        return;
+
+    wedgeChargeReleased_ = true;
+    if (wedgePrepared_)
+        orderDirty_ = true;
+}
+
+float TacticalSquad::estimateWedgeHalfWidth(float spacingMult,
+                                            bool reserveApex) const {
+    int count = static_cast<int>(memberIds_.size()) + (reserveApex ? 1 : 0);
+    if (count <= 1)
+        return 0.f;
+
+    if (spacingMult <= 0.f)
+        spacingMult = 1.f;
+    float spacing = std::max(memberSeparationRadius_ * 0.75f, 1.5f) *
+                    spacingMult;
+
+    int placed = 0;
+    int row = 0;
+    int widestRow = 1;
+    while (placed < count) {
+        int rowCount = std::min(row + 1, count - placed);
+        widestRow = std::max(widestRow, rowCount);
+        placed += rowCount;
+        ++row;
+    }
+
+    return static_cast<float>(widestRow - 1) * spacing * 0.5f;
 }
 
 std::vector<Vec3> TacticalSquad::calcEncircleSlots(const Vec3& targetPos,
@@ -371,7 +408,19 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
 
         case SquadOrderType::WedgeCharge: {
             Actor* targetActor = room.findActorById(ord.targetId);
-            if (!targetActor || !targetActor->isAlive()) return;
+            bool hasLiveClusterTarget =
+                targetActor && targetActor->isAlive();
+            if (!hasLiveClusterTarget) {
+                for (uint32_t targetId : ord.targetIds) {
+                    Actor* candidate = room.findActorById(targetId);
+                    if (candidate && candidate->isAlive()) {
+                        hasLiveClusterTarget = true;
+                        break;
+                    }
+                }
+            }
+            if (!hasLiveClusterTarget)
+                return;
 
             Vec3 centroid = calcCentroid();
             Vec3 targetCenter = ord.tacticCenter;
@@ -425,6 +474,8 @@ void TacticalSquad::pushCommandsToMembers(Room& room) {
                     cmd.type       = TacticalCommandType::HoldSlot;
                     cmd.targetId   = ord.targetId;
                     cmd.slotOffset = prepareSlot;
+                    cmd.useHoldFacing = true;
+                    cmd.holdFacing = forward;
                     tnpc->receiveCommand(cmd);
                 }
                 return;

@@ -351,8 +351,12 @@ void GoblinMidBossTactic::enterPhase(LeaderPhase next, const char* reason,
     phaseOrderIssued_ = false;
     if (next != LeaderPhase::Encircle)
         encircleIssuedLiveMembers_ = 0;
-    if (next != LeaderPhase::DivideAndConquer)
+    if (next != LeaderPhase::DivideAndConquer) {
         divideTasks_.clear();
+        divideTargetPlayerIds_.clear();
+        divideStage_ = DivideStage::Preparing;
+        divideEngageTimer_ = 0.f;
+    }
     if (next != LeaderPhase::Cooldown)
         tacticTimer_ = 0.f;
 }
@@ -525,7 +529,18 @@ void GoblinMidBossTactic::evaluateTactics(Room& room, PlatoonLeader& leader) {
             return;
         }
 
-        issueDivideAndConquer(room, leader, liveSquads, clusters);
+        if (liveSquads.size() < 3) {
+            enterTacticFailCooldown(
+                room, leader,
+                "DivideAndConquer cancelled - fewer than three squads");
+            return;
+        }
+        if (!issueDivideAndConquer(room, leader, liveSquads, clusters)) {
+            enterTacticFailCooldown(
+                room, leader,
+                "DivideAndConquer failed - corridor assignment unavailable");
+            return;
+        }
         phaseOrderIssued_ = true;
         return;
     }
@@ -691,13 +706,17 @@ uint32_t GoblinMidBossTactic::selectReplacementTarget(
     return best ? best->getId() : 0;
 }
 
-void GoblinMidBossTactic::issueDivideAndConquer(
+bool GoblinMidBossTactic::issueDivideAndConquer(
     Room& room, PlatoonLeader& leader,
     const std::vector<TacticalSquad*>& liveSquads,
     const std::vector<PlayerCluster>& clusters)
 {
     divideTasks_.clear();
-    if (liveSquads.empty() || clusters.size() <= 1) return;
+    divideTargetPlayerIds_.clear();
+    divideStage_ = DivideStage::Preparing;
+    divideEngageTimer_ = 0.f;
+    if (liveSquads.size() < 3 || clusters.size() <= 1)
+        return false;
 
     std::vector<PlayerCluster> sorted = clusters;
     std::sort(sorted.begin(), sorted.end(),
@@ -719,148 +738,248 @@ void GoblinMidBossTactic::issueDivideAndConquer(
     }
 
     TacticalSquad* chargeSquad = liveSquads[static_cast<size_t>(chargeSquadIdx)];
+    if (!chargeSquad || chargeSquad->isEmpty())
+        return false;
+
+    divideCorridorForward_ =
+        chargeCluster.centroid - chargeSquad->calcCentroid();
+    if (divideCorridorForward_.lengthSq() <= 0.01f)
+        divideCorridorForward_ =
+            chargeCluster.centroid - leader.getPosition();
+    if (divideCorridorForward_.lengthSq() <= 0.01f)
+        divideCorridorForward_ = Vec3{ 1.f, 0.f, 0.f };
+    else
+        divideCorridorForward_ = divideCorridorForward_.normalized();
+    divideCorridorRight_ = Vec3{
+        -divideCorridorForward_.z, 0.f, divideCorridorForward_.x
+    };
+    divideCorridorCenter_ = chargeCluster.centroid;
+    divideCorridorHalfWidth_ =
+        chargeSquad->estimateWedgeHalfWidth() + CAPTURE_CORRIDOR_CLEARANCE;
+    divideTargetPlayerIds_ = chargeCluster.playerIds;
+
     SquadOrder charge;
     charge.type = SquadOrderType::WedgeCharge;
     charge.targetId = chargeCluster.representativeId;
     charge.targetIds = chargeCluster.playerIds;
     charge.tacticCenter = chargeCluster.centroid;
+    charge.waitForChargeRelease = true;
     chargeSquad->receiveOrder(charge);
     divideTasks_.push_back({ chargeSquad, DivideTaskType::Charge,
                              chargeCluster.representativeId, chargeCluster.playerIds });
 
-    Vec3 supportCentroid{};
-    int supportCount = 0;
-    uint32_t supportTargetId = 0;
-    std::vector<uint32_t> supportPlayerIds;
-    for (size_t i = 1; i < sorted.size(); ++i) {
-        const PlayerCluster& cluster = sorted[i];
-        supportCentroid += cluster.centroid;
-        ++supportCount;
-        if (supportTargetId == 0)
-            supportTargetId = cluster.representativeId;
-        supportPlayerIds.insert(supportPlayerIds.end(),
-                                cluster.playerIds.begin(), cluster.playerIds.end());
-    }
-    if (supportCount == 0) return;
-    supportCentroid = supportCentroid / static_cast<float>(supportCount);
-
-    Vec3 blockDir = supportCentroid - chargeCluster.centroid;
-    float blockLen = blockDir.length();
-    if (blockLen > 0.01f) blockDir = blockDir / blockLen;
-    else                  blockDir = Vec3{ 1.f, 0.f, 0.f };
-
-    Vec3 blockCenter = chargeCluster.centroid +
-                       (supportCentroid - chargeCluster.centroid) *
-                       SCREEN_BLOCK_CENTER_BIAS;
-    Vec3 blockRight{ -blockDir.z, 0.f, blockDir.x };
-    float baseAngle = std::atan2f(blockRight.z, blockRight.x);
-
-    int screenIdx = 0;
+    std::vector<TacticalSquad*> screenCandidates;
+    screenCandidates.reserve(liveSquads.size() - 1);
     for (int i = 0; i < static_cast<int>(liveSquads.size()); ++i) {
-        if (i == chargeSquadIdx) continue;
-
-        float sideSign = (screenIdx % 2 == 0) ? 1.f : -1.f;
-        SquadOrder screen;
-        screen.type = SquadOrderType::GuardBoss;
-        screen.targetId = (supportTargetId != 0) ? supportTargetId
-                                                 : chargeCluster.representativeId;
-        screen.slotSpacingScale = SCREEN_SLOT_SPACING_SCALE;
-        screen.slotColumnScale = SCREEN_SLOT_COLUMN_SCALE;
-        screen.slotColumnCount = SCREEN_SLOT_COLUMN_COUNT;
-        screen.sectorAngle = baseAngle + (sideSign < 0.f ? 3.14159265f : 0.f);
-        screen.approachRadius = SCREEN_BLOCK_SPACING *
-                                (1.f + 0.5f * static_cast<float>(screenIdx / 2));
-        screen.tacticCenter = blockCenter;
-        screen.formationTargetPos = supportCentroid;
-        liveSquads[static_cast<size_t>(i)]->receiveOrder(screen);
-        divideTasks_.push_back({ liveSquads[static_cast<size_t>(i)],
-                                 DivideTaskType::Screen,
-                                 screen.targetId,
-                                 supportPlayerIds });
-        ++screenIdx;
+        if (i != chargeSquadIdx)
+            screenCandidates.push_back(
+                liveSquads[static_cast<size_t>(i)]);
     }
+    std::sort(screenCandidates.begin(), screenCandidates.end(),
+        [&chargeCluster](const TacticalSquad* a, const TacticalSquad* b) {
+            return Vec3::distanceSq(a->calcCentroid(),
+                                    chargeCluster.centroid) <
+                   Vec3::distanceSq(b->calcCentroid(),
+                                    chargeCluster.centroid);
+        });
+
+    divideCorridorHalfLength_ = -1.f;
+    for (int screenIdx = 0; screenIdx < 2; ++screenIdx) {
+        TacticalSquad* screenSquad =
+            screenCandidates[static_cast<size_t>(screenIdx)];
+        if (!screenSquad || screenSquad->isEmpty())
+            return false;
+
+        int memberCount =
+            static_cast<int>(screenSquad->getMembers().size());
+        if (memberCount < 2)
+            return false;
+        float separationRadius = 3.f;
+        if (!screenSquad->getMemberCache().empty() &&
+            screenSquad->getMemberCache().front()) {
+            separationRadius =
+                screenSquad->getMemberCache().front()->getSeparationRadius();
+        }
+        float spacingScale = CAPTURE_LINE_SPACING_SCALE;
+        if (memberCount > 1) {
+            float requiredSpacing =
+                (CAPTURE_MIN_HALF_LENGTH * 2.f) /
+                static_cast<float>(memberCount - 1);
+            spacingScale = std::max(
+                spacingScale, requiredSpacing / separationRadius);
+        }
+        float spacing = std::max(
+            separationRadius * spacingScale, 1.2f);
+        float lineHalfLength =
+            static_cast<float>(std::max(memberCount - 1, 0)) *
+            spacing * 0.5f;
+        if (divideCorridorHalfLength_ < 0.f ||
+            lineHalfLength < divideCorridorHalfLength_) {
+            divideCorridorHalfLength_ = lineHalfLength;
+        }
+
+        float sideSign = (screenIdx == 0) ? 1.f : -1.f;
+        SquadOrder screen;
+        screen.type = SquadOrderType::FormationGuard;
+        screen.targetId = leader.getId();
+        screen.slotSpacingScale = spacingScale;
+        screen.slotColumnCount = memberCount;
+        screen.tacticCenter =
+            divideCorridorCenter_ +
+            divideCorridorRight_ *
+                (divideCorridorHalfWidth_ * sideSign);
+        screen.formationTargetPos = divideCorridorCenter_;
+        screenSquad->receiveOrder(screen);
+        divideTasks_.push_back({
+            screenSquad, DivideTaskType::Screen,
+            chargeCluster.representativeId, chargeCluster.playerIds
+        });
+    }
+
+    for (size_t i = 2; i < screenCandidates.size(); ++i) {
+        SquadOrder idle;
+        idle.type = SquadOrderType::Idle;
+        screenCandidates[i]->receiveOrder(idle);
+    }
+
+    return divideTasks_.size() == 3;
 }
 
 void GoblinMidBossTactic::updateDivideAndConquer(float dt, Room& room,
                                                  PlatoonLeader& leader) {
-    if (!phaseOrderIssued_) return;
-    if (divideTasks_.empty()) {
-        enterTacticFailCooldown(room, leader, "각개격파 실패 - 배정 없음");
+    if (!phaseOrderIssued_)
+        return;
+    if (divideTasks_.size() != 3) {
+        enterTacticFailCooldown(
+            room, leader,
+            "DivideAndConquer failed - incomplete corridor assignment");
         return;
     }
 
-    for (auto& task : divideTasks_) {
-        if (!task.squad || task.squad->isEmpty()) {
-            task.taskCompleted = true;
-        } else if (!task.taskCompleted) {
-            switch (task.type) {
-                case DivideTaskType::Charge:
-                    task.taskCompleted = task.squad->areChargeMembersComplete();
-                    break;
-                case DivideTaskType::Screen:
-                    task.taskCompleted = task.squad->areMembersAtSlots();
-                    break;
-                default:
-                    break;
-            }
-        }
-    }
-
-    bool allScreensCompleted = true;
+    TacticalSquad* chargeSquad = nullptr;
+    bool screenSquadsReady = true;
     for (const auto& task : divideTasks_) {
-        if (task.type == DivideTaskType::Screen && !task.taskCompleted) {
-            allScreensCompleted = false;
-            break;
+        if (!task.squad || task.squad->isEmpty()) {
+            if (task.type == DivideTaskType::Charge && task.squad)
+                task.squad->endActiveWedgeCharge(room);
+            else if (chargeSquad)
+                chargeSquad->endActiveWedgeCharge(room);
+            enterTacticFailCooldown(
+                room, leader,
+                "DivideAndConquer failed - assigned squad wiped");
+            return;
         }
+
+        if (task.type == DivideTaskType::Charge)
+            chargeSquad = task.squad;
+        else if (task.type == DivideTaskType::Screen &&
+                 !task.squad->areMembersAtSlots())
+            screenSquadsReady = false;
+    }
+    if (!chargeSquad) {
+        enterTacticFailCooldown(
+            room, leader,
+            "DivideAndConquer failed - charge squad missing");
+        return;
     }
 
-    bool allProtected = true;
-    for (auto& task : divideTasks_) {
-        if (task.taskCompleted && !task.engageIssued) {
-            if (task.type == DivideTaskType::Screen && !allScreensCompleted) {
-                allProtected = false;
-                continue;
-            }
-
-            uint32_t targetId = selectReplacementTarget(room, leader,
-                                                        task.clusterPlayerIds);
-            if (targetId != 0 && task.squad && !task.squad->isEmpty()) {
-                SquadOrder ord;
-                ord.type = SquadOrderType::Engage;
-                ord.targetId = targetId;
-                task.squad->receiveOrder(ord);
-                task.targetId = targetId;
-            }
-            task.engageIssued = true;
-            task.engageProtectTimer = 0.f;
+    if (divideStage_ == DivideStage::Preparing) {
+        if (!isCaptureClusterInsideCorridor(room)) {
+            chargeSquad->endActiveWedgeCharge(room);
+            enterTacticFailCooldown(
+                room, leader,
+                "DivideAndConquer failed - target escaped corridor");
+            return;
         }
 
-        if (task.engageIssued) {
-            if (task.targetId != 0) {
-                Actor* target = room.findActorById(task.targetId);
-                if (!target || !target->isAlive()) {
-                    uint32_t replacement = selectReplacementTarget(room, leader,
-                        task.clusterPlayerIds);
-                    task.targetId = replacement;
-                    if (replacement != 0 && task.squad && !task.squad->isEmpty()) {
-                        SquadOrder ord;
-                        ord.type = SquadOrderType::Engage;
-                        ord.targetId = replacement;
-                        task.squad->receiveOrder(ord);
-                    }
-                }
-            }
-            task.engageProtectTimer += dt;
+        if (chargeSquad->isWedgePrepared() &&
+            screenSquadsReady) {
+            chargeSquad->releaseWedgeCharge();
+            divideStage_ = DivideStage::Charging;
+            Logger::get().log(
+                leader.getName(),
+                "Capture corridor formed - WedgeCharge released");
         }
-
-        if (!task.engageIssued ||
-            task.engageProtectTimer < DIVIDE_ENGAGE_PROTECT_DURATION)
-            allProtected = false;
+        return;
     }
 
-    if (allProtected) {
+    if (divideStage_ == DivideStage::Charging) {
+        if (!chargeSquad->areChargeMembersComplete())
+            return;
+
+        chargeSquad->endActiveWedgeCharge(room);
+        issueDivideEngage(room, leader);
+        divideStage_ = DivideStage::Engaging;
+        divideEngageTimer_ = DIVIDE_ENGAGE_DURATION;
+        Logger::get().log(
+            leader.getName(),
+            "Capture corridor charge complete - Engage");
+        return;
+    }
+
+    divideEngageTimer_ -= dt;
+    if (divideEngageTimer_ <= 0.f) {
         tacticCooldown_ = TACTIC_COOLDOWN_DURATION;
-        enterPhase(LeaderPhase::Cooldown, "각개격파 완료 - 쿨타임 진입", leader);
+        enterPhase(
+            LeaderPhase::Cooldown,
+            "DivideAndConquer complete - cooldown", leader);
+    }
+}
+
+bool GoblinMidBossTactic::calcCaptureClusterCentroid(
+    Room& room, Vec3& outCentroid) const {
+    Vec3 sum{};
+    int count = 0;
+    for (uint32_t playerId : divideTargetPlayerIds_) {
+        auto* player =
+            dynamic_cast<Player*>(room.findActorById(playerId));
+        if (!player || !player->isAlive())
+            continue;
+        sum += player->getPosition();
+        ++count;
+    }
+
+    if (count <= 0)
+        return false;
+    outCentroid = sum / static_cast<float>(count);
+    return true;
+}
+
+bool GoblinMidBossTactic::isCaptureClusterInsideCorridor(
+    Room& room) const {
+    Vec3 clusterCenter{};
+    if (!calcCaptureClusterCentroid(room, clusterCenter))
+        return false;
+
+    Vec3 delta = clusterCenter - divideCorridorCenter_;
+    float lateral =
+        std::fabs(delta.dot(divideCorridorRight_));
+    float longitudinal =
+        std::fabs(delta.dot(divideCorridorForward_));
+    return lateral <=
+               divideCorridorHalfWidth_ + CAPTURE_ESCAPE_TOLERANCE &&
+           longitudinal <=
+               divideCorridorHalfLength_ + CAPTURE_ESCAPE_TOLERANCE;
+}
+
+void GoblinMidBossTactic::issueDivideEngage(
+    Room& room, PlatoonLeader& leader) {
+    uint32_t targetId = selectReplacementTarget(
+        room, leader, divideTargetPlayerIds_);
+    if (targetId == 0) {
+        Player* primary = selectPrimaryTarget(room, leader);
+        targetId = primary ? primary->getId() : 0;
+    }
+
+    for (TacticalSquad* squad : leader.getSquads()) {
+        if (!squad || squad->isEmpty())
+            continue;
+        SquadOrder order;
+        order.type = (targetId != 0)
+            ? SquadOrderType::Engage
+            : SquadOrderType::Idle;
+        order.targetId = targetId;
+        squad->receiveOrder(order);
     }
 }
 

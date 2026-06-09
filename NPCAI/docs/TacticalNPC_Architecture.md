@@ -221,9 +221,12 @@ Cooldown 종료:
 
 `DivideAndConquer`:
 
-- 가장 위협적인 플레이어 군집에 가장 가까운 Squad를 `WedgeCharge`로 배정한다.
-- 나머지 Squad는 `GuardBoss`를 활용해 군집 사이 차단선을 만든다.
-- 돌진/차단 임무가 끝나면 일정 시간 `Engage`를 유지한 뒤 `Cooldown`에 들어간다.
+- 가장 위협적인 플레이어 군집을 고정 포획 대상으로 선택하고, 해당 군집에 가장 가까운 Squad를 `WedgeCharge` 돌진조로 배정한다.
+- 나머지 Squad 중 가까운 2개를 좌우 차단조로 배정한다. 차단조는 돌진 축과 평행한 한 줄 `FormationGuard`를 만들며, NPC 소프트 블로킹으로 플레이어가 통로 옆으로 빠져나가기 어렵게 한다.
+- 통로 반폭은 돌진조의 실제 쐐기 대형 반폭과 여유 폭으로 계산한다. 차단선 길이는 생존 인원과 슬롯 간격으로 계산하며 최소 길이가 필요하면 슬롯 간격을 늘린다.
+- 돌진조는 쐐기 준비 슬롯에 도착해도 즉시 돌진하지 않는다. 양쪽 차단선과 쐐기 대형이 모두 완성된 시점에 전술 객체가 `releaseWedgeCharge()`를 호출한다.
+- 준비 중 고정 대상 군집의 생존 플레이어 centroid가 예정 통로 밖으로 벗어나거나, 돌진조/차단조가 전멸하면 전술을 취소하고 `Engage` fallback과 fail cooldown으로 전환한다.
+- 돌진 중 차단조는 슬롯을 유지한다. 돌진 완료 후 전 부대가 대상 군집을 우선 `Engage`하고, 일정 시간 뒤 `Cooldown`에 들어간다.
 
 ---
 
@@ -413,6 +416,8 @@ WedgeCharge 슬롯:
 prepareApex = squadCentroid + forward * WEDGE_PREP_APEX_DISTANCE
 exitApex    = targetCenter  + forward * WEDGE_EXIT_DISTANCE
 ```
+
+`SquadOrder::waitForChargeRelease`의 기본값은 `false`이므로 기존 고블린 외 전술과 이시스는 준비 완료 즉시 돌진한다. 고블린 포획 통로 전술만 이 값을 `true`로 지정하고, `isWedgePrepared()`로 준비 완료를 확인한 뒤 `releaseWedgeCharge()`로 돌진을 시작한다.
 
 ---
 

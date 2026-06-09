@@ -41,6 +41,7 @@ struct SquadOrder {
     float          wedgeSpacingMult   = 0.f; // WedgeCharge only: 0 = shared default
     float          wedgeDamageMult    = 1.f; // WedgeCharge only: damage multiplier
     bool           reserveWedgeApex   = false; // WedgeCharge only: leave first apex slot empty
+    bool           waitForChargeRelease = false; // WedgeCharge only: hold prepared wedge until released
     std::vector<uint32_t> targetIds    = {};  // WedgeCharge 대상 군집 플레이어들
 };
 
@@ -80,8 +81,12 @@ public:
     Vec3 calcCentroid() const;
     bool areMembersAtSlots() const;
     bool areChargeMembersComplete() const;
+    bool isWedgePrepared() const { return wedgePrepared_; }
     bool isWedgeChargeActive() const { return activeWedgeChargeId_ != 0; }
+    void releaseWedgeCharge();
     void endActiveWedgeCharge(Room& room);
+    float estimateWedgeHalfWidth(float spacingMult = 1.f,
+                                 bool reserveApex = false) const;
 
 private:
     void pushCommandsToMembers(Room& room);
@@ -111,6 +116,7 @@ private:
     std::vector<Vec3>     wedgePrepareSlots_{};
     std::vector<Vec3>     wedgeExitSlots_{};
     uint32_t              activeWedgeChargeId_{ 0 };
+    bool                  wedgeChargeReleased_{ true };
     bool                  leaderlessBrawlEnabled_{ false };
     float                 leaderlessBrawlTimer_{ 0.f };
     float                 leaderlessRetargetTimer_{ 0.f };

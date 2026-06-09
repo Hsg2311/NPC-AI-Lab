@@ -68,14 +68,17 @@ private:
         Screen
     };
 
+    enum class DivideStage {
+        Preparing,
+        Charging,
+        Engaging
+    };
+
     struct DivideSquadTask {
         TacticalSquad*        squad{ nullptr };
         DivideTaskType        type{ DivideTaskType::None };
         uint32_t              targetId{ 0 };
         std::vector<uint32_t> clusterPlayerIds{};
-        bool                  taskCompleted{ false };
-        bool                  engageIssued{ false };
-        float                 engageProtectTimer{ 0.f };
     };
 
     struct BossTargetScore {
@@ -100,10 +103,13 @@ private:
     int clusterPlayers(const Room& room, const PlatoonLeader& leader) const;
     std::vector<PlayerCluster> buildPlayerClusters(const Room& room,
                                                    const PlatoonLeader& leader) const;
-    void issueDivideAndConquer(Room& room, PlatoonLeader& leader,
+    bool issueDivideAndConquer(Room& room, PlatoonLeader& leader,
                                const std::vector<TacticalSquad*>& liveSquads,
                                const std::vector<PlayerCluster>& clusters);
     void updateDivideAndConquer(float dt, Room& room, PlatoonLeader& leader);
+    bool calcCaptureClusterCentroid(Room& room, Vec3& outCentroid) const;
+    bool isCaptureClusterInsideCorridor(Room& room) const;
+    void issueDivideEngage(Room& room, PlatoonLeader& leader);
     uint32_t selectReplacementTarget(Room& room, const PlatoonLeader& leader,
                                      const std::vector<uint32_t>& playerIds) const;
     int countLiveMembers(const std::vector<TacticalSquad*>& liveSquads) const;
@@ -127,6 +133,14 @@ private:
     uint32_t primaryTargetId_{ 0 };
     int encircleIssuedLiveMembers_{ 0 };
     std::vector<DivideSquadTask> divideTasks_{};
+    DivideStage divideStage_{ DivideStage::Preparing };
+    Vec3 divideCorridorCenter_{};
+    Vec3 divideCorridorForward_{ 1.f, 0.f, 0.f };
+    Vec3 divideCorridorRight_{ 0.f, 0.f, 1.f };
+    float divideCorridorHalfWidth_{ 0.f };
+    float divideCorridorHalfLength_{ 0.f };
+    float divideEngageTimer_{ 0.f };
+    std::vector<uint32_t> divideTargetPlayerIds_{};
     BossPersonalState bossPersonalState_{ BossPersonalState::EvaluateTarget };
     float bossPersonalTimer_{ 0.f };
     float bossTargetEvalTimer_{ 0.f };
@@ -141,12 +155,11 @@ private:
     static constexpr float TACTIC_SQUAD_RATIO       = 0.80f;
     static constexpr float TACTIC_COOLDOWN_DURATION = 8.0f;
     static constexpr float TACTIC_FAIL_COOLDOWN_DURATION = 5.0f;
-    static constexpr float DIVIDE_ENGAGE_PROTECT_DURATION = 3.0f;
-    static constexpr float SCREEN_BLOCK_SPACING     = 8.0f;
-    static constexpr float SCREEN_SLOT_SPACING_SCALE = 0.65f;
-    static constexpr float SCREEN_SLOT_COLUMN_SCALE = 3.0f;
-    static constexpr int   SCREEN_SLOT_COLUMN_COUNT = 7;
-    static constexpr float SCREEN_BLOCK_CENTER_BIAS = 0.5f;
+    static constexpr float DIVIDE_ENGAGE_DURATION   = 3.0f;
+    static constexpr float CAPTURE_LINE_SPACING_SCALE = 0.65f;
+    static constexpr float CAPTURE_CORRIDOR_CLEARANCE = 6.0f;
+    static constexpr float CAPTURE_MIN_HALF_LENGTH  = 24.0f;
+    static constexpr float CAPTURE_ESCAPE_TOLERANCE = 2.0f;
     static constexpr float BOX_FRONT_OFFSET         = 15.f;
     static constexpr float BOX_SQUAD_SPACING        = 35.f;
     static constexpr float BOX_ARC_DEPTH            = 10.f;
