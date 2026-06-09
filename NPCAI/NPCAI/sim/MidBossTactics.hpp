@@ -110,6 +110,10 @@ private:
     bool calcCaptureClusterCentroid(Room& room, Vec3& outCentroid) const;
     bool isCaptureClusterInsideCorridor(Room& room) const;
     void issueDivideEngage(Room& room, PlatoonLeader& leader);
+    void issueStableEngage(Room& room,
+                           const std::vector<TacticalSquad*>& liveSquads,
+                           bool resetAssignments);
+    bool isLivingPlayerTarget(const Room& room, uint32_t targetId) const;
     uint32_t selectReplacementTarget(Room& room, const PlatoonLeader& leader,
                                      const std::vector<uint32_t>& playerIds) const;
     int countLiveMembers(const std::vector<TacticalSquad*>& liveSquads) const;
@@ -141,6 +145,7 @@ private:
     float divideCorridorHalfLength_{ 0.f };
     float divideEngageTimer_{ 0.f };
     std::vector<uint32_t> divideTargetPlayerIds_{};
+    std::unordered_map<int, uint32_t> engageTargetBySquad_{};
     BossPersonalState bossPersonalState_{ BossPersonalState::EvaluateTarget };
     float bossPersonalTimer_{ 0.f };
     float bossTargetEvalTimer_{ 0.f };

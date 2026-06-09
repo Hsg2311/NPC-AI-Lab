@@ -94,6 +94,7 @@ public:
     float            getRecoverProgress()  const;
     bool             isAtSlot()           const;  // Flank/HoldSlot 슬롯 도착 여부
     bool             isChargeComplete()   const { return chargeComplete_; }
+    bool             isEligibleForAttackReservation(const Actor& target) const;
 
     void setSquadId(int id) { squadId_ = id; }
     void reviveAt(const Vec3& pos);
@@ -120,6 +121,8 @@ protected:
     void   updateReservedAttackStaleTimer(float dt, Room& room);
     bool   canEnterAttackSlot(Room& room);
     void   releaseAttackReservation(Room& room);
+    void   releaseStaleAttackReservation(Room& room, float currentDist);
+    void   resetAttackReservationLease();
     void   resetPressureWaitTarget();
     void   refreshPressureWaitScatterOffsets();
     Vec3   computePressureWaitDesired(const Actor& target) const;
@@ -173,11 +176,15 @@ protected:
     bool  pressureReentering_{ false };
     uint32_t reservedAttackTargetId_{ 0 };
     float reservedAttackStaleTimer_{ 0.f };
+    float reservedAttackProgressDist_{ 0.f };
+    uint32_t blockedAttackReservationTargetId_{ 0 };
+    float blockedAttackReservationDist_{ 0.f };
 
     static constexpr float TACTICAL_SPEED_MULT = 3.0f;
     static constexpr int   MAX_TACTICAL_ATTACKERS_PER_TARGET = 5;
     static constexpr float TACTICAL_ATTACK_RESERVATION_MAX_DIST = 18.0f;
     static constexpr float TACTICAL_ATTACK_RESERVATION_STALE_TIME = 3.0f;
+    static constexpr float TACTICAL_ATTACK_RESERVATION_PROGRESS_DIST = 0.5f;
     static constexpr float TACTICAL_PRESSURE_EXTRA_RADIUS = 9.0f;
     static constexpr float TACTICAL_PRESSURE_SEPARATION_MULT = 2.2f;
     static constexpr float TACTICAL_PRESSURE_SEPARATION_RADIUS_MULT = 1.35f;

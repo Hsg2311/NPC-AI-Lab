@@ -124,7 +124,7 @@ void TacticalNpc::reviveAt(const Vec3& pos) {
     pressureWaitScatterSeed_ = 0;
     pressureReentering_ = false;
     reservedAttackTargetId_ = 0;
-    reservedAttackStaleTimer_ = 0.f;
+    resetAttackReservationLease();
 }
 
 // ─── transitionTo ─────────────────────────────────────────────────────────────
@@ -163,13 +163,29 @@ void TacticalNpc::consumePendingCommand(Room& room) {
                  state_ == TacticalNpcState::AttackRecover)) {
                 break;
             }
-            if (reservedAttackTargetId_ != 0 &&
-                reservedAttackTargetId_ != pendingCmd_.targetId) {
+            if (targetId_ != pendingCmd_.targetId) {
                 releaseAttackReservation(room);
             }
             pressureReentering_ = false;
             targetId_ = pendingCmd_.targetId;
-            transitionTo(TacticalNpcState::Chase, "명령: EngageTarget");
+            if (state_ == TacticalNpcState::PressureWait) {
+                pressureWaitTimer_ = 0.f;
+                resetPressureWaitTarget();
+                ++pressureWaitScatterSeed_;
+                refreshPressureWaitScatterOffsets();
+                break;
+            }
+            if (state_ == TacticalNpcState::Idle ||
+                state_ == TacticalNpcState::Flank ||
+                state_ == TacticalNpcState::ChargeThrough ||
+                state_ == TacticalNpcState::Confused ||
+                state_ == TacticalNpcState::HoldSlot) {
+                transitionTo(TacticalNpcState::PressureWait,
+                             "명령: EngageTarget");
+                break;
+            }
+            transitionTo(TacticalNpcState::Chase,
+                         "명령: EngageTarget 타겟 교체");
             break;
         case TacticalCommandType::FlankTarget:
             releaseAttackReservation(room);
@@ -300,24 +316,53 @@ bool TacticalNpc::hasReservedAttackSlot() const {
         reservedAttackTargetId_ == targetId_;
 }
 
+bool TacticalNpc::isEligibleForAttackReservation(const Actor& target) const {
+    float dist = Vec3::distance(position_, target.getPosition());
+    if (dist > TACTICAL_ATTACK_RESERVATION_MAX_DIST)
+        return false;
+
+    if (blockedAttackReservationTargetId_ != target.getId())
+        return true;
+
+    return dist <= blockedAttackReservationDist_ -
+        TACTICAL_ATTACK_RESERVATION_PROGRESS_DIST;
+}
+
+void TacticalNpc::resetAttackReservationLease() {
+    reservedAttackStaleTimer_ = 0.f;
+    reservedAttackProgressDist_ = 0.f;
+    blockedAttackReservationTargetId_ = 0;
+    blockedAttackReservationDist_ = 0.f;
+}
+
 void TacticalNpc::updateReservedAttackStaleTimer(float dt, Room& room) {
     if (!hasReservedAttackSlot()) {
         reservedAttackStaleTimer_ = 0.f;
+        reservedAttackProgressDist_ = 0.f;
         return;
     }
 
     Actor* target = resolveTarget(room);
     if (!target) {
         reservedAttackStaleTimer_ = 0.f;
+        reservedAttackProgressDist_ = 0.f;
         return;
     }
 
-    float rangeSq = attackRange_ * attackRange_;
-    float distSq = Vec3::distanceSq(position_, target->getPosition());
+    float dist = Vec3::distance(position_, target->getPosition());
     if (state_ == TacticalNpcState::AttackWindup ||
         state_ == TacticalNpcState::AttackRecover ||
-        distSq <= rangeSq) {
+        dist <= attackRange_) {
         reservedAttackStaleTimer_ = 0.f;
+        reservedAttackProgressDist_ = dist;
+        return;
+    }
+
+    if (reservedAttackProgressDist_ <= 0.f ||
+        dist <= reservedAttackProgressDist_ -
+            TACTICAL_ATTACK_RESERVATION_PROGRESS_DIST) {
+        reservedAttackStaleTimer_ = 0.f;
+        reservedAttackProgressDist_ = dist;
         return;
     }
 
@@ -335,37 +380,63 @@ bool TacticalNpc::canEnterAttackSlot(Room& room) {
             return false;
         }
 
-        float maxDistSq = TACTICAL_ATTACK_RESERVATION_MAX_DIST *
-            TACTICAL_ATTACK_RESERVATION_MAX_DIST;
-        if (Vec3::distanceSq(position_, target->getPosition()) > maxDistSq ||
-            reservedAttackStaleTimer_ >= TACTICAL_ATTACK_RESERVATION_STALE_TIME) {
+        float dist = Vec3::distance(position_, target->getPosition());
+        if (dist > TACTICAL_ATTACK_RESERVATION_MAX_DIST) {
             releaseAttackReservation(room);
+            return false;
+        }
+        if (reservedAttackStaleTimer_ >=
+            TACTICAL_ATTACK_RESERVATION_STALE_TIME) {
+            releaseStaleAttackReservation(room, dist);
             return false;
         }
 
         return true;
     }
 
+    Actor* target = resolveTarget(room);
+    if (!target || !isEligibleForAttackReservation(*target)) {
+        pressureReentering_ = false;
+        return false;
+    }
+
     if (!room.tryReserveTacticalAttackSlot(targetId_, id_))
     {
         reservedAttackTargetId_ = 0;
         reservedAttackStaleTimer_ = 0.f;
+        reservedAttackProgressDist_ = 0.f;
         pressureReentering_ = false;
         return false;
     }
 
     reservedAttackTargetId_ = targetId_;
     reservedAttackStaleTimer_ = 0.f;
+    reservedAttackProgressDist_ =
+        Vec3::distance(position_, target->getPosition());
+    blockedAttackReservationTargetId_ = 0;
+    blockedAttackReservationDist_ = 0.f;
     return true;
 }
 
 void TacticalNpc::releaseAttackReservation(Room& room) {
-    if (reservedAttackTargetId_ == 0)
-        return;
+    if (reservedAttackTargetId_ != 0)
+        room.releaseTacticalAttackSlot(reservedAttackTargetId_, id_);
+    reservedAttackTargetId_ = 0;
+    resetAttackReservationLease();
+    pressureReentering_ = false;
+}
 
-    room.releaseTacticalAttackSlot(reservedAttackTargetId_, id_);
+void TacticalNpc::releaseStaleAttackReservation(Room& room,
+                                                float currentDist) {
+    uint32_t targetId = reservedAttackTargetId_;
+    if (targetId != 0)
+        room.releaseTacticalAttackSlot(targetId, id_);
+
     reservedAttackTargetId_ = 0;
     reservedAttackStaleTimer_ = 0.f;
+    reservedAttackProgressDist_ = 0.f;
+    blockedAttackReservationTargetId_ = targetId;
+    blockedAttackReservationDist_ = currentDist;
     pressureReentering_ = false;
 }
 

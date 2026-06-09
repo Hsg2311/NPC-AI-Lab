@@ -79,6 +79,11 @@ public:
     // BoxAdvance 중 leaderPos 갱신 (기존 호출 호환용)
     void updateBoxLeaderPos(const Vec3& pos);
     Vec3 calcCentroid() const;
+    uint32_t getEngageTargetId() const {
+        return currentOrder_.type == SquadOrderType::Engage
+            ? currentOrder_.targetId
+            : 0;
+    }
     bool areMembersAtSlots() const;
     bool areChargeMembersComplete() const;
     bool isWedgePrepared() const { return wedgePrepared_; }

@@ -35,6 +35,13 @@ void TacticalSquad::removeMember(uint32_t npcId) {
 }
 
 void TacticalSquad::receiveOrder(const SquadOrder& order) {
+    if (!leaderlessBrawlEnabled_ &&
+        order.type == SquadOrderType::Engage &&
+        currentOrder_.type == SquadOrderType::Engage &&
+        currentOrder_.targetId == order.targetId) {
+        return;
+    }
+
     leaderlessBrawlEnabled_ = false;
     leaderlessBrawlTimer_ = 0.f;
     leaderlessRetargetTimer_ = 0.f;

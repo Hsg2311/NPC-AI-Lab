@@ -917,7 +917,7 @@ std::vector<DebugTacticalNpcEntry> tacticalNpcs;
 | `HoldSlot(8)` | 노랑 | (255, 220, 0) |
 | `PressureWait(9)` | 하늘색 | (80, 180, 255) |
 
-`PressureWait`는 플레이어별 실공격자(`AttackWindup`/`AttackRecover`)와 예약자를 합쳐 5명 이하가 되도록 `Room`의 공격권 예약을 사용한다. 이미 공격권을 받은 일반 `TacticalNpc`는 유효한 동안 예약을 유지하고, 가까운 후보 우선 정렬은 빈 슬롯을 채울 때만 사용한다. 예약자가 타겟을 잃거나 죽거나 너무 멀어지거나 오래 사거리 안에 들어가지 못하면 예약을 반환해 다른 후보가 들어올 수 있다. 슬롯 증가로 외곽 대기 인원 자체를 줄이고, 남은 외곽 대기자는 전방 좁은 cone을 제외한 넓은 각도와 반경 offset에 seed 기반으로 흩어진다. 플레이어가 움직일 때는 새 자리를 뽑지 않고 기존 상대 위치를 따라가며, 겹친 경우에는 안쪽으로 파고들지 않는 drift만 적용해 현재 위치 근처에서 벌어진다. 예약을 받은 재진입자는 실제 FSM 상태를 `PressureWait`로 유지하지만, `DebugTacticalNpcEntry.state`는 `Chase(1)`로 기록되어 화면에는 추격 상태로 보인다.
+`PressureWait`는 플레이어별 실공격자(`AttackWindup`/`AttackRecover`)와 예약자를 합쳐 5명 이하가 되도록 `Room`의 공격권 예약을 사용한다. 여러 Squad가 같은 플레이어를 담당해도 이 5개 슬롯을 함께 사용한다. 비전투 상태에서 최초 `EngageTarget`을 받은 일반 `TacticalNpc`는 `Chase`를 경유하지 않고 `PressureWait`으로 진입하며, 기존 최소 체류/ID stagger 이후 공격권을 평가한다. 신규 예약과 기존 예약은 모두 타겟 18m 이내에서만 유효하다. 예약자는 타겟과의 거리가 0.5m 이상 줄어들 때마다 3초 lease를 갱신하며, 공격 사거리 안이나 `AttackWindup`/`AttackRecover`에서는 lease가 만료되지 않는다. 3초간 접근 진척이 없으면 예약을 반환하고, 반환 거리보다 0.5m 이상 가까워지기 전에는 같은 타겟의 예약을 다시 얻지 못한다. 가까운 후보 우선 정렬은 빈 슬롯을 채울 때만 사용한다. 슬롯 증가로 외곽 대기 인원 자체를 줄이고, 남은 외곽 대기자는 전방 좁은 cone을 제외한 넓은 각도와 반경 offset에 seed 기반으로 흩어진다. 플레이어가 움직일 때는 새 자리를 뽑지 않고 기존 상대 위치를 따라가며, 겹친 경우에는 안쪽으로 파고들지 않는 drift만 적용해 현재 위치 근처에서 벌어진다. 예약을 받은 재진입자는 실제 FSM 상태를 `PressureWait`로 유지하지만, `DebugTacticalNpcEntry.state`는 예약을 유지하며 접근 중일 때만 `Chase(1)`로 기록된다. 상위 명령으로 담당 플레이어가 교체되더라도 `PressureWait` 상태를 유지한 채 예약과 외곽 목표만 초기화해 한 틱짜리 `Chase` 왕복을 방지한다.
 
 #### drawTacticalNpc() 시각화 요소
 

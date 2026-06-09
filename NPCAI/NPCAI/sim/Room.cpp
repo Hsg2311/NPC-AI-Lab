@@ -521,6 +521,8 @@ bool Room::tryReserveTacticalAttackSlot(uint32_t playerId, uint32_t npcId) {
         reserved.insert(npcId);
         return true;
     }
+    if (!tnpc->isEligibleForAttackReservation(*player))
+        return false;
 
     struct ReservationCandidate {
         uint32_t id{ 0 };
@@ -547,6 +549,8 @@ bool Room::tryReserveTacticalAttackSlot(uint32_t playerId, uint32_t npcId) {
             state != TacticalNpcState::Flank) {
             continue;
         }
+        if (!other->isEligibleForAttackReservation(*player))
+            continue;
 
         float distSq = Vec3::distanceSq(other->getPosition(), player->getPosition());
         candidates.push_back({

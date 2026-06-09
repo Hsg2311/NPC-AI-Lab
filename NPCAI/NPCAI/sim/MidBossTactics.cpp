@@ -254,16 +254,8 @@ void GoblinMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
         }
 
         if (phaseOrderIssued_ && allMembersArrived(room, leader)) {
-            Player* encircleTarget = selectPrimaryTarget(room, leader);
-            if (encircleTarget) {
-                for (auto* sq : squads) {
-                    if (sq->isEmpty()) continue;
-                    SquadOrder ord;
-                    ord.type = SquadOrderType::Engage;
-                    ord.targetId = encircleTarget->getId();
-                    sq->receiveOrder(ord);
-                }
-            }
+            auto liveSquads = collectLiveSquads(leader);
+            issueStableEngage(room, liveSquads, true);
             tacticCooldown_ = TACTIC_COOLDOWN_DURATION;
             enterPhase(LeaderPhase::Cooldown, "포위 완성 - Engage 후 쿨타임 진입", leader);
         }
@@ -283,13 +275,8 @@ void GoblinMidBossTactic::update(float dt, Room& room, PlatoonLeader& leader) {
         primary && allMembersArrived(room, leader)) {
         if (!tacticsUnlocked_) {
             enterPhase(LeaderPhase::Engage, "박스 대형 완성 - 일반 교전 전환", leader);
-            for (auto* sq : squads) {
-                if (sq->isEmpty()) continue;
-                SquadOrder ord;
-                ord.type = SquadOrderType::Engage;
-                ord.targetId = primaryTargetId_;
-                sq->receiveOrder(ord);
-            }
+            auto liveSquads = collectLiveSquads(leader);
+            issueStableEngage(room, liveSquads, true);
         } else {
             auto clusters = buildPlayerClusters(room, leader);
             auto liveSquads = collectLiveSquads(leader);
@@ -357,6 +344,14 @@ void GoblinMidBossTactic::enterPhase(LeaderPhase next, const char* reason,
         divideStage_ = DivideStage::Preparing;
         divideEngageTimer_ = 0.f;
     }
+    if (next == LeaderPhase::BoxAdvance ||
+        next == LeaderPhase::TacticalRetreat ||
+        next == LeaderPhase::Encircle ||
+        next == LeaderPhase::Vigilance ||
+        next == LeaderPhase::DivideAndConquer ||
+        next == LeaderPhase::BossSolo) {
+        engageTargetBySquad_.clear();
+    }
     if (next != LeaderPhase::Cooldown)
         tacticTimer_ = 0.f;
 }
@@ -374,17 +369,7 @@ void GoblinMidBossTactic::enterTacticFailCooldown(Room& room,
         if (!sq->isEmpty()) liveSquads.push_back(sq);
     }
 
-    Player* primary = selectPrimaryTarget(room, leader);
-    if (!primary || liveSquads.empty()) return;
-
-    std::vector<uint32_t> targets(liveSquads.size(), primary->getId());
-    assignSquadsToPlayers(room, leader, liveSquads, targets);
-    for (size_t i = 0; i < liveSquads.size(); ++i) {
-        SquadOrder ord;
-        ord.type = SquadOrderType::Engage;
-        ord.targetId = targets[i];
-        liveSquads[i]->receiveOrder(ord);
-    }
+    issueStableEngage(room, liveSquads, true);
 }
 
 void GoblinMidBossTactic::evaluateTactics(Room& room, PlatoonLeader& leader) {
@@ -400,6 +385,7 @@ void GoblinMidBossTactic::evaluateTactics(Room& room, PlatoonLeader& leader) {
     Player* primary = selectPrimaryTarget(room, leader);
 
     if (!primary || liveSquads.empty()) {
+        engageTargetBySquad_.clear();
         for (auto* sq : liveSquads) {
             SquadOrder ord; ord.type = SquadOrderType::Idle;
             sq->receiveOrder(ord);
@@ -585,13 +571,110 @@ void GoblinMidBossTactic::evaluateTactics(Room& room, PlatoonLeader& leader) {
         return;
     }
 
-    std::vector<uint32_t> targets(static_cast<size_t>(numSquads), primary->getId());
-    assignSquadsToPlayers(room, leader, liveSquads, targets);
-    for (int i = 0; i < numSquads; ++i) {
-        SquadOrder ord;
-        ord.type = SquadOrderType::Engage;
-        ord.targetId = targets[static_cast<size_t>(i)];
-        liveSquads[static_cast<size_t>(i)]->receiveOrder(ord);
+    issueStableEngage(room, liveSquads, false);
+}
+
+bool GoblinMidBossTactic::isLivingPlayerTarget(
+    const Room& room, uint32_t targetId) const {
+    auto* player =
+        dynamic_cast<Player*>(room.findActorById(targetId));
+    return player && player->isAlive();
+}
+
+void GoblinMidBossTactic::issueStableEngage(
+    Room& room,
+    const std::vector<TacticalSquad*>& liveSquads,
+    bool resetAssignments) {
+    if (resetAssignments)
+        engageTargetBySquad_.clear();
+
+    for (auto it = engageTargetBySquad_.begin();
+         it != engageTargetBySquad_.end();) {
+        bool squadAlive = false;
+        for (TacticalSquad* squad : liveSquads) {
+            if (squad && squad->getSquadId() == it->first) {
+                squadAlive = true;
+                break;
+            }
+        }
+
+        if (!squadAlive || !isLivingPlayerTarget(room, it->second))
+            it = engageTargetBySquad_.erase(it);
+        else
+            ++it;
+    }
+
+    if (!resetAssignments) {
+        for (TacticalSquad* squad : liveSquads) {
+            if (!squad || squad->isEmpty())
+                continue;
+            int squadId = squad->getSquadId();
+            if (engageTargetBySquad_.find(squadId) !=
+                engageTargetBySquad_.end()) {
+                continue;
+            }
+
+            uint32_t currentTargetId = squad->getEngageTargetId();
+            if (isLivingPlayerTarget(room, currentTargetId))
+                engageTargetBySquad_[squadId] = currentTargetId;
+        }
+    }
+
+    const auto& players = room.getLivingPlayers();
+    if (players.empty())
+        return;
+
+    std::unordered_map<uint32_t, int> assignmentCounts;
+    for (Player* player : players)
+        assignmentCounts[player->getId()] = 0;
+    for (const auto& [squadId, targetId] : engageTargetBySquad_) {
+        auto countIt = assignmentCounts.find(targetId);
+        if (countIt != assignmentCounts.end())
+            ++countIt->second;
+    }
+
+    for (TacticalSquad* squad : liveSquads) {
+        if (!squad || squad->isEmpty())
+            continue;
+
+        int squadId = squad->getSquadId();
+        auto assignedIt = engageTargetBySquad_.find(squadId);
+        if (assignedIt == engageTargetBySquad_.end()) {
+            Player* best = nullptr;
+            int bestAssignmentCount = 0;
+            float bestDistSq = 0.f;
+            Vec3 squadCenter = squad->calcCentroid();
+
+            for (Player* player : players) {
+                int assignedCount = assignmentCounts[player->getId()];
+                float distSq = Vec3::distanceSq(
+                    squadCenter, player->getPosition());
+                if (!best ||
+                    assignedCount < bestAssignmentCount ||
+                    (assignedCount == bestAssignmentCount &&
+                     (distSq < bestDistSq ||
+                      (distSq == bestDistSq &&
+                       player->getId() < best->getId())))) {
+                    best = player;
+                    bestAssignmentCount = assignedCount;
+                    bestDistSq = distSq;
+                }
+            }
+
+            if (!best)
+                continue;
+            assignedIt = engageTargetBySquad_
+                .emplace(squadId, best->getId()).first;
+            ++assignmentCounts[best->getId()];
+        }
+
+        if (squad->getEngageTargetId() == assignedIt->second)
+            continue;
+
+        SquadOrder order;
+        order.type = SquadOrderType::Engage;
+        order.targetId = assignedIt->second;
+        squad->receiveOrder(order);
     }
 }
 
@@ -964,23 +1047,7 @@ bool GoblinMidBossTactic::isCaptureClusterInsideCorridor(
 
 void GoblinMidBossTactic::issueDivideEngage(
     Room& room, PlatoonLeader& leader) {
-    uint32_t targetId = selectReplacementTarget(
-        room, leader, divideTargetPlayerIds_);
-    if (targetId == 0) {
-        Player* primary = selectPrimaryTarget(room, leader);
-        targetId = primary ? primary->getId() : 0;
-    }
-
-    for (TacticalSquad* squad : leader.getSquads()) {
-        if (!squad || squad->isEmpty())
-            continue;
-        SquadOrder order;
-        order.type = (targetId != 0)
-            ? SquadOrderType::Engage
-            : SquadOrderType::Idle;
-        order.targetId = targetId;
-        squad->receiveOrder(order);
-    }
+    issueStableEngage(room, collectLiveSquads(leader), true);
 }
 
 bool GoblinMidBossTactic::updateBossPersonalCombat(
