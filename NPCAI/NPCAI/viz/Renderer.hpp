@@ -36,6 +36,7 @@ private:
     void drawTelegraphs(HDC hdc, int w, int h, const sim::DebugSnapshot& snap);
     void drawNpc(HDC hdc, int w, int h, const sim::DebugNpcEntry& npc, const sim::DebugSnapshot& snap);
     void drawTacticalNpc(HDC hdc, int w, int h, const sim::DebugTacticalNpcEntry& tnpc, const sim::DebugSnapshot& snap);
+    void drawBoss(HDC hdc, int w, int h, const sim::DebugBossEntry& boss);
     void drawPlayer(HDC hdc, int w, int h, const sim::DebugPlayerEntry& p);
     void drawTargetLine(HDC hdc, int w, int h, const sim::DebugNpcEntry& npc, const sim::DebugSnapshot& snap);
     void drawHUD(HDC hdc, int w, int h, const sim::DebugSnapshot& snap);

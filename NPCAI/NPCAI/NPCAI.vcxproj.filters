@@ -31,6 +31,9 @@
     <Filter Include="sim\Actor\tactical npc">
       <UniqueIdentifier>{b15cae4a-50a6-4dfd-a520-96da88caefeb}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sim\Actor\final boss">
+      <UniqueIdentifier>{8f3c1a2e-94d7-4b6c-a1e5-3d72c0f8b941}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="viz\Application.hpp">
@@ -102,6 +105,18 @@
     <ClInclude Include="sim\TacticalSquad.hpp">
       <Filter>sim\Actor\tactical npc</Filter>
     </ClInclude>
+    <ClInclude Include="sim\BehaviorTree.hpp">
+      <Filter>sim\Actor\final boss</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\FinalBoss.hpp">
+      <Filter>sim\Actor\final boss</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\BossBtActions.hpp">
+      <Filter>sim\Actor\final boss</Filter>
+    </ClInclude>
+    <ClInclude Include="sim\ScenarioFinalBoss.hpp">
+      <Filter>sim\scenario</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="viz\Renderer.cpp">
@@ -160,6 +175,18 @@
     </ClCompile>
     <ClCompile Include="sim\TacticalSquad.cpp">
       <Filter>sim\Actor\tactical npc</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\BehaviorTree.cpp">
+      <Filter>sim\Actor\final boss</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\FinalBoss.cpp">
+      <Filter>sim\Actor\final boss</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\BossBtActions.cpp">
+      <Filter>sim\Actor\final boss</Filter>
+    </ClCompile>
+    <ClCompile Include="sim\ScenarioFinalBoss.cpp">
+      <Filter>sim\scenario</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

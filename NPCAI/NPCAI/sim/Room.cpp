@@ -5,6 +5,7 @@
 #include "TacticalNpc.hpp"
 #include "TacticalSquad.hpp"
 #include "PlatoonLeader.hpp"
+#include "FinalBoss.hpp"
 #include "Logger.hpp"
 #include <iostream>
 #include <iomanip>
@@ -69,6 +70,10 @@ void Room::registerPlatoonLeader(PlatoonLeader* leader) {
     platoonLeaders_.push_back(leader);
 }
 
+void Room::addFinalBoss(std::shared_ptr<FinalBoss> boss) {
+    finalBoss_ = std::move(boss);
+}
+
 // ─── tick ─────────────────────────────────────────────────────────────────────
 // 업데이트 순서:
 //   1. 로거 틱 카운터 동기화
@@ -103,6 +108,10 @@ void Room::tick(float dt) {
     for (auto& [id, npc] : npcs_)
         npc->update(dt, *this);
 
+    // 최종보스: 자체 BT로 행동 (스쿼드/Platoon 인프라 미사용)
+    if (finalBoss_)
+        finalBoss_->update(dt, *this);
+
     // 전술 NPC 시스템: PlatoonLeader → TacticalSquad → TacticalNpc 멤버 순서
     for (auto* leader : platoonLeaders_)
         leader->update(dt, *this);
@@ -131,6 +140,7 @@ Actor* Room::findActorById(uint32_t id) const {
     if (it2 != npcs_.end()) return it2->second.get();
     auto it3 = tacticalNpcs_.find(id);
     if (it3 != tacticalNpcs_.end()) return it3->second.get();
+    if (finalBoss_ && finalBoss_->getId() == id) return finalBoss_.get();
     return nullptr;
 }
 
@@ -225,6 +235,7 @@ Vec3 Room::adjustPlayerMoveForNpcSoftBlock(const Vec3& playerPos,
 
     for (const auto& [id, npc] : npcs_)
         accumulateBlock(npc.get());
+    accumulateBlock(finalBoss_.get());
     for (const auto& [id, tnpc] : tacticalNpcs_) {
         float weight = 1.f;
         if (tnpc &&
@@ -355,6 +366,11 @@ int Room::applyDamageToActorsInRange(const Vec3& center, float radius, float dam
             tnpc->takeDamage(damage);
             ++hits;
         }
+    }
+    if (finalBoss_ && finalBoss_->isAlive() &&
+        Vec3::distanceSq(center, finalBoss_->getPosition()) <= radiusSq) {
+        finalBoss_->takeDamage(damage);
+        ++hits;
     }
     return hits;
 }
@@ -822,6 +838,26 @@ DebugSnapshot Room::buildSnapshot() const {
         e.slotX          = slot.x;
         e.slotZ          = slot.z;
         snap.tacticalNpcs.push_back(e);
+    }
+
+    if (finalBoss_) {
+        Vec3 pos    = finalBoss_->getPosition();
+        Vec3 facing = finalBoss_->getFacing();
+        DebugBossEntry e;
+        e.id             = static_cast<int>(finalBoss_->getId());
+        e.x              = pos.x;
+        e.z              = pos.z;
+        e.dirX           = facing.x;
+        e.dirZ           = facing.z;
+        e.name           = finalBoss_->getName();
+        e.activeLeaf     = finalBoss_->getActiveLeafName();
+        e.hp             = finalBoss_->getHp();
+        e.maxHp          = finalBoss_->getMaxHp();
+        e.attackRange    = finalBoss_->getAttackRange();
+        e.targetId       = static_cast<int>(finalBoss_->getTargetId());
+        e.actionProgress = finalBoss_->getActionProgress();
+        e.alive          = finalBoss_->isAlive();
+        snap.bosses.push_back(e);
     }
 
     return snap;

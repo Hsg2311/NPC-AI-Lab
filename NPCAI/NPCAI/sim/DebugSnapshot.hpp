@@ -89,6 +89,23 @@ struct DebugTacticalNpcEntry {
     float       slotZ{ 0.f };
 };
 
+// FinalBoss 시각화용 — 상태 대신 활성 BT 리프 이름을 노출한다
+struct DebugBossEntry {
+    int         id{ 0 };
+    float       x{ 0.f };
+    float       z{ 0.f };
+    float       dirX{ 1.f };
+    float       dirZ{ 0.f };
+    std::string name;
+    std::string activeLeaf;          // 현재 활성 BT 리프 이름
+    float       hp{ 0.f };
+    float       maxHp{ 1000.f };
+    float       attackRange{ 0.f };
+    int         targetId{ 0 };       // 0 = 타겟 없음
+    float       actionProgress{ 0.f }; // 0~1, 활성 액션 진행률
+    bool        alive{ true };
+};
+
 struct DebugTelegraphEntry {
     float x{ 0.f };
     float z{ 0.f };
@@ -104,6 +121,7 @@ struct DebugSnapshot {
     std::vector<DebugNpcEntry>         npcs;
     std::vector<DebugGroupEntry>       groups;
     std::vector<DebugTacticalNpcEntry> tacticalNpcs;
+    std::vector<DebugBossEntry>        bosses;
     std::vector<DebugTelegraphEntry>   telegraphs;
 };
 

@@ -17,6 +17,7 @@ class Player;
 class Npc;
 class TacticalNpc;
 class PlatoonLeader;
+class FinalBoss;
 
 class Room {
 public:
@@ -86,6 +87,9 @@ public:
     // PlatoonLeader는 addTacticalNpc로 추가 후 이 함수로 리더 등록
     void registerPlatoonLeader(PlatoonLeader* leader);
 
+    // ── 최종보스 ──────────────────────────────────────────────────────────────
+    void addFinalBoss(std::shared_ptr<FinalBoss> boss);
+
 private:
     // ── 틱별 캐시 재구성 ──────────────────────────────────────────────────────
     void rebuildLivingPlayersCache(); // F: getLivingPlayers 반복 할당 제거
@@ -122,6 +126,8 @@ private:
     std::unordered_map<uint32_t, std::shared_ptr<TacticalNpc>> tacticalNpcs_{};
     std::vector<std::unique_ptr<TacticalSquad>>                 tacticalSquads_{};
     std::vector<PlatoonLeader*>                                  platoonLeaders_{};  // 비소유
+
+    std::shared_ptr<FinalBoss> finalBoss_{};
 
     std::vector<uint32_t> shieldWallBlockerIds_{};
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>> reservedTacticalAttackers_{};

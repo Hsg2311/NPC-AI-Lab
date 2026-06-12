@@ -422,6 +422,59 @@ void Renderer::drawNpc(HDC hdc, int w, int h,
     }
 }
 
+// ─── drawBoss ────────────────────────────────────────────────────────────────
+// 일반 NPC보다 큰 원 + 넓은 HP바 + 활성 BT 리프 이름 라벨.
+// 돌진/타격 예고는 drawTelegraphs가 그대로 처리한다.
+
+void Renderer::drawBoss(HDC hdc, int w, int h, const sim::DebugBossEntry& boss) {
+    POINT center = worldToScreen(boss.x, boss.z, w, h);
+
+    // ── 공격 범위 원 (생존 시, 얇은 진홍색) ──────────────────────────────────
+    if (boss.alive) {
+        int  atkPx  = static_cast<int>(boss.attackRange * camera_.scale);
+        HPEN pen    = CreatePen(PS_SOLID, 1, RGB(170, 50, 70));
+        HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, pen));
+        drawCircleOutline(hdc, center, atkPx);
+        SelectObject(hdc, oldPen);
+        DeleteObject(pen);
+    }
+
+    // ── 본체 (큰 원) ─────────────────────────────────────────────────────────
+    COLORREF bodyCol    = boss.alive ? RGB(150, 30, 45) : RGB(35, 35, 35);
+    COLORREF outlineCol = boss.alive ? RGB(230, 90, 110) : RGB(70, 70, 70);
+    drawFilledCircle(hdc, center, 16, bodyCol, outlineCol);
+
+    // ── HP 바 (넓게) ─────────────────────────────────────────────────────────
+    drawHpBar(hdc, center, center.y - 34, boss.hp, boss.maxHp, /*barW=*/48);
+
+    // ── 액션 진행 바 ─────────────────────────────────────────────────────────
+    if (boss.alive && boss.actionProgress > 0.f) {
+        drawProgressBar(hdc, center, center.y - 26, boss.actionProgress,
+                        RGB(255, 120, 60), /*barW=*/36);
+    }
+
+    // ── 방향 화살표 ──────────────────────────────────────────────────────────
+    if (boss.alive && (std::fabsf(boss.dirX) + std::fabsf(boss.dirZ)) > 0.05f) {
+        POINT tip = {
+            static_cast<LONG>(center.x + boss.dirX * 24.f),
+            static_cast<LONG>(center.y + boss.dirZ * 24.f)
+        };
+        drawArrow(hdc, center, tip, outlineCol);
+    }
+
+    // ── 레이블: 이름 [활성 리프] ─────────────────────────────────────────────
+    {
+        char label[96];
+        std::snprintf(label, sizeof(label), "%s [%s]",
+            boss.name.c_str(), boss.alive ? boss.activeLeaf.c_str() : "Dead");
+
+        SetTextColor(hdc, boss.alive ? RGB(255, 140, 150) : RGB(70, 70, 70));
+        SetBkMode   (hdc, TRANSPARENT);
+        TextOutA    (hdc, center.x - 32, center.y + 20,
+                     label, static_cast<int>(std::strlen(label)));
+    }
+}
+
 // ─── drawPlayer ──────────────────────────────────────────────────────────────
 
 void Renderer::drawPlayer(HDC hdc, int w, int h,
@@ -707,6 +760,9 @@ void Renderer::render(HDC hdc, int clientW, int clientH,
     }
     for (const auto& tnpc : snapshot.tacticalNpcs) {
         drawTacticalNpc(hdc, clientW, clientH, tnpc, snapshot);
+    }
+    for (const auto& boss : snapshot.bosses) {
+        drawBoss(hdc, clientW, clientH, boss);
     }
     for (const auto& p : snapshot.players) {
         drawPlayer(hdc, clientW, clientH, p);

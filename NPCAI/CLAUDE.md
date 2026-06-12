@@ -210,7 +210,8 @@ Removed from `Room::platoons_` only when all of its Squads have disbanded.
 
 ## Key Design Constraints
 
-- **No ECS, no Behavior Tree, no GOAP**
+- **No ECS, no GOAP**
+- **No external Behavior Tree libraries** — the FinalBoss uses a small self-implemented BT (`sim/BehaviorTree.hpp`); regular NPCs and mid-bosses stay on FSMs
 - **No external libraries** — STL + WinAPI/GDI only
 - **No DirectXMath in sim/** — use `sim::Vec3` (simple POD, no alignment requirements)
 - **No pseudo-code** — all code must compile as-is

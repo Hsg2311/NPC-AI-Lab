@@ -156,6 +156,10 @@
     <ClInclude Include="sim\ScenarioGrandBaum.hpp" />
     <ClInclude Include="sim\ScenarioIsis.hpp" />
     <ClInclude Include="sim\ScenarioTactical.hpp" />
+    <ClInclude Include="sim\ScenarioFinalBoss.hpp" />
+    <ClInclude Include="sim\BehaviorTree.hpp" />
+    <ClInclude Include="sim\FinalBoss.hpp" />
+    <ClInclude Include="sim\BossBtActions.hpp" />
     <ClInclude Include="viz\Renderer.hpp" />
     <ClInclude Include="viz\Application.hpp" />
   </ItemGroup>
@@ -177,6 +181,10 @@
     <ClCompile Include="sim\ScenarioGrandBaum.cpp" />
     <ClCompile Include="sim\ScenarioIsis.cpp" />
     <ClCompile Include="sim\ScenarioTactical.cpp" />
+    <ClCompile Include="sim\ScenarioFinalBoss.cpp" />
+    <ClCompile Include="sim\BehaviorTree.cpp" />
+    <ClCompile Include="sim\FinalBoss.cpp" />
+    <ClCompile Include="sim\BossBtActions.cpp" />
     <ClCompile Include="viz\Renderer.cpp" />
     <ClCompile Include="viz\Application.cpp" />
   </ItemGroup>

@@ -4,8 +4,10 @@
 #include "../sim/ScenarioTactical.hpp"
 #include "../sim/ScenarioGrandBaum.hpp"
 #include "../sim/ScenarioIsis.hpp"
+#include "../sim/ScenarioFinalBoss.hpp"
 #include <cstdio>
 
+#define USE_FINALBOSS_SCENARIO
 //#define USE_ISIS_SCENARIO
 //#define USE_GRANDBAUM_SCENARIO
 
@@ -54,7 +56,9 @@ bool Application::init(HINSTANCE hInst, int nCmdShow) {
         return false;
     }
 
-#ifdef USE_ISIS_SCENARIO
+#ifdef USE_FINALBOSS_SCENARIO
+    scenario_ = std::make_unique<sim::ScenarioFinalBoss>();
+#elif defined(USE_ISIS_SCENARIO)
     scenario_ = std::make_unique<sim::ScenarioIsis>();
 #elif defined(USE_GRANDBAUM_SCENARIO)
     scenario_ = std::make_unique<sim::ScenarioGrandBaum>();
